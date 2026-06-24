@@ -21,9 +21,13 @@ import {
 
 interface AcuityPerformanceTrade {
   trade_id: string;
-  analyst_external_id: string; // resolved to analysts.analyst_id via app_users mapping
+  analyst_external_id: string; // resolved via analyst_external_codes, case-insensitive
   market_symbol: string;
-  session: "EUROPEAN" | "US" | "APAC" | "CRYPTO";
+  // NOTE: the real Acuity payload has NO session field -- confirmed against
+  // a live sample response. session is set to null for every row from this
+  // importer until a proper trading-session-hours design exists (see
+  // 013_actual_trades_session_nullable.sql for why session_configuration's
+  // publication windows are the wrong reference data for this).
   direction: "BUY" | "SELL";
   entry: number;
   stop: number | null;
@@ -72,12 +76,15 @@ Deno.serve(async (req: Request) => {
   const { data: markets } = await db.from("markets").select("market_id, symbol");
   const marketBySymbol = new Map((markets ?? []).map((m) => [m.symbol, m.market_id]));
 
-  // Resolve analyst external ID -> analyst_id once, rather than per-row.
-  // The exact mapping field is assumed here as analysts.display_name;
-  // replace with analysts.external_id once that column/mapping is
-  // confirmed against the live Acuity Performance response shape.
-  const { data: analysts } = await db.from("analysts").select("analyst_id, display_name");
-  const analystByExternalId = new Map((analysts ?? []).map((a) => [a.display_name, a.analyst_id]));
+  // Resolve analyst external code -> analyst_id once, rather than per-row.
+  // Acuity codes are matched case-insensitively against analyst_external_codes
+  // (the source spreadsheet/API has observed casing inconsistencies, e.g.
+  // 'taf' vs 'TAF' for the same person -- normalize both sides to uppercase).
+  const { data: codes } = await db
+    .from("analyst_external_codes")
+    .select("analyst_id, external_code")
+    .eq("source_system", "ACUITY_PERFORMANCE_API");
+  const analystByExternalCode = new Map((codes ?? []).map((c) => [c.external_code.toUpperCase(), c.analyst_id]));
 
   let processed = 0;
 
@@ -105,7 +112,7 @@ Deno.serve(async (req: Request) => {
     for (const trade of trades) {
       try {
         const marketId = marketBySymbol.get(trade.market_symbol);
-        const analystId = analystByExternalId.get(trade.analyst_external_id);
+        const analystId = analystByExternalCode.get(trade.analyst_external_id.toUpperCase());
 
         if (!marketId || !analystId) {
           await recordError(db, handle, trade.trade_id, "VALIDATION_FAILED",
@@ -124,7 +131,7 @@ Deno.serve(async (req: Request) => {
           p_published_at: trade.published_at,
           p_analyst_id: analystId,
           p_market_id: marketId,
-          p_session: trade.session,
+          p_session: null, // see note on AcuityPerformanceTrade.session above
           p_direction: trade.direction,
           p_entry: trade.entry,
           p_stop: trade.stop,
