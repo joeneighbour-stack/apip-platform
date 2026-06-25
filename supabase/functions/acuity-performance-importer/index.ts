@@ -109,7 +109,8 @@ Deno.serve(async (req: Request) => {
   const marketByAlias = new Map((aliases ?? []).map((a) => [a.alias_symbol, a.market_id]));
 
   function resolveMarketId(symbol: string): string | undefined {
-    return marketByAlias.get(symbol) ?? marketBySymbol.get(symbol);
+    const trimmed = symbol.trim();
+    return marketByAlias.get(trimmed) ?? marketBySymbol.get(trimmed);
   }
 
   const { data: codes } = await db
@@ -146,12 +147,28 @@ Deno.serve(async (req: Request) => {
     // confirmation. Filter them out before processing, not silently ignore
     // them mid-loop.
     const analystRows = rows.filter((r) => r.ReportType === "Analyst");
+
+    // Known symbols that are deliberately excluded -- per-customer pricing
+    // duplicates or similar artifacts from Acuity's side that are not real,
+    // independently-tradable markets. These are skipped cleanly (counted as
+    // success for batch reconciliation purposes, since the row WAS handled
+    // correctly by deliberately not storing it) rather than landing in
+    // import_errors looking like an unresolved problem that needs fixing.
+    // If more of these turn up, add them here rather than building a
+    // separate admin-managed table for what has so far been a single case.
+    const EXCLUDED_SYMBOLS = new Set(["Natural Gas.1"]);
+
     processed = analystRows.length;
 
     for (const row of analystRows) {
+      if (EXCLUDED_SYMBOLS.has(row.Symbol)) {
+        console.log(`[acuity-performance:excluded] ${row.ReportId}: symbol '${row.Symbol}' is a known non-tradable duplicate, skipping by design.`);
+        await recordSuccess(db, handle);
+        continue;
+      }
       try {
         const marketId = resolveMarketId(row.Symbol);
-        const analystId = row.Analyst ? analystByCode.get(row.Analyst.toUpperCase()) : undefined;
+        const analystId = row.Analyst ? analystByCode.get(row.Analyst.trim().toUpperCase()) : undefined;
         const direction = normalizeDirection(row.Direction);
 
         if (!marketId || !analystId || !direction) {
