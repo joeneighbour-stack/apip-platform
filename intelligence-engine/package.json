@@ -1,0 +1,16 @@
+{
+  "name": "@apip/intelligence-engine",
+  "version": "1.0.0",
+  "private": true,
+  "description": "APIP Intelligence Engine -- pure-function services per APIP_INTELLIGENCE_ENGINE_ARCHITECTURE_V1.1.md",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.1",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}
