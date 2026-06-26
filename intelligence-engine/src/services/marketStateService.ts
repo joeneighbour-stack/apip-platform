@@ -32,6 +32,7 @@ export interface MarketStateOutput {
   zone3Top: number | null;
   upperBand: number | null;
   currentZone: AtrZone | null;
+  currentPrice: number; // the price currentZone was derived from -- always populated, even when atr14/zones could not be computed (the notebook passes current_price through unconditionally; it's an input, not a derived value)
   stateGeneratedAt: string;
 }
 
@@ -130,7 +131,7 @@ export function buildMarketState(input: MarketStateInput): MarketStateOutput {
   if (ohlcSeries.length === 0) {
     return {
       marketId, atr14: null, lowerBand: null, zone1Top: null, zone2Top: null,
-      zone3Top: null, upperBand: null, currentZone: null,
+      zone3Top: null, upperBand: null, currentZone: null, currentPrice: currentPrice.price,
       stateGeneratedAt: new Date().toISOString(),
     };
   }
@@ -143,6 +144,7 @@ export function buildMarketState(input: MarketStateInput): MarketStateOutput {
     marketId,
     atr14,
     ...zones,
+    currentPrice: currentPrice.price,
     stateGeneratedAt: new Date().toISOString(),
   };
 }
