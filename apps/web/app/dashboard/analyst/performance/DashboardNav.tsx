@@ -11,7 +11,7 @@ const NAV_ITEMS: NavItem[] = [
   // Phase 1.7 -- operational daily workflow
   { href: '/dashboard/analyst',             label: 'My Workspace',   roles: ['ANALYST'] },
   { href: '/dashboard/analyst/performance', label: 'My Performance', roles: ['ANALYST'] },
-  { href: '/dashboard/management',          label: 'Management',     roles: ['MANAGER', 'ADMIN'] },
+  { href: '/dashboard/management',   label: 'Management',          roles: ['MANAGER', 'ADMIN'] },
   { href: '/dashboard/opportunities', label: 'Opportunities',      roles: ['ANALYST', 'MANAGER', 'ADMIN'] },
   // Phase 2+ -- not built yet, listed for nav completeness
   // { href: '/dashboard/executive',  label: 'Overview',            roles: ['EXECUTIVE', 'MANAGER', 'ADMIN'] },
