@@ -55,7 +55,7 @@ export function StaleExceptions({ recommendations }: StaleExceptionsProps) {
               {recommendations.map((rec) => {
                 const cfg = statusConfig(rec.recommendation_validity_status)
                 const opp = rec.opportunity as any
-                const symbol = opp?.market?.symbol ?? opp?.markets?.symbol ?? opp?.market?.[0]?.symbol ?? 'Unknown'
+                const symbol = opp?.market?.symbol ?? 'Unknown'
                 const age = rec.generated_at
                   ? Math.round((Date.now() - new Date(rec.generated_at).getTime()) / 60000) + 'm ago'
                   : 'Unknown'
