@@ -12,28 +12,31 @@ export default async function AnalystPerformancePage() {
 
   const supabase = await createClient()
 
-  // Monthly KPIs -- current month
+  // Current month bounds
   const now = new Date()
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]
   const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0]
 
+  // Current month KPIs
   const { data: kpis } = await supabase
     .from('executive_kpis')
-    .select('kpi_name, kpi_value, period_start, period_end, includes_historical_backfill, requires_recommendation_version')
+    .select('kpi_name, kpi_value, period_start, period_end')
     .eq('analyst_id', user.analystId)
+    .eq('kpi_visibility', 'ANALYST_OWN')
     .gte('period_start', monthStart)
     .lte('period_end', monthEnd)
 
-  // Last 3 months for trend -- same KPI names, earlier periods
-  const threeMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 3, 1).toISOString().split('T')[0]
+  // Last 3 months for trend charts
+  const threeMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 2, 1).toISOString().split('T')[0]
   const { data: kpiTrend } = await supabase
     .from('executive_kpis')
     .select('kpi_name, kpi_value, period_start, period_end')
     .eq('analyst_id', user.analystId)
+    .eq('kpi_visibility', 'ANALYST_OWN')
     .gte('period_start', threeMonthsAgo)
     .order('period_start', { ascending: true })
 
-  // Trade history -- last 90 days, most recent first
+  // Trade history -- last 90 days
   const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()
   const { data: trades } = await supabase
     .from('actual_trades')
@@ -47,14 +50,14 @@ export default async function AnalystPerformancePage() {
     .order('published_at', { ascending: false })
     .limit(100)
 
-  // Post-trade reviews -- compliance vs coaching
+  // Compliance reviews
   const { data: reviews } = await supabase
     .from('post_trade_reviews')
     .select('review_id, market, session, direction_alignment, entry_alignment, alignment_score, review_status, created_at')
     .order('created_at', { ascending: false })
     .limit(50)
 
-  // Existing disputes -- so the flag button shows correct state per trade
+  // Existing disputes
   const { data: disputes } = await supabase
     .from('trade_disputes')
     .select('trade_id, status, dispute_type')
@@ -73,21 +76,14 @@ export default async function AnalystPerformancePage() {
             Monthly KPIs, trade history, and compliance vs coaching
           </p>
         </div>
-        <a
-          href="/dashboard/analyst"
-          className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
+        <a href="/dashboard/analyst"
+          className="text-sm text-muted-foreground hover:text-foreground transition-colors">
           ← Back to Workspace
         </a>
       </div>
 
-      {/* Monthly KPI summary */}
       <KpiSummary kpis={kpis ?? []} kpiTrend={kpiTrend ?? []} />
-
-      {/* Compliance vs coaching */}
       <CompliancePanel reviews={reviews ?? []} />
-
-      {/* Trade history with dispute flagging */}
       <TradeHistoryTable
         trades={trades ?? []}
         disputesByTradeId={disputesByTradeId}
