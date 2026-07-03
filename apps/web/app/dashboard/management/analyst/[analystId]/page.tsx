@@ -1,34 +1,43 @@
 import { getCurrentUser } from '@/lib/auth'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { TradeHistoryTable } from '@/components/analyst/TradeHistoryTable'
-import { CompliancePanel } from '@/components/analyst/CompliancePanel'
 import { KpiSummary } from '@/components/analyst/KpiSummary'
 import { PerformanceBreakdown } from '@/components/analyst/PerformanceBreakdown'
 
-export default async function AnalystPerformancePage() {
+export default async function AnalystDrillDownPage({
+  params
+}: {
+  params: { analystId: string }
+}) {
   const user = await getCurrentUser()
-  if (user.role !== 'ANALYST') redirect('/dashboard')
-  if (!user.analystId) redirect('/dashboard/analyst')
+  if (!['MANAGER', 'ADMIN'].includes(user.role)) redirect('/dashboard')
 
   const supabase = await createClient()
+  const { analystId } = params
 
   const now = new Date()
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]
   const threeMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 2, 1).toISOString().split('T')[0]
   const twoYearsAgo = new Date(now.getFullYear() - 2, now.getMonth(), 1).toISOString().split('T')[0]
 
+  // Analyst info
+  const { data: analyst } = await supabase
+    .from('analysts')
+    .select('display_name')
+    .eq('analyst_id', analystId)
+    .single()
+
   // KPIs
   const { data: kpiTrend } = await supabase
     .from('executive_kpis')
     .select('kpi_name, kpi_value, period_start, period_end')
-    .eq('analyst_id', user.analystId)
+    .eq('analyst_id', analystId)
     .gte('period_start', threeMonthsAgo)
     .order('period_start', { ascending: true })
 
   const kpis = (kpiTrend ?? []).filter(k => k.period_start === monthStart)
 
-  // All trades for breakdown -- last 2 years
+  // Trades for breakdown
   const { data: allTrades } = await supabase
     .from('actual_trades')
     .select(`
@@ -36,57 +45,27 @@ export default async function AnalystPerformancePage() {
       published_at, historical_backfill,
       market:market_id ( symbol, asset_class )
     `)
-    .eq('analyst_id', user.analystId)
+    .eq('analyst_id', analystId)
     .gte('published_at', twoYearsAgo)
     .order('published_at', { ascending: false })
-
-  // Recent trades for the history table (last 90 days)
-  const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()
-  const recentTrades = (allTrades ?? []).filter(t => t.published_at >= ninetyDaysAgo)
-
-  // Compliance reviews
-  const { data: reviews } = await supabase
-    .from('post_trade_reviews')
-    .select('review_id, market, session, direction_alignment, entry_alignment, alignment_score, review_status, created_at')
-    .order('created_at', { ascending: false })
-    .limit(50)
-
-  // Existing disputes
-  const { data: disputes } = await supabase
-    .from('trade_disputes')
-    .select('trade_id, status, dispute_type')
-    .eq('raised_by_analyst_id', user.analystId)
-
-  const disputesByTradeId = new Map(
-    (disputes ?? []).map(d => [d.trade_id, d])
-  )
 
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold">My Performance</h1>
+          <h1 className="text-xl font-semibold">{analyst?.display_name ?? 'Analyst'}</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Monthly KPIs, performance breakdown, and trade history
+            Performance detail — last 24 months
           </p>
         </div>
-        <a href="/dashboard/analyst"
+        <a href="/dashboard/management/performance"
           className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-          ← Back to Workspace
+          ← Team Performance
         </a>
       </div>
 
       <KpiSummary kpis={kpis} kpiTrend={kpiTrend ?? []} />
-
       <PerformanceBreakdown trades={(allTrades ?? []) as any} />
-
-      <CompliancePanel reviews={reviews ?? []} />
-
-      <TradeHistoryTable
-        trades={recentTrades as any}
-        disputesByTradeId={disputesByTradeId}
-        analystId={user.analystId}
-      />
     </div>
   )
 }

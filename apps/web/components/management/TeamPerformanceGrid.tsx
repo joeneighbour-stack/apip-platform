@@ -157,7 +157,12 @@ export function TeamPerformanceGrid({ analysts, kpiData, currentMonthStart }: Te
 
                 return (
                   <tr key={analyst.analyst_id} className="hover:bg-muted/30 transition-colors">
-                    <td className="px-4 py-3 font-medium">{analyst.display_name}</td>
+                    <td className="px-4 py-3 font-medium">
+                      <a href={`/dashboard/management/analyst/${analyst.analyst_id}`}
+                        className="hover:text-primary hover:underline transition-colors">
+                        {analyst.display_name}
+                      </a>
+                    </td>
                     {currentKpis.map(({ col, val, hit }) => (
                       <td key={col.name} className="px-4 py-3 tabular-nums">
                         <span className={

@@ -13,6 +13,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: '/dashboard/analyst/performance', label: 'My Performance', roles: ['ANALYST'] },
   { href: '/dashboard/management',             label: 'Management',      roles: ['MANAGER', 'ADMIN'] },
   { href: '/dashboard/management/performance', label: 'Team Performance', roles: ['MANAGER', 'ADMIN'] },
+  { href: '/dashboard/analytics',              label: 'Analytics',        roles: ['MANAGER', 'ADMIN', 'EXECUTIVE'] },
   { href: '/dashboard/opportunities', label: 'Opportunities',      roles: ['ANALYST', 'MANAGER', 'ADMIN'] },
   // Phase 2+ -- not built yet, listed for nav completeness
   // { href: '/dashboard/executive',  label: 'Overview',            roles: ['EXECUTIVE', 'MANAGER', 'ADMIN'] },
