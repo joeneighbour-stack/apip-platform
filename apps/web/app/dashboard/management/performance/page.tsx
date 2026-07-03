@@ -15,19 +15,23 @@ export default async function ManagementPerformancePage() {
   const monthStart = `${year}-${String(month + 1).padStart(2, '0')}-01`
   const threeMonthsAgo = `${month >= 2 ? year : year - 1}-${String(((month - 2 + 12) % 12) + 1).padStart(2, '0')}-01`
 
-  // All analysts
+  // Active analysts
   const { data: analysts } = await supabase
     .from('analysts')
     .select('analyst_id, display_name, active')
     .eq('active', true)
     .order('display_name')
 
-  // All KPI data for last 3 months
+  // KPI data for last 3 months
   const { data: kpiData } = await supabase
     .from('executive_kpis')
     .select('analyst_id, kpi_name, kpi_value, period_start')
     .gte('period_start', threeMonthsAgo)
     .order('period_start', { ascending: true })
+
+  // Only show analysts that have KPI data in the trend period
+  const analystIdsWithData = new Set((kpiData ?? []).map(k => k.analyst_id))
+  const analystsWithData = (analysts ?? []).filter(a => analystIdsWithData.has(a.analyst_id))
 
   return (
     <div className="space-y-8">
@@ -45,7 +49,7 @@ export default async function ManagementPerformancePage() {
       </div>
 
       <TeamPerformanceGrid
-        analysts={analysts ?? []}
+        analysts={analystsWithData}
         kpiData={kpiData ?? []}
         currentMonthStart={monthStart}
       />
