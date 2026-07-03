@@ -204,13 +204,35 @@ async function main() {
     const stepId2 = isDryRun ? '' : await createStep(db, engineRunId, 'LOAD_ANALYSTS_TRADES')
 
     const { data: analystRows } = await db.from('analysts')
-      .select('analyst_id, display_name, active').eq('active', true)
+      .select('analyst_id, display_name, active, sessions').eq('active', true)
 
-    const activeAnalysts: ActiveAnalyst[] = (analystRows ?? []).map(a => ({
+    // Filter to analysts eligible for this session
+    const sessionEligibleAnalysts = (analystRows ?? []).filter(a => {
+      const sessions: string[] = a.sessions ?? []
+      return sessions.includes(session as string)
+    })
+
+    const activeAnalysts: ActiveAnalyst[] = sessionEligibleAnalysts.map(a => ({
       analyst: a.analyst_id,
       active: true,
-      sessionEligibility: { EUROPEAN: true, US: true, APAC: true },
+      sessionEligibility: {
+        EUROPEAN: (a.sessions ?? []).includes('EUROPEAN'),
+        US: (a.sessions ?? []).includes('US'),
+        APAC: (a.sessions ?? []).includes('APAC'),
+      },
     }))
+
+    // Also check analyst_availability for today -- mark absent analysts ineligible
+    const { data: availabilityRows } = await db.from('analyst_availability')
+      .select('analyst_id, available, workload_cap')
+      .eq('date', today)
+      .eq('session', session)
+
+    const unavailableIds = new Set(
+      (availabilityRows ?? []).filter(a => !a.available).map(a => a.analyst_id)
+    )
+
+    const eligibleAnalysts = activeAnalysts.filter(a => !unavailableIds.has(a.analyst))
 
     // Load recent actual_trades for template/profile building (last 2 years)
     const { data: tradeRows } = await db.from('actual_trades')
@@ -238,7 +260,8 @@ async function main() {
       } as RecommendationInputTrade)
     }
 
-    console.log(`  Active analysts: ${activeAnalysts.length}`)
+    console.log(`  Active analysts: ${activeAnalysts.length}, eligible for ${session}: ${eligibleAnalysts.length}`)
+    if (unavailableIds.size > 0) console.log(`  Absent today: ${unavailableIds.size} analyst(s)`)
     console.log(`  Historical trades loaded: ${tradeRows?.length ?? 0}`)
     if (!isDryRun && stepId2) await completeStep(db, stepId2, 'SUCCESS', {
       analysts: activeAnalysts.length, trades: tradeRows?.length ?? 0,
@@ -295,7 +318,7 @@ async function main() {
           marketRegime: null,
           eventRisks: [],
           trades,
-          activeAnalysts,
+          activeAnalysts: eligibleAnalysts,
           minimumRr: MINIMUM_RR,
           minTriggerSample: MIN_TRIGGER_SAMPLE,
           fallbackTriggerProbability: FALLBACK_TRIGGER_PROBABILITY,
@@ -314,7 +337,7 @@ async function main() {
           continue
         }
 
-        console.log(`  ${symbol}: zone=${marketState.currentZone}, dir=${opp.direction}, action=${opp.analystAction}, entry=${rv.entryRangeLow?.toFixed(4)}-${rv.entryRangeHigh?.toFixed(4)}, R=${opp.expectedR?.toFixed(2)}, template=${diagnostics.templateSource}(${diagnostics.templateTrades} trades)`)
+        console.log(`  ${symbol}: zone=${marketStateWithZone.currentZone}, dir=${opp.direction}, action=${opp.analystAction}, entry=${rv.entryRangeLow?.toFixed(4)}-${rv.entryRangeHigh?.toFixed(4)}, R=${opp.expectedR?.toFixed(2)}, template=${diagnostics.templateSource}(${diagnostics.templateTrades} trades)`)
 
         generatedItems.push({ market, marketState: marketStateWithZone, opp, rv, hidden, diagnostics, rvId })
         recommendationsCreated++
@@ -338,12 +361,12 @@ async function main() {
         recommendationVersionId: item.rvId,
         expectedR: item.opp.expectedR,
         assignedAnalystId: item.opp.assignedAnalystId,
-        eligibleAnalysts: activeAnalysts.map(a => a.analyst),
+        eligibleAnalysts: eligibleAnalysts.map(a => a.analyst),
       }))
 
       const allocations = allocateCoverage({
         opportunities: allocationInput,
-        activeAnalysts: activeAnalysts.map(a => a.analyst),
+        activeAnalysts: eligibleAnalysts.map(a => a.analyst),
         generateId: randomUUID,
       })
 
@@ -359,7 +382,7 @@ async function main() {
           date: today, market_id: market.market_id, session,
           publication_window_start_uk: `${String(windowStartHour).padStart(2,'0')}:00`,
           publication_window_end_uk: `${String(windowEndHour).padStart(2,'0')}:00`,
-          current_zone: marketState.currentZone,
+          current_zone: marketState.currentZone ?? intraday.current_zone,
           preferred_entry_zone: rv.zoneAtGeneration,
           direction: item.opp.direction,
           expected_r: opp.expectedR,
@@ -423,7 +446,7 @@ async function main() {
             analystId: allocation.assignedAnalystId,
             market: market.symbol,
             direction: item.opp.direction,
-            currentZone: marketState.currentZone,
+            currentZone: marketState.currentZone ?? item.marketState.currentZone,
             preferredEntryZone: rv.zoneAtGeneration!,
             analystAction: opp.analystAction,
             entryRangeLow: rv.entryRangeLow ?? 0,

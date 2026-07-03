@@ -89,25 +89,56 @@ export interface CoachingOutput {
   lintHits: string[];
 }
 
+// Plain-English descriptions of ATR zone positions -- per spec sheet 11
+// coaching language guidance. Avoid zone number terminology with analysts.
+function describeZone(zone: string | null): string {
+  switch (zone) {
+    case 'ZONE_1': return 'near the lower end of its recent range'
+    case 'ZONE_2': return 'in the lower-mid section of its recent range'
+    case 'ZONE_3': return 'in the upper-mid section of its recent range'
+    case 'ZONE_4': return 'near the upper end of its recent range'
+    case 'TOO_HIGH': return 'trading above its recent range'
+    case 'TOO_DEEP': return 'trading below its recent range'
+    default: return 'at an unclassified position in its range'
+  }
+}
+
+function describePreferredZone(zone: string | null): string {
+  switch (zone) {
+    case 'ZONE_1': return 'the lower end of its range'
+    case 'ZONE_2': return 'the lower-mid section of its range'
+    case 'ZONE_3': return 'the upper-mid section of its range'
+    case 'ZONE_4': return 'the upper end of its range'
+    default: return 'its preferred range'
+  }
+}
+
 export function generateCoachingNote(input: CoachingInput): string {
-  // Exact notebook generate_coaching_note() phrasing and format specifiers.
+  const currentZoneDesc = describeZone(input.currentZone)
+  const preferredZoneDesc = describePreferredZone(input.preferredEntryZone)
+  const directionText = input.direction === 'BUY' ? 'buy' : 'sell'
+  const actionText = input.analystAction === 'ENTER_NOW'
+    ? `Price is currently ${currentZoneDesc}, which aligns with the preferred entry area.`
+    : `Price is currently ${currentZoneDesc}. The preferred entry area is ${preferredZoneDesc}.`
+
   let text =
-    `${input.market} is currently in ${input.currentZone ?? 'an unknown zone'}. ` +
-    `The historical setup profile favours ${input.direction} interest around ${input.preferredEntryZone}. ` +
+    `${input.market} is ${currentZoneDesc}. ` +
+    `${actionText} ` +
+    `The historical profile favours ${directionText} interest from ${preferredZoneDesc}. ` +
     `The suggested entry region is ${sigFig5(input.entryRangeLow)} to ${sigFig5(input.entryRangeHigh)}, ` +
-    `with an expected trigger probability of ${Math.round(input.triggerProbability * 100)}% ` +
-    `and expected opportunity of ${input.expectedR.toFixed(2)}R.`;
+    `with an estimated trigger probability of ${Math.round(input.triggerProbability * 100)}% ` +
+    `and expected opportunity of ${input.expectedR.toFixed(2)}R.`
 
   if (input.recommendationValidityStatus !== 'VALID' && input.volatilityWarning) {
-    text += ` Current condition note: ${input.volatilityWarning}`;
+    text += ` Condition note: ${input.volatilityWarning}`
   }
   if (input.eventWarning) {
-    text += ` Event risk note: ${input.eventWarning}`;
+    text += ` Event risk: ${input.eventWarning}`
   }
-  text += ' Treat this as a coaching range rather than an instruction; execution judgement remains important.';
+  text += ' Treat this as a coaching range rather than an instruction; execution judgement remains important.'
 
-  const [ok] = lintAnalystText(text);
-  return ok ? text : FALLBACK_COACHING_NOTE;
+  const [ok] = lintAnalystText(text)
+  return ok ? text : FALLBACK_COACHING_NOTE
 }
 
 export function buildCoachingRecommendation(input: CoachingInput): CoachingOutput {
