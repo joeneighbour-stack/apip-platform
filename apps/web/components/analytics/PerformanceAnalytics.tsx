@@ -90,13 +90,18 @@ function MultiSelect({
   placeholder: string
 }) {
   const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
   const allSelected = selected.length === 0
+
+  const filtered = search.trim()
+    ? options.filter(o => o.label.toLowerCase().includes(search.toLowerCase()))
+    : options
 
   return (
     <div className="relative">
       <p className="text-xs text-muted-foreground mb-1">{label}</p>
       <button
-        onClick={() => setOpen(!open)}
+        onClick={() => { setOpen(!open); setSearch('') }}
         className="w-full text-left text-xs px-2.5 py-2 rounded-md border border-border bg-background flex items-center justify-between gap-2"
       >
         <span className="truncate">
@@ -105,27 +110,45 @@ function MultiSelect({
         <span className="text-muted-foreground shrink-0">{open ? '▲' : '▼'}</span>
       </button>
       {open && (
-        <div className="absolute top-full left-0 mt-1 w-full bg-card border border-border rounded-md shadow-lg z-50 max-h-48 overflow-y-auto">
-          <button
-            className="w-full text-left text-xs px-3 py-2 hover:bg-muted transition-colors font-medium"
-            onClick={() => { onChange([]); setOpen(false) }}
-          >
-            {allSelected ? '✓ ' : ''}All
-          </button>
-          {options.map(opt => (
+        <div className="absolute top-full left-0 mt-1 w-full bg-card border border-border rounded-md shadow-lg z-50 flex flex-col max-h-56">
+          {options.length > 6 && (
+            <div className="p-2 border-b border-border shrink-0">
+              <input
+                type="text"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Search..."
+                className="w-full text-xs px-2 py-1 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary/30"
+                onClick={e => e.stopPropagation()}
+                autoFocus
+              />
+            </div>
+          )}
+          <div className="overflow-y-auto">
             <button
-              key={opt.value}
-              className="w-full text-left text-xs px-3 py-2 hover:bg-muted transition-colors"
-              onClick={() => {
-                const next = selected.includes(opt.value)
-                  ? selected.filter(v => v !== opt.value)
-                  : [...selected, opt.value]
-                onChange(next)
-              }}
+              className="w-full text-left text-xs px-3 py-2 hover:bg-muted transition-colors font-medium"
+              onClick={() => { onChange([]); setOpen(false); setSearch('') }}
             >
-              {selected.includes(opt.value) ? '✓ ' : '  '}{opt.label}
+              {allSelected ? '✓ ' : '  '}All
             </button>
-          ))}
+            {filtered.map(opt => (
+              <button
+                key={opt.value}
+                className="w-full text-left text-xs px-3 py-2 hover:bg-muted transition-colors"
+                onClick={() => {
+                  const next = selected.includes(opt.value)
+                    ? selected.filter(v => v !== opt.value)
+                    : [...selected, opt.value]
+                  onChange(next)
+                }}
+              >
+                {selected.includes(opt.value) ? '✓ ' : '  '}{opt.label}
+              </button>
+            ))}
+            {filtered.length === 0 && (
+              <p className="text-xs text-muted-foreground px-3 py-2">No matches</p>
+            )}
+          </div>
         </div>
       )}
     </div>
