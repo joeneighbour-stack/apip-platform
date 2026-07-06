@@ -26,6 +26,7 @@ on:
     - cron: '50 10 * * 1-5'  # 10:50 UTC Mon-Fri -- US engine
     - cron: '45 14 * * 1-5'  # 14:45 UTC Mon-Fri -- APAC snapshot
     - cron: '50 14 * * 1-5'  # 14:50 UTC Mon-Fri -- APAC engine
+    - cron: '0 5 * * 1'      # 05:00 UTC Monday -- weekly profile regeneration
   workflow_dispatch:
     inputs:
       job:
@@ -40,6 +41,7 @@ on:
           - engine-us
           - snapshot-apac
           - engine-apac
+          - generate-profiles
 
 jobs:
 
@@ -201,6 +203,28 @@ jobs:
           cache-dependency-path: intelligence-engine/package-lock.json
       - run: npm ci
       - run: npx tsx src/scripts/runEngineSession.ts --session=APAC
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+  generate-profiles:
+    name: Generate Analyst Profiles
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'generate-profiles' ||
+      github.event_name == 'schedule' && startsWith(github.event.schedule, '0 5') && endsWith(github.event.schedule, '* * 1')
+    defaults:
+      run:
+        working-directory: intelligence-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: intelligence-engine/package-lock.json
+      - run: npm ci
+      - run: npx tsx src/scripts/generateAnalystProfiles.ts
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

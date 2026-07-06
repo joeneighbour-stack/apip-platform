@@ -283,11 +283,28 @@ async function main() {
       } as RecommendationInputTrade)
     }
 
+    // Load analyst profiles for allocation scoring
+    const { data: profileRows } = await db
+      .from('analyst_profiles')
+      .select('analyst_id, market_id, direction, zone, profile_data')
+      .in('analyst_id', eligibleAnalysts.map(a => a.analyst))
+
+    // Build profile lookup: analyst_id -> market_id -> direction -> best avg_r
+    const profileScores = new Map<string, number>()
+    for (const p of (profileRows ?? [])) {
+      const key = `${p.analyst_id}::${p.market_id}::${p.direction}`
+      const existing = profileScores.get(key) ?? -Infinity
+      const avgR = p.profile_data?.avg_r ?? 0
+      if (avgR > existing) profileScores.set(key, avgR)
+    }
+
     console.log(`  Active analysts: ${activeAnalysts.length}, eligible for ${session}: ${eligibleAnalysts.length}`)
     if (unavailableIds.size > 0) console.log(`  Absent today: ${unavailableIds.size} analyst(s)`)
     console.log(`  Historical trades loaded: ${allTradeRows.length} (${page} pages)`)
+    console.log(`  Analyst profiles loaded: ${profileRows?.length ?? 0}`)
     if (!isDryRun && stepId2) await completeStep(db, stepId2, 'SUCCESS', {
       analysts: activeAnalysts.length, trades: allTradeRows.length,
+      profiles: profileRows?.length ?? 0,
     })
 
     // ── Step 3: Generate recommendations ────────────────────────────────────
@@ -378,14 +395,25 @@ async function main() {
       console.log('\nStep 4: Allocating and writing to database...')
       const stepId4 = await createStep(db, engineRunId, 'ALLOCATE_AND_WRITE')
 
-      // Build allocation input
-      const allocationInput: OpportunityForAllocation[] = generatedItems.map(item => ({
-        opportunityId: randomUUID(),
-        recommendationVersionId: item.rvId,
-        expectedR: item.opp.expectedR,
-        assignedAnalystId: item.opp.assignedAnalystId,
-        eligibleAnalysts: eligibleAnalysts.map(a => a.analyst),
-      }))
+      // Build allocation input -- use analyst_profiles for preferred analyst scoring
+      const allocationInput: OpportunityForAllocation[] = generatedItems.map(item => {
+        // Find the eligible analyst with the best profile score for this market/direction
+        let bestAnalystId: string | null = null
+        let bestScore = -Infinity
+        for (const a of eligibleAnalysts) {
+          const key = `${a.analyst}::${item.market.market_id}::${item.opp.direction}`
+          const score = profileScores.get(key) ?? -Infinity
+          if (score > bestScore) { bestScore = score; bestAnalystId = a.analyst }
+        }
+
+        return {
+          opportunityId: randomUUID(),
+          recommendationVersionId: item.rvId,
+          expectedR: item.opp.expectedR,
+          assignedAnalystId: bestAnalystId, // profile-based preference
+          eligibleAnalysts: eligibleAnalysts.map(a => a.analyst),
+        }
+      })
 
       const allocations = allocateCoverage({
         opportunities: allocationInput,
