@@ -22,7 +22,8 @@ import { buildMarketState, type OhlcBar } from '../services/marketStateService.j
 
 const ATR_PERIOD = 14
 const ZONE_COUNT = 4
-const DAYS_TO_FETCH = 60
+const daysArg = process.argv.find(a => a.startsWith('--days='))?.split('=')[1]
+const DAYS_TO_FETCH = Number(daysArg ?? 60)
 
 interface FinnhubCandleResponse {
   c: number[]; h: number[]; l: number[]; o: number[]; t: number[]; s: string

@@ -593,7 +593,7 @@ async function main() {
         try {
           const shadowId = randomUUID()
           const shadowOutcomeId = randomUUID()
-          const shadow = createShadowTrade({
+          const { shadowTrade, shadowTradeOutcome } = createShadowTrade({
             shadowTradeId: shadowId,
             shadowOutcomeId,
             createdAt: generatedAt,
@@ -606,20 +606,29 @@ async function main() {
             templateSource: diagnostics.templateSource,
           })
 
-          await db.from('shadow_trades').insert({
-            shadow_trade_id: shadow.shadowTradeId,
-            opportunity_id: shadow.opportunityId,
-            recommendation_version_id: shadow.recommendationVersionId,
-            entry: shadow.entry,
-            stop: shadow.stop,
-            target: shadow.target,
-            rr: shadow.rr,
-            template_source: shadow.templateSource,
-            confidence_label: shadow.confidenceLabel,
-            trade_outcome_status: 'NOT_TRIGGERED',
+          const { data: shadowRow, error: shadowError } = await db.from('shadow_trades').insert({
+            shadow_trade_id: shadowTrade.shadowTradeId,
+            opportunity_id: shadowTrade.opportunityId,
+            recommendation_version_id: shadowTrade.recommendationVersionId,
+            entry: shadowTrade.entry,
+            stop: shadowTrade.stop,
+            target: shadowTrade.target,
+            rr: shadowTrade.rr,
+            template_source: shadowTrade.templateSource,
+            confidence_label: shadowTrade.confidenceLabel,
             generated_at: generatedAt,
-          })
-          shadowTradesCreated++
+          }).select('shadow_trade_id').single()
+
+          if (!shadowError && shadowRow) {
+            await db.from('shadow_trade_outcomes').insert({
+              shadow_outcome_id: shadowTradeOutcome.shadowOutcomeId,
+              shadow_trade_id: shadowRow.shadow_trade_id,
+              trade_outcome_status: 'NOT_TRIGGERED',
+            })
+            shadowTradesCreated++
+          } else if (shadowError) {
+            console.log(`  ${market.symbol} shadow: ${shadowError.message}`)
+          }
         } catch (err) {
           console.log(`  ${market.symbol} shadow: ${(err as Error).message}`)
         }
