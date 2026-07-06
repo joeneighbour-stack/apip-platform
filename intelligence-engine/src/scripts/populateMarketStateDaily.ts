@@ -28,11 +28,14 @@ interface FinnhubCandleResponse {
   c: number[]; h: number[]; l: number[]; o: number[]; t: number[]; s: string
 }
 
-async function fetchRecentOhlc(finnhubSymbol: string, days: number, apiKey: string): Promise<OhlcBar[]> {
+async function fetchRecentOhlc(finnhubSymbol: string, days: number, apiKey: string, isCrypto = false): Promise<OhlcBar[]> {
   const to = Math.floor(Date.now() / 1000)
   const from = to - days * 24 * 60 * 60
-  const url = `https://finnhub.io/api/v1/forex/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=D&from=${from}&to=${to}&token=${apiKey}`
-  const response = await fetch(url)
+  // Crypto uses /crypto/candle, FX/indices use /forex/candle
+  const endpoint = isCrypto
+    ? `https://finnhub.io/api/v1/crypto/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=D&from=${from}&to=${to}&token=${apiKey}`
+    : `https://finnhub.io/api/v1/forex/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=D&from=${from}&to=${to}&token=${apiKey}`
+  const response = await fetch(endpoint)
   if (!response.ok) throw new Error(`Finnhub HTTP ${response.status}`)
   const body: FinnhubCandleResponse = await response.json()
   if (body.s !== 'ok' || !body.c?.length) throw new Error(`Finnhub status '${body.s}' for ${finnhubSymbol}`)
@@ -74,10 +77,14 @@ async function main() {
     process.exit(1)
   }
 
-  const markets = (marketRows ?? []).filter(m => m.price_data_provider === 'FINNHUB_OANDA')
-  const skippedProviders = (marketRows ?? []).filter(m => m.price_data_provider !== 'FINNHUB_OANDA')
+  const markets = (marketRows ?? []).filter(m =>
+    m.price_data_provider === 'FINNHUB_OANDA' || m.price_data_provider === 'FINNHUB_CRYPTO'
+  )
+  const skippedProviders = (marketRows ?? []).filter(m =>
+    m.price_data_provider !== 'FINNHUB_OANDA' && m.price_data_provider !== 'FINNHUB_CRYPTO'
+  )
 
-  console.log(`Markets to fetch: ${markets.length} (FINNHUB_OANDA)`)
+  console.log(`Markets to fetch: ${markets.length} (FINNHUB_OANDA + FINNHUB_CRYPTO)`)
   if (skippedProviders.length > 0) {
     console.log(`Skipped (other provider): ${skippedProviders.map(m => `${m.symbol}(${m.price_data_provider})`).join(', ')}\n`)
   }
@@ -96,7 +103,8 @@ async function main() {
     seen.add(market.price_data_symbol)
 
     try {
-      const bars = await fetchRecentOhlc(market.price_data_symbol, DAYS_TO_FETCH, FINNHUB_API_KEY)
+      const isCrypto = market.price_data_provider === 'FINNHUB_CRYPTO'
+      const bars = await fetchRecentOhlc(market.price_data_symbol, DAYS_TO_FETCH, FINNHUB_API_KEY, isCrypto)
 
       if (bars.length < ATR_PERIOD) {
         console.log(`  ${market.symbol}: insufficient bars (${bars.length}), skipping`)

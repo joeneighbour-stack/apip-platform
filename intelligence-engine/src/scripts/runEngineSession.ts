@@ -52,7 +52,7 @@ const SESSION_MARKETS: Record<string, string[]> = {
     'Oil', 'USDJPY', 'CAC', 'Palladium', 'Gold', 'EURSEK',
     'AUDUSD', 'GBPJPY', 'EURCHF', 'Platinum', 'Copper', 'EURUSD', 'USDCHF', 'DAX',
   ],
-  US:   ['DOW', 'SP500', 'NASDAQ', 'Russell2000'],
+  US:   ['DOW', 'SP500', 'NASDAQ', 'US2000', 'Ripple', 'Solana', 'Ethereum', 'Bitcoin', 'Litecoin'],
   APAC: ['CHINA A50', 'ASX200', 'GBPAUD', 'NZDJPY', 'NZDUSD', 'NIKKEI', 'EURAUD', 'GBPNZD'],
 }
 
@@ -234,19 +234,42 @@ async function main() {
 
     const eligibleAnalysts = activeAnalysts.filter(a => !unavailableIds.has(a.analyst))
 
-    // Load recent actual_trades for template/profile building (last 2 years)
-    const { data: tradeRows } = await db.from('actual_trades')
-      .select('analyst_id, market_id, direction, entry_zone, result_r, triggered')
-      .gte('published_at', new Date(Date.now() - 2 * 365 * 24 * 60 * 60 * 1000).toISOString())
-      .not('result_r', 'is', null)
+    // Load ALL actual_trades for template/profile building using pagination
+    // Supabase default limit is 1000 -- must paginate to get all 30k+ rows
+    const twoYearsAgo = new Date(Date.now() - 2 * 365 * 24 * 60 * 60 * 1000).toISOString()
+    const PAGE_SIZE = 1000
+    const allTradeRows: any[] = []
+    let page = 0
+    let hasMore = true
+
+    while (hasMore) {
+      const from = page * PAGE_SIZE
+      const to = from + PAGE_SIZE - 1
+      const { data, error } = await db.from('actual_trades')
+        .select('analyst_id, market_id, direction, entry_zone, result_r, triggered')
+        .gte('published_at', twoYearsAgo)
+        .not('result_r', 'is', null)
+        .range(from, to)
+
+      if (error) {
+        console.error(`  Trade pagination error on page ${page}: ${error.message}`)
+        break
+      }
+      if (!data || data.length === 0) {
+        hasMore = false
+      } else {
+        allTradeRows.push(...data)
+        hasMore = data.length === PAGE_SIZE
+        page++
+      }
+    }
 
     // Group trades by market symbol (not market_id -- buildRecommendation matches on symbol)
-    // We need a market_id -> symbol lookup
     const { data: allMarketRows } = await db.from('markets').select('market_id, symbol')
     const symbolByMarketId = new Map((allMarketRows ?? []).map(m => [m.market_id, m.symbol]))
 
     const tradesBySymbol = new Map<string, RecommendationInputTrade[]>()
-    for (const t of (tradeRows ?? [])) {
+    for (const t of allTradeRows) {
       const symbol = symbolByMarketId.get(t.market_id)
       if (!symbol) continue
       if (!tradesBySymbol.has(symbol)) tradesBySymbol.set(symbol, [])
@@ -262,9 +285,9 @@ async function main() {
 
     console.log(`  Active analysts: ${activeAnalysts.length}, eligible for ${session}: ${eligibleAnalysts.length}`)
     if (unavailableIds.size > 0) console.log(`  Absent today: ${unavailableIds.size} analyst(s)`)
-    console.log(`  Historical trades loaded: ${tradeRows?.length ?? 0}`)
+    console.log(`  Historical trades loaded: ${allTradeRows.length} (${page} pages)`)
     if (!isDryRun && stepId2) await completeStep(db, stepId2, 'SUCCESS', {
-      analysts: activeAnalysts.length, trades: tradeRows?.length ?? 0,
+      analysts: activeAnalysts.length, trades: allTradeRows.length,
     })
 
     // ── Step 3: Generate recommendations ────────────────────────────────────

@@ -40,11 +40,11 @@ const SESSION_MARKETS: Record<string, string[]> = {
   ],
   US: [
     // Tibor
-    'DOW', 'SP500', 'DOW Futures', 'SP500 Futures', 'Litecoin',
+    'DOW', 'SP500', 'Litecoin',
     // Mona
-    'Russell2000', 'Russell2000 Futures', 'XRP', 'Solana',
+    'US2000', 'Ripple', 'Solana',
     // Ian
-    'NASDAQ', 'NASDAQ Futures', 'Ethereum', 'Bitcoin',
+    'NASDAQ', 'Ethereum', 'Bitcoin',
   ],
   APAC: [
     // Tibor
@@ -57,19 +57,12 @@ const SESSION_MARKETS: Record<string, string[]> = {
 interface FinnhubQuote { c: number; h: number; l: number; o: number; t: number }
 
 async function fetchCurrentPrice(finnhubSymbol: string, apiKey: string, isCrypto: boolean): Promise<number> {
-  // Crypto uses a different Finnhub endpoint
-  const url = isCrypto
-    ? `https://finnhub.io/api/v1/crypto/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=1&count=1&token=${apiKey}`
-    : `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(finnhubSymbol)}&token=${apiKey}`
+  // Both OANDA and crypto use the standard quote endpoint
+  // Crypto candle endpoint requires higher tier -- quote works for both
+  const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(finnhubSymbol)}&token=${apiKey}`
 
   const response = await fetch(url)
   if (!response.ok) throw new Error(`Finnhub HTTP ${response.status}`)
-
-  if (isCrypto) {
-    const body = await response.json()
-    if (!body.c?.length) throw new Error(`No crypto price for ${finnhubSymbol}`)
-    return body.c[body.c.length - 1]
-  }
 
   const quote: FinnhubQuote = await response.json()
   if (!quote.c || quote.c === 0) throw new Error(`No current price for ${finnhubSymbol}`)
