@@ -345,19 +345,32 @@ async function main() {
     return
   }
 
-  // Delete existing and replace (or upsert by market_id + captured_at)
-  console.log('\nWriting regime rows...')
+  // Deduplicate by market_id + captured_at (keep last occurrence)
+  const seen = new Map<string, any>()
+  for (const row of regimeRows) {
+    const key = `${row.market_id}::${row.captured_at}`
+    seen.set(key, row)
+  }
+  const dedupedRows = Array.from(seen.values())
+  console.log(`Regime rows after dedup: ${dedupedRows.length} (removed ${regimeRows.length - dedupedRows.length} duplicates)`)
+
+  // Delete existing and re-insert (avoids upsert conflict on duplicate dates)
+  if (!isDryRun) {
+    console.log('\nClearing existing regime rows...')
+    await db.from('market_regime_state').delete().not('market_regime_state_id', 'is', null)
+  }
+
+  console.log(isDryRun ? '\nDRY RUN -- nothing written.' : '\nWriting regime rows...')
+  if (isDryRun) return
+
   const BATCH = 500
   let inserted = 0
-  for (let i = 0; i < regimeRows.length; i += BATCH) {
-    const batch = regimeRows.slice(i, i + BATCH)
-    const { error } = await db.from('market_regime_state').upsert(batch, {
-      onConflict: 'market_id,captured_at',
-      ignoreDuplicates: false,
-    })
+  for (let i = 0; i < dedupedRows.length; i += BATCH) {
+    const batch = dedupedRows.slice(i, i + BATCH)
+    const { error } = await db.from('market_regime_state').insert(batch)
     if (error) { console.error(`Insert error: ${error.message}`); process.exit(1) }
     inserted += batch.length
-    process.stdout.write(`\rInserted ${inserted}/${regimeRows.length}`)
+    process.stdout.write(`\rInserted ${inserted}/${dedupedRows.length}`)
   }
 
   console.log(`\n\nDone. ${inserted} regime rows written.`)

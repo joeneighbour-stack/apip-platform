@@ -301,22 +301,78 @@ async function main() {
       .select('analyst_id, market_id, direction, zone, profile_data')
       .in('analyst_id', eligibleAnalysts.map(a => a.analyst))
 
-    // Build profile lookup: analyst_id -> market_id -> direction -> best avg_r
+    // Load latest regime for each market -- stored at 22:00 UTC of the bar date
+    // so yesterday's regime row covers today's session
+    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    const { data: regimeRows } = await db
+      .from('market_regime_state')
+      .select('market_id, trend_state, volatility_state, regime_confidence, captured_at')
+      .gte('captured_at', twoDaysAgo + 'T00:00:00Z')
+      .is('session', null)
+      .order('captured_at', { ascending: false })
+
+    // Keep only the latest regime per market
+    const regimeByMarketId = new Map<string, any>()
+    for (const r of (regimeRows ?? [])) {
+      if (!regimeByMarketId.has(r.market_id)) {
+        regimeByMarketId.set(r.market_id, r)
+      }
+    }
+    console.log(`  Market regimes loaded: ${regimeByMarketId.size}`)
+
+    // Build profile lookup: analyst_id -> market_id -> direction -> avg_r
+    // Prefer regime-specific profiles when current regime matches
     const profileScores = new Map<string, number>()
     for (const p of (profileRows ?? [])) {
+      const regime = regimeByMarketId.get(p.market_id)
+      const profileRegime = p.profile_data?.regime
+      const isRegimeMatch = regime && profileRegime && profileRegime === regime.trend_state
+
+      // Boost regime-matched profiles so they win in allocation
+      const avgR = (p.profile_data?.avg_r ?? 0) + (isRegimeMatch ? 0.1 : 0)
       const key = `${p.analyst_id}::${p.market_id}::${p.direction}`
       const existing = profileScores.get(key) ?? -Infinity
-      const avgR = p.profile_data?.avg_r ?? 0
       if (avgR > existing) profileScores.set(key, avgR)
     }
 
+    // Build regime-aware preferred direction per market
+    // For each market, find which direction has the best avg_r in current regime
+    // across all eligible analysts
+    const preferredDirectionByMarketId = new Map<string, 'BUY' | 'SELL'>()
+    for (const market of (marketRows ?? [])) {
+      const regime = regimeByMarketId.get(market.market_id)
+      if (!regime) continue
+
+      // Find best direction in current regime across all profiles for this market
+      let bestBuyR = -Infinity, bestSellR = -Infinity
+
+      for (const p of (profileRows ?? [])) {
+        if (p.market_id !== market.market_id) continue
+        const profileRegime = p.profile_data?.regime
+        // Only use regime-matched profiles for direction selection
+        if (profileRegime !== regime.trend_state) continue
+
+        const avgR = p.profile_data?.avg_r ?? 0
+        if (p.direction === 'BUY' && avgR > bestBuyR) bestBuyR = avgR
+        if (p.direction === 'SELL' && avgR > bestSellR) bestSellR = avgR
+      }
+
+      // Only set preferred direction if we have enough signal
+      // (at least one direction has regime-matched profiles)
+      if (bestBuyR > -Infinity || bestSellR > -Infinity) {
+        preferredDirectionByMarketId.set(
+          market.market_id,
+          bestBuyR >= bestSellR ? 'BUY' : 'SELL'
+        )
+      }
+    }
+    console.log(`  Regime-preferred directions set: ${preferredDirectionByMarketId.size} markets`)
+
     // Build market-level trigger rate lookup from analyst_profiles
-    // Used as fallback when trade history is insufficient
     const marketTriggerRateByMarketId = new Map<string, number>()
     for (const p of (profileRows ?? [])) {
       if (!p.profile_data?.trigger_rate) continue
       const existing = marketTriggerRateByMarketId.get(p.market_id)
-      // Average across all profiles for this market
       if (existing === undefined) {
         marketTriggerRateByMarketId.set(p.market_id, p.profile_data.trigger_rate)
       } else {
@@ -386,8 +442,20 @@ async function main() {
 
       if (!currentZone) { console.log(`  ${symbol}: no zone`); continue }
 
-      const trades = tradesBySymbol.get(symbol) ?? []
+      const allTrades = tradesBySymbol.get(symbol) ?? []
       const rvId = randomUUID()
+
+      // Apply regime-preferred direction: filter trades to preferred direction
+      // when regime signal is strong enough (HIGH or MEDIUM confidence)
+      const regime = regimeByMarketId.get(market.market_id)
+      const preferredDir = preferredDirectionByMarketId.get(market.market_id)
+      const regimeIsStrong = regime && ['HIGH', 'MEDIUM'].includes(regime.regime_confidence)
+
+      let trades = allTrades
+      if (preferredDir && regimeIsStrong && allTrades.filter(t => t.direction === preferredDir).length >= 10) {
+        trades = allTrades.filter(t => t.direction === preferredDir)
+        console.log(`    Regime(${regime?.trend_state}) → preferred direction: ${preferredDir} (${trades.length}/${allTrades.length} trades)`)
+      }
 
       // Use profile-based trigger rate as fallback (more accurate than 0.5)
       const profileTriggerRate = marketTriggerRateByMarketId.get(market.market_id) ?? FALLBACK_TRIGGER_PROBABILITY
