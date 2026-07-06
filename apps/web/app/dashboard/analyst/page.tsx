@@ -77,11 +77,16 @@ export default async function AnalystWorkspacePage() {
             const symbol = (opp?.market as any)?.symbol ?? '—'
             const action = opp?.analyst_action ?? ''
             const validity = rv?.recommendation_validity_status ?? 'VALID'
-            const isStale = validity !== 'VALID'
+            const isDoNotUse = validity === 'DO_NOT_USE_RECALCULATE'
+            const isStale = validity !== 'VALID' && !isDoNotUse
 
             return (
               <div key={rec.recommendation_id}
-                className="rounded-lg border border-border bg-card p-5 space-y-4">
+                className={`rounded-lg border p-5 space-y-4 ${
+                  isDoNotUse
+                    ? 'border-red-200 bg-red-50/30 opacity-60'
+                    : 'border-border bg-card'
+                }`}>
 
                 {/* Header */}
                 <div className="flex items-start justify-between gap-4">
@@ -94,21 +99,38 @@ export default async function AnalystWorkspacePage() {
                     }`}>
                       {opp?.direction ?? '—'}
                     </span>
-                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                      action === 'ENTER_NOW'
-                        ? 'bg-green-50 text-green-700'
-                        : 'bg-amber-50 text-amber-700'
-                    }`}>
-                      {action === 'ENTER_NOW' ? 'Enter Now' : 'Wait for Preferred Zone'}
-                    </span>
+                    {!isDoNotUse && (
+                      <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                        action === 'ENTER_NOW'
+                          ? 'bg-green-50 text-green-700'
+                          : 'bg-amber-50 text-amber-700'
+                      }`}>
+                        {action === 'ENTER_NOW' ? 'Enter Now' : 'Wait for Preferred Zone'}
+                      </span>
+                    )}
+                    {isDoNotUse && (
+                      <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-800">
+                        Levels outdated
+                      </span>
+                    )}
                     {validity === 'ENTRY_ALREADY_PASSED' && (
                       <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-50 text-red-700">
                         Entry Out of Range
                       </span>
                     )}
-                    {isStale && validity !== 'ENTRY_ALREADY_PASSED' && (
+                    {validity === 'STALE_PRICE' && (
+                      <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">
+                        Levels may be stale
+                      </span>
+                    )}
+                    {validity === 'ZONE_CHANGED' && (
                       <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-orange-50 text-orange-700">
-                        Condition Update
+                        Zone changed
+                      </span>
+                    )}
+                    {validity === 'CAUTION_VOLATILITY' && (
+                      <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-yellow-50 text-yellow-700">
+                        Elevated volatility
                       </span>
                     )}
                   </div>
@@ -117,6 +139,15 @@ export default async function AnalystWorkspacePage() {
                     expectedR={rec.expected_r ?? 0}
                   />
                 </div>
+
+                {/* DO_NOT_USE banner */}
+                {isDoNotUse && (
+                  <div className="rounded-md bg-red-100 border border-red-200 px-3 py-2">
+                    <p className="text-xs text-red-800 font-medium">
+                      Market has moved significantly since these levels were generated. Do not act on these levels — updated levels will be available at the next session.
+                    </p>
+                  </div>
+                )}
 
                 {/* Levels */}
                 <div className="grid grid-cols-3 gap-3">
@@ -136,10 +167,10 @@ export default async function AnalystWorkspacePage() {
                   </div>
                 </div>
 
-                {/* Condition warning */}
+                {/* Stale price warning */}
                 {isStale && rv?.volatility_warning && (
-                  <div className="rounded-md bg-orange-50 border border-orange-100 px-3 py-2">
-                    <p className="text-xs text-orange-800">{rv.volatility_warning}</p>
+                  <div className="rounded-md bg-amber-50 border border-amber-100 px-3 py-2">
+                    <p className="text-xs text-amber-800">{rv.volatility_warning}</p>
                   </div>
                 )}
 
