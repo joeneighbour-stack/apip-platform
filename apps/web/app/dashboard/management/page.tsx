@@ -5,6 +5,8 @@ import { AllocationTable } from '@/components/management/AllocationTable'
 import { WorkloadPanel } from '@/components/management/WorkloadPanel'
 import { DisputeQueue } from '@/components/management/DisputeQueue'
 import { StaleExceptions } from '@/components/management/StaleExceptions'
+import { AbsenceQueue } from '@/components/management/AbsenceQueue'
+import { EmergencyAbsence } from '@/components/management/EmergencyAbsence'
 
 export default async function ManagementWorkspacePage() {
   const user = await getCurrentUser()
@@ -84,17 +86,41 @@ export default async function ManagementWorkspacePage() {
     .select('analyst_id, available, workload_cap, session')
     .eq('date', today)
 
+  // Absence requests -- pending + upcoming approved
+  const nextThirtyDays = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  const { data: absenceRequests } = await supabase
+    .from('analyst_availability')
+    .select(`
+      availability_id, date, session, status,
+      analyst:analyst_id ( analyst_id, display_name )
+    `)
+    .in('status', ['PENDING', 'APPROVED'])
+    .gte('date', today)
+    .lte('date', nextThirtyDays)
+    .order('date', { ascending: true })
+
+  // Active analysts for emergency absence
+  const { data: activeAnalysts } = await supabase
+    .from('analysts')
+    .select('analyst_id, display_name')
+    .eq('active', true)
+    .order('display_name')
+
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-xl font-semibold">Management</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Allocation, team workload, disputes, and recommendation exceptions
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold">Management</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Allocation, team workload, disputes, and recommendation exceptions
+          </p>
+        </div>
+        <EmergencyAbsence analysts={activeAnalysts ?? []} />
       </div>
 
       <WorkloadPanel allocations={allocations ?? []} availability={availability ?? []} />
       <AllocationTable allocations={allocations ?? []} />
+      <AbsenceQueue requests={(absenceRequests ?? []) as any} />
       <StaleExceptions recommendations={staleRecsWithMarkets ?? []} />
       <DisputeQueue disputes={disputes ?? []} isAdmin={user.role === 'ADMIN'} />
     </div>
