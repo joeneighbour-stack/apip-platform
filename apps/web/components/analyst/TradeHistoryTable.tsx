@@ -106,7 +106,9 @@ export function TradeHistoryTable({ trades, disputesByTradeId, analystId }: Trad
                         {trade.direction}
                       </span>
                     </td>
-                    <td className="px-4 py-2.5 tabular-nums">{Number(trade.entry).toFixed(4)}</td>
+                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground">
+                      {trade.entry != null ? Number(trade.entry).toFixed(4) : '—'}
+                    </td>
                     <td className="px-4 py-2.5">
                       {trade.triggered
                         ? <span className="text-xs text-green-700">Yes</span>

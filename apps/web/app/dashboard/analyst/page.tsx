@@ -44,6 +44,7 @@ export default async function AnalystWorkspacePage() {
       )
     `)
     .eq('analyst_id', user.analystId)
+    .gte('shown_at', new Date().toISOString().slice(0, 10) + 'T00:00:00Z')
     .order('shown_at', { ascending: false })
 
   const { data: reviews } = await supabase

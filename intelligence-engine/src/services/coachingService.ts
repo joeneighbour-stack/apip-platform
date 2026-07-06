@@ -117,17 +117,27 @@ export function generateCoachingNote(input: CoachingInput): string {
   const currentZoneDesc = describeZone(input.currentZone)
   const preferredZoneDesc = describePreferredZone(input.preferredEntryZone)
   const directionText = input.direction === 'BUY' ? 'buy' : 'sell'
-  const actionText = input.analystAction === 'ENTER_NOW'
-    ? `Price is currently ${currentZoneDesc}, which aligns with the preferred entry area.`
-    : `Price is currently ${currentZoneDesc}. The preferred entry area is ${preferredZoneDesc}.`
+  const triggerPct = Math.round(input.triggerProbability * 100)
+  const entryLow = sigFig5(input.entryRangeLow)
+  const entryHigh = sigFig5(input.entryRangeHigh)
 
-  let text =
-    `${input.market} is ${currentZoneDesc}. ` +
-    `${actionText} ` +
-    `The historical profile favours ${directionText} interest from ${preferredZoneDesc}. ` +
-    `The suggested entry region is ${sigFig5(input.entryRangeLow)} to ${sigFig5(input.entryRangeHigh)}, ` +
-    `with an estimated trigger probability of ${Math.round(input.triggerProbability * 100)}% ` +
-    `and expected opportunity of ${input.expectedR.toFixed(2)}R.`
+  let text: string
+
+  if (input.analystAction === 'ENTER_NOW') {
+    // Price is in the preferred zone -- one description, focus on execution
+    text =
+      `${input.market} is ${currentZoneDesc}, which aligns with the preferred ${directionText} area. ` +
+      `The suggested entry region is ${entryLow} to ${entryHigh}, ` +
+      `with an estimated trigger probability of ${triggerPct}% ` +
+      `and expected opportunity of ${input.expectedR.toFixed(2)}R.`
+  } else {
+    // Price is away from preferred zone -- describe both concisely
+    text =
+      `${input.market} is currently ${currentZoneDesc}. ` +
+      `The historical profile favours ${directionText} interest from ${preferredZoneDesc}, ` +
+      `with a suggested entry region of ${entryLow} to ${entryHigh}. ` +
+      `Estimated trigger probability ${triggerPct}%, expected opportunity ${input.expectedR.toFixed(2)}R.`
+  }
 
   if (input.recommendationValidityStatus !== 'VALID' && input.volatilityWarning) {
     text += ` Condition note: ${input.volatilityWarning}`
