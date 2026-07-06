@@ -20,6 +20,7 @@ name: APIP Engine
 on:
   schedule:
     - cron: '30 4 * * 1-5'   # 04:30 UTC Mon-Fri -- populate daily market state
+    - cron: '35 4 * * 1-5'   # 04:35 UTC Mon-Fri -- derive market regime
     - cron: '45 4 * * 1-5'   # 04:45 UTC Mon-Fri -- European snapshot
     - cron: '50 4 * * 1-5'   # 04:50 UTC Mon-Fri -- European engine
     - cron: '45 10 * * 1-5'  # 10:45 UTC Mon-Fri -- US snapshot
@@ -27,6 +28,8 @@ on:
     - cron: '45 14 * * 1-5'  # 14:45 UTC Mon-Fri -- APAC snapshot
     - cron: '50 14 * * 1-5'  # 14:50 UTC Mon-Fri -- APAC engine
     - cron: '0 5 * * 1'      # 05:00 UTC Monday -- weekly profile regeneration
+    - cron: '15 5 * * 1'     # 05:15 UTC Monday -- weekly regime derivation
+    - cron: '30 5 * * 1'     # 05:30 UTC Monday -- weekly KPI calculation
   workflow_dispatch:
     inputs:
       job:
@@ -35,6 +38,7 @@ on:
         type: choice
         options:
           - populate-daily
+          - derive-regime
           - snapshot-european
           - engine-european
           - snapshot-us
@@ -42,6 +46,7 @@ on:
           - snapshot-apac
           - engine-apac
           - generate-profiles
+          - calculate-kpis
 
 jobs:
 
@@ -68,10 +73,34 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
 
+  derive-regime:
+    name: Derive Market Regime
+    runs-on: ubuntu-latest
+    needs: populate-daily
+    if: |
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'derive-regime' ||
+      github.event_name == 'schedule' && startsWith(github.event.schedule, '35 4') ||
+      github.event_name == 'schedule' && startsWith(github.event.schedule, '15 5') && endsWith(github.event.schedule, '* * 1')
+    defaults:
+      run:
+        working-directory: intelligence-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: intelligence-engine/package-lock.json
+      - run: npm ci
+      - run: npx tsx src/scripts/deriveMarketRegime.ts
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
   snapshot-european:
     name: Intraday Snapshot -- European
     runs-on: ubuntu-latest
-    needs: populate-daily
+    needs: derive-regime
     if: |
       github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'snapshot-european' ||
       github.event_name == 'schedule' && startsWith(github.event.schedule, '45 4')
@@ -225,6 +254,28 @@ jobs:
           cache-dependency-path: intelligence-engine/package-lock.json
       - run: npm ci
       - run: npx tsx src/scripts/generateAnalystProfiles.ts
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+  calculate-kpis:
+    name: Calculate Analyst KPIs
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'calculate-kpis' ||
+      github.event_name == 'schedule' && startsWith(github.event.schedule, '30 5') && endsWith(github.event.schedule, '* * 1')
+    defaults:
+      run:
+        working-directory: intelligence-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: intelligence-engine/package-lock.json
+      - run: npm ci
+      - run: npx tsx src/scripts/calculateKpis.ts
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
