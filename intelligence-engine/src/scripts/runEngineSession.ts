@@ -172,19 +172,31 @@ async function main() {
       .select('market_id, symbol, asset_class, display_precision').in('symbol', sessionMarkets)
     const marketBySymbol = new Map((marketRows ?? []).map(m => [m.symbol, m]))
 
-    const { data: recentBars } = await db.from('market_state_daily')
-      .select('market_id, date, open, high, low, close')
-      .gte('date', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
-      .order('date', { ascending: true })
+    const windowStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    const allBars: any[] = []
+    let barPage = 0, barHasMore = true
+    while (barHasMore) {
+      const { data: barBatch } = await db.from('market_state_daily')
+        .select('market_id, date, open, high, low, close')
+        .gte('date', windowStart)
+        .order('date', { ascending: true })
+        .range(barPage * 1000, barPage * 1000 + 999)
+      if (!barBatch?.length) { barHasMore = false } else {
+        allBars.push(...barBatch)
+        barHasMore = barBatch.length === 1000
+        barPage++
+      }
+    }
 
     const barsByMarketId = new Map<string, any[]>()
-    for (const bar of (recentBars ?? [])) {
+    for (const bar of allBars) {
       if (!barsByMarketId.has(bar.market_id)) barsByMarketId.set(bar.market_id, [])
       barsByMarketId.get(bar.market_id)!.push({
         date: bar.date, open: Number(bar.open), high: Number(bar.high),
         low: Number(bar.low), close: Number(bar.close),
       })
     }
+    console.log(`  Daily bars loaded: ${allBars.length} rows across ${barsByMarketId.size} markets (${barPage} pages)`)
 
     const { data: intradayRows } = await db.from('market_state_intraday')
       .select('market_id, current_price, current_zone, captured_at')
@@ -298,7 +310,19 @@ async function main() {
       if (avgR > existing) profileScores.set(key, avgR)
     }
 
-    console.log(`  Active analysts: ${activeAnalysts.length}, eligible for ${session}: ${eligibleAnalysts.length}`)
+    // Build market-level trigger rate lookup from analyst_profiles
+    // Used as fallback when trade history is insufficient
+    const marketTriggerRateByMarketId = new Map<string, number>()
+    for (const p of (profileRows ?? [])) {
+      if (!p.profile_data?.trigger_rate) continue
+      const existing = marketTriggerRateByMarketId.get(p.market_id)
+      // Average across all profiles for this market
+      if (existing === undefined) {
+        marketTriggerRateByMarketId.set(p.market_id, p.profile_data.trigger_rate)
+      } else {
+        marketTriggerRateByMarketId.set(p.market_id, (existing + p.profile_data.trigger_rate) / 2)
+      }
+    }
     if (unavailableIds.size > 0) console.log(`  Absent today: ${unavailableIds.size} analyst(s)`)
     console.log(`  Historical trades loaded: ${allTradeRows.length} (${page} pages)`)
     console.log(`  Analyst profiles loaded: ${profileRows?.length ?? 0}`)
@@ -330,9 +354,26 @@ async function main() {
       const bars = barsByMarketId.get(market.market_id) ?? []
       if (bars.length < ATR_PERIOD) { console.log(`  ${symbol}: insufficient bars`); continue }
 
+      // Band anchor: use the last completed weekday session close.
+      // CFD markets roll at 22:00 UK. The 'latest' bar from Finnhub may be
+      // a weekend/thin session bar. Find the last bar that falls on a weekday
+      // (Mon-Fri) -- that is the last proper completed daily close.
+      const weekdayBars = bars.filter(b => {
+        const day = new Date(b.date + 'T12:00:00Z').getUTCDay()
+        return day >= 1 && day <= 5 // Monday=1 to Friday=5
+      })
+      const anchorBar = weekdayBars.length >= 1
+        ? weekdayBars[weekdayBars.length - 1]!
+        : bars[bars.length - 1]!
+
+      const barsForBands = bars.map((b, i) => {
+        if (i < bars.length - 1) return b
+        return { ...b, high: anchorBar.close, low: anchorBar.close }
+      })
+
       const marketState = buildMarketState({
         marketId: market.market_id,
-        ohlcSeries: bars,
+        ohlcSeries: barsForBands,
         currentPrice: { price: Number(intraday.current_price), capturedAt: intraday.captured_at },
         parameters: { atrPeriod: ATR_PERIOD, zoneCount: ZONE_COUNT },
       })
@@ -348,6 +389,9 @@ async function main() {
       const trades = tradesBySymbol.get(symbol) ?? []
       const rvId = randomUUID()
 
+      // Use profile-based trigger rate as fallback (more accurate than 0.5)
+      const profileTriggerRate = marketTriggerRateByMarketId.get(market.market_id) ?? FALLBACK_TRIGGER_PROBABILITY
+
       try {
         const result = buildRecommendation({
           recommendationVersionId: rvId,
@@ -361,7 +405,7 @@ async function main() {
           activeAnalysts: eligibleAnalysts,
           minimumRr: MINIMUM_RR,
           minTriggerSample: MIN_TRIGGER_SAMPLE,
-          fallbackTriggerProbability: FALLBACK_TRIGGER_PROBABILITY,
+          fallbackTriggerProbability: profileTriggerRate,
           staleAtrThreshold: STALE_ATR_THRESHOLD,
           forceRecalcAtrThreshold: FORCE_RECALC_ATR_THRESHOLD,
           parameterSnapshot,
@@ -379,7 +423,21 @@ async function main() {
 
         console.log(`  ${symbol}: zone=${marketStateWithZone.currentZone}, dir=${opp.direction}, action=${opp.analystAction}, entry=${rv.entryRangeLow?.toFixed(4)}-${rv.entryRangeHigh?.toFixed(4)}, R=${opp.expectedR?.toFixed(2)}, template=${diagnostics.templateSource}(${diagnostics.templateTrades} trades)`)
 
-        generatedItems.push({ market, marketState: marketStateWithZone, opp, rv, hidden, diagnostics, rvId })
+        // Flag recommendations where entry range is unreachably far from current price
+        // Threshold: entry midpoint more than 1.5 ATRs from current price
+        const ENTRY_DISTANCE_THRESHOLD_ATR = 1.5
+        let validityOverride: string | null = null
+        if (rv.entryRangeLow !== undefined && rv.entryRangeHigh !== undefined && marketStateWithZone.atr14) {
+          const entryMid = (rv.entryRangeLow + rv.entryRangeHigh) / 2
+          const currentPrice = Number(intraday.current_price)
+          const distanceInAtrs = Math.abs(entryMid - currentPrice) / marketStateWithZone.atr14
+          if (distanceInAtrs > ENTRY_DISTANCE_THRESHOLD_ATR) {
+            validityOverride = 'ENTRY_ALREADY_PASSED'
+            console.log(`    ⚠ Entry range ${distanceInAtrs.toFixed(2)} ATRs from current price -- flagging ENTRY_ALREADY_PASSED`)
+          }
+        }
+
+        generatedItems.push({ market, marketState: marketStateWithZone, opp, rv, hidden, diagnostics, rvId, validityOverride })
         recommendationsCreated++
       } catch (err) {
         console.log(`  ${symbol}: ${(err as Error).message}`)
@@ -424,7 +482,7 @@ async function main() {
       const allocationByRvId = new Map(allocations.map(a => [a.recommendationVersionId, a]))
 
       for (const item of generatedItems) {
-        const { market, marketState, opp, rv, hidden, diagnostics } = item
+        const { market, marketState, opp, rv, hidden, diagnostics, validityOverride } = item
         const allocation = allocationByRvId.get(item.rvId)
         if (!allocation) continue
 
@@ -453,7 +511,7 @@ async function main() {
           version_number: 1, generated_at: generatedAt, shown_at: generatedAt,
           price_at_generation: marketState.currentPrice,
           zone_at_generation: rv.zoneAtGeneration,
-          recommendation_validity_status: rv.recommendationValidityStatus,
+          recommendation_validity_status: validityOverride ?? rv.recommendationValidityStatus,
           parameter_snapshot: parameterSnapshot,
           parameter_snapshot_hash: parameterSnapshotHash,
           requires_refresh: rv.requiresRefresh, is_active: true,
@@ -507,7 +565,7 @@ async function main() {
             triggerProbability: opp.triggerProbability,
             expectedR: opp.expectedR,
             eventWarning: '',
-            recommendationValidityStatus: rv.recommendationValidityStatus,
+            recommendationValidityStatus: validityOverride ?? rv.recommendationValidityStatus,
             volatilityWarning: rv.volatilityWarning ?? '',
             shownAt: generatedAt,
           })

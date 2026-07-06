@@ -123,15 +123,20 @@ export function generateCoachingNote(input: CoachingInput): string {
 
   let text: string
 
-  if (input.analystAction === 'ENTER_NOW') {
-    // Price is in the preferred zone -- one description, focus on execution
+  // Entry out of range -- acknowledge distance, advise monitoring
+  if (input.recommendationValidityStatus === 'ENTRY_ALREADY_PASSED') {
+    text =
+      `${input.market} is currently ${currentZoneDesc}, away from the preferred ${directionText} area. ` +
+      `The historical setup favours ${directionText} interest from ${preferredZoneDesc} (${entryLow}–${entryHigh}). ` +
+      `Price has moved away from this area — monitor for a return before acting. ` +
+      `Levels will refresh at the next session update.`
+  } else if (input.analystAction === 'ENTER_NOW') {
     text =
       `${input.market} is ${currentZoneDesc}, which aligns with the preferred ${directionText} area. ` +
       `The suggested entry region is ${entryLow} to ${entryHigh}, ` +
       `with an estimated trigger probability of ${triggerPct}% ` +
       `and expected opportunity of ${input.expectedR.toFixed(2)}R.`
   } else {
-    // Price is away from preferred zone -- describe both concisely
     text =
       `${input.market} is currently ${currentZoneDesc}. ` +
       `The historical profile favours ${directionText} interest from ${preferredZoneDesc}, ` +
@@ -139,13 +144,17 @@ export function generateCoachingNote(input: CoachingInput): string {
       `Estimated trigger probability ${triggerPct}%, expected opportunity ${input.expectedR.toFixed(2)}R.`
   }
 
-  if (input.recommendationValidityStatus !== 'VALID' && input.volatilityWarning) {
+  if (input.recommendationValidityStatus !== 'VALID' &&
+      input.recommendationValidityStatus !== 'ENTRY_ALREADY_PASSED' &&
+      input.volatilityWarning) {
     text += ` Condition note: ${input.volatilityWarning}`
   }
   if (input.eventWarning) {
     text += ` Event risk: ${input.eventWarning}`
   }
-  text += ' Treat this as a coaching range rather than an instruction; execution judgement remains important.'
+  if (input.recommendationValidityStatus !== 'ENTRY_ALREADY_PASSED') {
+    text += ' Treat this as a coaching range rather than an instruction; execution judgement remains important.'
+  }
 
   const [ok] = lintAnalystText(text)
   return ok ? text : FALLBACK_COACHING_NOTE

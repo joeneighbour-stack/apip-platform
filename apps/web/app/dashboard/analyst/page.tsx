@@ -101,7 +101,12 @@ export default async function AnalystWorkspacePage() {
                     }`}>
                       {action === 'ENTER_NOW' ? 'Enter Now' : 'Wait for Preferred Zone'}
                     </span>
-                    {isStale && (
+                    {validity === 'ENTRY_ALREADY_PASSED' && (
+                      <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-50 text-red-700">
+                        Entry Out of Range
+                      </span>
+                    )}
+                    {isStale && validity !== 'ENTRY_ALREADY_PASSED' && (
                       <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-orange-50 text-orange-700">
                         Condition Update
                       </span>

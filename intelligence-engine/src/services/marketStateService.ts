@@ -99,15 +99,8 @@ function calculateAtrZones(
     return { lowerBand: null, zone1Top: null, zone2Top: null, zone3Top: null, upperBand: null, currentZone: null };
   }
 
-  let lowerBand = latestHigh - atr14;
-  let upperBand = latestLow + atr14;
-
-  // Band-collapse guard, preserved exactly from the notebook -- a real edge
-  // case (degenerate ATR relative to the day's range), not to be "cleaned up".
-  if (upperBand <= lowerBand) {
-    lowerBand = latestClose - atr14 / 2;
-    upperBand = latestClose + atr14 / 2;
-  }
+  let lowerBand = latestClose - atr14;
+  let upperBand = latestClose + atr14;
 
   const step = (upperBand - lowerBand) / zoneCount;
   const zone1Top = lowerBand + step;
