@@ -12,7 +12,6 @@ export default async function AnalystPerformancePage() {
   if (!user.analystId) redirect('/dashboard/analyst')
 
   const supabase = await createClient()
-
   const now = new Date()
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]
   const threeMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 2, 1).toISOString().split('T')[0]
@@ -28,21 +27,37 @@ export default async function AnalystPerformancePage() {
 
   const kpis = (kpiTrend ?? []).filter(k => k.period_start === monthStart)
 
-  // All trades for breakdown -- last 2 years
-  const { data: allTrades } = await supabase
-    .from('actual_trades')
-    .select(`
-      trade_id, direction, result_r, triggered,
-      published_at, historical_backfill,
-      market:market_id ( symbol, asset_class )
-    `)
-    .eq('analyst_id', user.analystId)
-    .gte('published_at', twoYearsAgo)
-    .order('published_at', { ascending: false })
+  // All trades for breakdown -- paginate to get all trades, not just first 1000
+  const allTrades: any[] = []
+  const PAGE_SIZE = 1000
+  let page = 0
+  let hasMore = true
+
+  while (hasMore) {
+    const { data: batch } = await supabase
+      .from('actual_trades')
+      .select(`
+        trade_id, direction, result_r, triggered,
+        published_at, historical_backfill,
+        market:market_id ( symbol, asset_class )
+      `)
+      .eq('analyst_id', user.analystId)
+      .gte('published_at', twoYearsAgo)
+      .order('published_at', { ascending: false })
+      .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
+
+    if (!batch?.length) {
+      hasMore = false
+    } else {
+      allTrades.push(...batch)
+      hasMore = batch.length === PAGE_SIZE
+      page++
+    }
+  }
 
   // Recent trades for the history table (last 90 days)
   const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()
-  const recentTrades = (allTrades ?? []).filter(t => t.published_at >= ninetyDaysAgo)
+  const recentTrades = allTrades.filter(t => t.published_at >= ninetyDaysAgo)
 
   // Compliance reviews
   const { data: reviews } = await supabase
@@ -77,16 +92,9 @@ export default async function AnalystPerformancePage() {
       </div>
 
       <KpiSummary kpis={kpis} kpiTrend={kpiTrend ?? []} />
-
-      <PerformanceBreakdown trades={(allTrades ?? []) as any} />
-
+      <PerformanceBreakdown trades={allTrades} />
+      <TradeHistoryTable trades={recentTrades} disputesByTradeId={disputesByTradeId} />
       <CompliancePanel reviews={reviews ?? []} />
-
-      <TradeHistoryTable
-        trades={recentTrades as any}
-        disputesByTradeId={disputesByTradeId}
-        analystId={user.analystId}
-      />
     </div>
   )
 }

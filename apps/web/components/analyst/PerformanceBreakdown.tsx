@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Cell } from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Cell } from 'recharts'
 
 interface Trade {
   trade_id: string
@@ -19,9 +19,10 @@ interface PerformanceBreakdownProps {
 
 const ASSET_CLASSES = ['ALL', 'FX', 'INDEX', 'COMMODITY', 'EQUITY', 'CRYPTO']
 const DIRECTIONS = ['ALL', 'BUY', 'SELL']
+const MIN_PLATFORM_TRADES_FOR_WIN_RATE = 10
 
 function monthKey(dateStr: string) {
-  return dateStr.slice(0, 7) // 'YYYY-MM'
+  return dateStr.slice(0, 7)
 }
 
 function monthLabel(key: string) {
@@ -34,16 +35,21 @@ interface Stats {
   totalR: number
   tradeCount: number
   wins: number
+  triggeredCount: number
+  platformTradeCount: number
   winRate: number | null
+  winRateSufficient: boolean
   months: { key: string; label: string; totalR: number; count: number }[]
 }
 
 function computeStats(trades: Trade[]): Stats {
   const totalR = trades.reduce((sum, t) => sum + (t.result_r ?? 0), 0)
   const tradeCount = trades.length
-  const platformTrades = trades.filter(t => !t.historical_backfill)
-  const wins = platformTrades.filter(t => t.triggered && (t.result_r ?? 0) > 0).length
-  const winRate = platformTrades.length > 0 ? wins / platformTrades.filter(t => t.triggered).length : null
+  const triggeredTrades = trades.filter(t => t.triggered)
+  const wins = triggeredTrades.filter(t => (t.result_r ?? 0) > 0).length
+  const winRateSufficient = triggeredTrades.length >= MIN_PLATFORM_TRADES_FOR_WIN_RATE
+  const winRate = triggeredTrades.length > 0 ? wins / triggeredTrades.length : null
+  const platformTradeCount = trades.filter(t => !t.historical_backfill).length
 
   const byMonth = new Map<string, { totalR: number; count: number }>()
   for (const t of trades) {
@@ -56,7 +62,29 @@ function computeStats(trades: Trade[]): Stats {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, val]) => ({ key, label: monthLabel(key), ...val }))
 
-  return { totalR, tradeCount, wins, winRate, months }
+  return {
+    totalR, tradeCount, wins,
+    triggeredCount: triggeredTrades.length,
+    platformTradeCount,
+    winRate, winRateSufficient, months
+  }
+}
+
+function WinRateDisplay({ stats }: { stats: Stats }) {
+  if (stats.winRate === null) {
+    return <span className="text-lg text-muted-foreground">—</span>
+  }
+  if (!stats.winRateSufficient) {
+    return (
+      <div>
+        <span className="text-2xl font-semibold tabular-nums">
+          {Math.round(stats.winRate * 100)}%
+        </span>
+        <span className="text-xs text-amber-600 ml-1.5">low sample</span>
+      </div>
+    )
+  }
+  return <span className="text-2xl font-semibold tabular-nums">{Math.round(stats.winRate * 100)}%</span>
 }
 
 export function PerformanceBreakdown({ trades }: PerformanceBreakdownProps) {
@@ -64,13 +92,11 @@ export function PerformanceBreakdown({ trades }: PerformanceBreakdownProps) {
   const [direction, setDirection] = useState('ALL')
   const [market, setMarket] = useState('ALL')
 
-  // Available markets from trade data
   const markets = useMemo(() => {
     const symbols = [...new Set(trades.map(t => t.market?.symbol).filter(Boolean))] as string[]
     return ['ALL', ...symbols.sort()]
   }, [trades])
 
-  // Filtered trades
   const filtered = useMemo(() => {
     return trades.filter(t => {
       if (assetClass !== 'ALL' && t.market?.asset_class !== assetClass) return false
@@ -82,7 +108,6 @@ export function PerformanceBreakdown({ trades }: PerformanceBreakdownProps) {
 
   const stats = useMemo(() => computeStats(filtered), [filtered])
 
-  // Breakdown by asset class (when not filtered)
   const byAssetClass = useMemo(() => {
     const groups = new Map<string, Trade[]>()
     for (const t of trades) {
@@ -95,7 +120,6 @@ export function PerformanceBreakdown({ trades }: PerformanceBreakdownProps) {
       .sort((a, b) => b.totalR - a.totalR)
   }, [trades])
 
-  // Breakdown by direction
   const byDirection = useMemo(() => {
     return ['BUY', 'SELL'].map(dir => {
       const ts = trades.filter(t => t.direction === dir)
@@ -131,7 +155,6 @@ export function PerformanceBreakdown({ trades }: PerformanceBreakdownProps) {
         </div>
       </div>
 
-      {/* Summary stats for current filter */}
       <div className="grid grid-cols-3 gap-3">
         <div className="rounded-lg border border-border bg-card p-4">
           <p className="text-xs text-muted-foreground">Total Return</p>
@@ -143,20 +166,25 @@ export function PerformanceBreakdown({ trades }: PerformanceBreakdownProps) {
         <div className="rounded-lg border border-border bg-card p-4">
           <p className="text-xs text-muted-foreground">Win Rate</p>
           <p className="text-2xl font-semibold tabular-nums mt-1">
-            {stats.winRate !== null ? `${Math.round(stats.winRate * 100)}%` : <span className="text-lg text-muted-foreground">—</span>}
+            <WinRateDisplay stats={stats} />
           </p>
-          <p className="text-xs text-muted-foreground mt-1">Platform trades only</p>
+          <p className="text-xs text-muted-foreground mt-1">
+            {stats.triggeredCount > 0
+              ? `${stats.wins}/${stats.triggeredCount} triggered trades`
+              : 'No triggered trades'}
+          </p>
         </div>
         <div className="rounded-lg border border-border bg-card p-4">
           <p className="text-xs text-muted-foreground">Avg R per trade</p>
-          <p className={`text-2xl font-semibold tabular-nums mt-1 ${stats.tradeCount > 0 && stats.totalR / stats.tradeCount >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+          <p className={`text-2xl font-semibold tabular-nums mt-1 ${
+            stats.tradeCount > 0 && stats.totalR / stats.tradeCount >= 0 ? 'text-green-700' : 'text-red-700'
+          }`}>
             {stats.tradeCount > 0 ? `${(stats.totalR / stats.tradeCount).toFixed(2)}R` : '—'}
           </p>
           <p className="text-xs text-muted-foreground mt-1">All history</p>
         </div>
       </div>
 
-      {/* Monthly R trend for filtered selection */}
       {stats.months.length > 0 && (
         <div className="rounded-lg border border-border bg-card p-4 space-y-2">
           <p className="text-xs font-medium text-muted-foreground">Monthly return trend</p>
@@ -179,7 +207,6 @@ export function PerformanceBreakdown({ trades }: PerformanceBreakdownProps) {
         </div>
       )}
 
-      {/* Asset class breakdown */}
       {!hasFilter && (
         <div className="space-y-2">
           <p className="text-xs font-medium text-muted-foreground">By asset class</p>
@@ -207,7 +234,13 @@ export function PerformanceBreakdown({ trades }: PerformanceBreakdownProps) {
                       {(row.totalR / row.tradeCount).toFixed(2)}R
                     </td>
                     <td className="px-4 py-2.5 tabular-nums">
-                      {row.winRate !== null ? `${Math.round(row.winRate * 100)}%` : <span className="text-muted-foreground">—</span>}
+                      {row.winRate === null ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : !row.winRateSufficient ? (
+                        <span className="text-amber-600">{Math.round(row.winRate * 100)}%*</span>
+                      ) : (
+                        `${Math.round(row.winRate * 100)}%`
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -218,7 +251,6 @@ export function PerformanceBreakdown({ trades }: PerformanceBreakdownProps) {
         </div>
       )}
 
-      {/* Direction breakdown */}
       {!hasFilter && (
         <div className="space-y-2">
           <p className="text-xs font-medium text-muted-foreground">By direction</p>
@@ -238,7 +270,11 @@ export function PerformanceBreakdown({ trades }: PerformanceBreakdownProps) {
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
                   Avg {(row.totalR / Math.max(row.tradeCount, 1)).toFixed(2)}R per trade
-                  {row.winRate !== null ? ` · ${Math.round(row.winRate * 100)}% win rate` : ''}
+                  {row.winRate !== null && row.winRateSufficient
+                    ? ` · ${Math.round(row.winRate * 100)}% win rate`
+                    : row.winRate !== null
+                    ? ` · ${Math.round(row.winRate * 100)}% win rate*`
+                    : ''}
                 </p>
               </div>
             ))}
@@ -247,7 +283,7 @@ export function PerformanceBreakdown({ trades }: PerformanceBreakdownProps) {
       )}
 
       <p className="text-xs text-muted-foreground">
-        Win rate shown for platform-tracked trades only. Historical backfill data included in return figures.
+        Win rate calculated from all triggered trades including historical backfill.
       </p>
     </div>
   )

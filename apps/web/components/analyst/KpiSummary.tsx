@@ -17,7 +17,6 @@ interface KpiSummaryProps {
   kpiTrend: Kpi[]
 }
 
-// KPI targets -- per product clarification
 const TARGETS: Record<string, { target: number; direction: 'above' | 'below'; format: (v: number) => string; label: string }> = {
   total_return_r:  { target: 0,    direction: 'above', format: v => `${v > 0 ? '+' : ''}${v.toFixed(2)}R`, label: 'Target: >0R' },
   win_rate:        { target: 0.45, direction: 'above', format: v => `${Math.round(v * 100)}%`,             label: 'Target: >45%' },
@@ -99,7 +98,6 @@ function KpiCard({ kpiName, label, value, formatted, description, chart }: KpiCa
   )
 }
 
-// KPI History Table
 function KpiHistoryTable({ kpiTrend }: { kpiTrend: Kpi[] }) {
   const months = [...new Set(kpiTrend.map(k => k.period_start))].sort().reverse()
   const kpiNames = ['total_return_r', 'win_rate', 'triggered_rate', 'max_drawdown']
@@ -197,90 +195,97 @@ export function KpiSummary({ kpis, kpiTrend }: KpiSummaryProps) {
             <span className="text-xs text-muted-foreground">{tradeCount} trades this month</span>}
         </div>
 
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {!hasData ? (
+          <div className="rounded-lg border border-border bg-card p-6 text-center">
+            <p className="text-sm text-muted-foreground">No trades recorded this month yet.</p>
+            <p className="text-xs text-muted-foreground/70 mt-1">KPIs will update once trades are imported for the current month.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
 
-          <KpiCard
-            kpiName="total_return_r"
-            label="Return (R)"
-            value={returnR}
-            formatted={returnR !== null ? `${returnR > 0 ? '+' : ''}${returnR.toFixed(2)}R` : null}
-            description="Sum of all R-multiples this month"
-            chart={
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={trendData(kpiTrend, 'total_return_r')} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
-                  <XAxis dataKey="month" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <YAxis hide />
-                  <Tooltip formatter={(v: any) => [`${Number(v).toFixed(2)}R`, 'Return']} contentStyle={{ fontSize: 11 }} />
-                  <ReferenceLine y={0} stroke="hsl(var(--border))" />
-                  <Bar dataKey="value" radius={[2, 2, 0, 0]}>
-                    {trendData(kpiTrend, 'total_return_r').map((entry, i) => (
-                      <Cell key={i} fill={entry.value !== null && entry.value >= 0 ? '#22c55e' : '#ef4444'} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            }
-          />
+            <KpiCard
+              kpiName="total_return_r"
+              label="Return (R)"
+              value={returnR}
+              formatted={returnR !== null ? `${returnR > 0 ? '+' : ''}${returnR.toFixed(2)}R` : null}
+              description="Sum of all R-multiples this month"
+              chart={
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={trendData(kpiTrend, 'total_return_r')} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
+                    <XAxis dataKey="month" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <YAxis hide />
+                    <Tooltip formatter={(v: any) => [`${Number(v).toFixed(2)}R`, 'Return']} contentStyle={{ fontSize: 11 }} />
+                    <ReferenceLine y={0} stroke="hsl(var(--border))" />
+                    <Bar dataKey="value" radius={[2, 2, 0, 0]}>
+                      {trendData(kpiTrend, 'total_return_r').map((entry, i) => (
+                        <Cell key={i} fill={entry.value !== null && entry.value >= 0 ? '#22c55e' : '#ef4444'} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              }
+            />
 
-          <KpiCard
-            kpiName="win_rate"
-            label="Win Rate"
-            value={winRate}
-            formatted={winRate !== null ? `${Math.round(winRate * 100)}%` : null}
-            description={`${byName.get('win_rate')?.kpi_value?.wins ?? '—'} wins from ${byName.get('win_rate')?.kpi_value?.triggered ?? '—'} triggered trades`}
-            chart={
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={trendData(kpiTrend, 'win_rate')} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-                  <XAxis dataKey="month" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <YAxis hide domain={[0, 1]} />
-                  <Tooltip formatter={(v: any) => [`${Math.round(Number(v) * 100)}%`, 'Win Rate']} contentStyle={{ fontSize: 11 }} />
-                  <ReferenceLine y={0.45} stroke="#22c55e" strokeDasharray="3 3" strokeOpacity={0.6} />
-                  <Line type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} />
-                </LineChart>
-              </ResponsiveContainer>
-            }
-          />
+            <KpiCard
+              kpiName="win_rate"
+              label="Win Rate"
+              value={winRate}
+              formatted={winRate !== null ? `${Math.round(winRate * 100)}%` : null}
+              description={`${byName.get('win_rate')?.kpi_value?.wins ?? '—'} wins from ${byName.get('win_rate')?.kpi_value?.triggered ?? '—'} triggered trades`}
+              chart={
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={trendData(kpiTrend, 'win_rate')} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                    <XAxis dataKey="month" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <YAxis hide domain={[0, 1]} />
+                    <Tooltip formatter={(v: any) => [`${Math.round(Number(v) * 100)}%`, 'Win Rate']} contentStyle={{ fontSize: 11 }} />
+                    <ReferenceLine y={0.45} stroke="#22c55e" strokeDasharray="3 3" strokeOpacity={0.6} />
+                    <Line type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} />
+                  </LineChart>
+                </ResponsiveContainer>
+              }
+            />
 
-          <KpiCard
-            kpiName="triggered_rate"
-            label="Triggered Rate"
-            value={triggered}
-            formatted={triggered !== null ? `${Math.round(triggered * 100)}%` : null}
-            description={`${byName.get('triggered_rate')?.kpi_value?.triggered ?? '—'} of ${byName.get('triggered_rate')?.kpi_value?.total_setups ?? '—'} setups triggered`}
-            chart={
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={trendData(kpiTrend, 'triggered_rate')} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-                  <XAxis dataKey="month" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <YAxis hide domain={[0, 1]} />
-                  <Tooltip formatter={(v: any) => [`${Math.round(Number(v) * 100)}%`, 'Triggered']} contentStyle={{ fontSize: 11 }} />
-                  <ReferenceLine y={0.35} stroke="#22c55e" strokeDasharray="3 3" strokeOpacity={0.6} />
-                  <Line type="monotone" dataKey="value" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 3 }} />
-                </LineChart>
-              </ResponsiveContainer>
-            }
-          />
+            <KpiCard
+              kpiName="triggered_rate"
+              label="Triggered Rate"
+              value={triggered}
+              formatted={triggered !== null ? `${Math.round(triggered * 100)}%` : null}
+              description={`${byName.get('triggered_rate')?.kpi_value?.triggered ?? '—'} of ${byName.get('triggered_rate')?.kpi_value?.total_setups ?? '—'} setups triggered`}
+              chart={
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={trendData(kpiTrend, 'triggered_rate')} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                    <XAxis dataKey="month" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <YAxis hide domain={[0, 1]} />
+                    <Tooltip formatter={(v: any) => [`${Math.round(Number(v) * 100)}%`, 'Triggered']} contentStyle={{ fontSize: 11 }} />
+                    <ReferenceLine y={0.35} stroke="#22c55e" strokeDasharray="3 3" strokeOpacity={0.6} />
+                    <Line type="monotone" dataKey="value" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 3 }} />
+                  </LineChart>
+                </ResponsiveContainer>
+              }
+            />
 
-          <KpiCard
-            kpiName="max_drawdown"
-            label="Max Drawdown"
-            value={drawdown}
-            formatted={drawdown !== null ? `${drawdown.toFixed(2)}R` : null}
-            description={`${byName.get('max_drawdown')?.kpi_value?.sequence_length ?? '—'} consecutive losses`}
-            chart={
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={trendData(kpiTrend, 'max_drawdown')} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
-                  <XAxis dataKey="month" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <YAxis hide />
-                  <Tooltip formatter={(v: any) => [`${Number(v).toFixed(2)}R`, 'Drawdown']} contentStyle={{ fontSize: 11 }} />
-                  <ReferenceLine y={-10} stroke="#ef4444" strokeDasharray="3 3" strokeOpacity={0.6} />
-                  <ReferenceLine y={0} stroke="hsl(var(--border))" />
-                  <Bar dataKey="value" radius={[2, 2, 0, 0]} fill="#ef4444" />
-                </BarChart>
-              </ResponsiveContainer>
-            }
-          />
+            <KpiCard
+              kpiName="max_drawdown"
+              label="Max Drawdown"
+              value={drawdown}
+              formatted={drawdown !== null ? `${drawdown.toFixed(2)}R` : null}
+              description={`${byName.get('max_drawdown')?.kpi_value?.sequence_length ?? '—'} consecutive losses`}
+              chart={
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={trendData(kpiTrend, 'max_drawdown')} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
+                    <XAxis dataKey="month" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <YAxis hide />
+                    <Tooltip formatter={(v: any) => [`${Number(v).toFixed(2)}R`, 'Drawdown']} contentStyle={{ fontSize: 11 }} />
+                    <ReferenceLine y={-10} stroke="#ef4444" strokeDasharray="3 3" strokeOpacity={0.6} />
+                    <ReferenceLine y={0} stroke="hsl(var(--border))" />
+                    <Bar dataKey="value" radius={[2, 2, 0, 0]} fill="#ef4444" />
+                  </BarChart>
+                </ResponsiveContainer>
+              }
+            />
 
-        </div>
+          </div>
+        )}
       </section>
 
       <KpiHistoryTable kpiTrend={kpiTrend} />

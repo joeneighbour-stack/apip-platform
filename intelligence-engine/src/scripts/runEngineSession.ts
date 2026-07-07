@@ -2,18 +2,6 @@
 // APIP Trading Intelligence & Performance Platform
 // Engine Session Orchestrator
 // ============================================================================
-// Runs a full session engine cycle using the pure-function services.
-// Reads market state from market_state_daily + market_state_intraday.
-// Reads historical trades from actual_trades for template/profile building.
-// Writes opportunities, recommendation_versions, coaching_recommendations,
-// coverage_allocation, and shadow_trades to the database.
-//
-// Run:
-//   npx tsx src/scripts/runEngineSession.ts --session=EUROPEAN --dry-run
-//   npx tsx src/scripts/runEngineSession.ts --session=EUROPEAN
-//
-// Required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
-// ============================================================================
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { fileURLToPath } from 'node:url'
@@ -56,8 +44,6 @@ const SESSION_MARKETS: Record<string, string[]> = {
   APAC: ['CHINA A50', 'ASX200', 'GBPAUD', 'NZDJPY', 'NZDUSD', 'NIKKEI', 'EURAUD', 'GBPNZD'],
 }
 
-// ── DB helpers ────────────────────────────────────────────────────────────────
-
 async function createStep(db: SupabaseClient, engineRunId: string, stepName: string): Promise<string> {
   const { data } = await db.from('engine_run_steps').insert({
     engine_run_id: engineRunId,
@@ -80,8 +66,6 @@ async function completeStep(
     error_detail: errorDetail ?? null,
   }).eq('engine_run_step_id', stepId)
 }
-
-// ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
   const SUPABASE_URL = process.env.SUPABASE_URL
@@ -120,7 +104,6 @@ async function main() {
   console.log(`Mode:     ${isDryRun ? 'DRY RUN (no writes)' : 'LIVE'}`)
   console.log(`Key:      ${idempotencyKey}\n`)
 
-  // ── Step 0: Create or resume engine_run ────────────────────────────────────
   let engineRunId: string
 
   const { data: existingRun } = await db
@@ -172,13 +155,13 @@ async function main() {
       .select('market_id, symbol, asset_class, display_precision').in('symbol', sessionMarkets)
     const marketBySymbol = new Map((marketRows ?? []).map(m => [m.symbol, m]))
 
-    const windowStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    const barWindowStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
     const allBars: any[] = []
     let barPage = 0, barHasMore = true
     while (barHasMore) {
       const { data: barBatch } = await db.from('market_state_daily')
         .select('market_id, date, open, high, low, close')
-        .gte('date', windowStart)
+        .gte('date', barWindowStart)
         .order('date', { ascending: true })
         .range(barPage * 1000, barPage * 1000 + 999)
       if (!barBatch?.length) { barHasMore = false } else {
@@ -218,7 +201,6 @@ async function main() {
     const { data: analystRows } = await db.from('analysts')
       .select('analyst_id, display_name, active, sessions').eq('active', true)
 
-    // Filter to analysts eligible for this session
     const sessionEligibleAnalysts = (analystRows ?? []).filter(a => {
       const sessions: string[] = a.sessions ?? []
       return sessions.includes(session as string)
@@ -234,7 +216,6 @@ async function main() {
       },
     }))
 
-    // Also check analyst_availability for today -- mark absent analysts ineligible
     const { data: availabilityRows } = await db.from('analyst_availability')
       .select('analyst_id, available, workload_cap')
       .eq('date', today)
@@ -246,8 +227,6 @@ async function main() {
 
     const eligibleAnalysts = activeAnalysts.filter(a => !unavailableIds.has(a.analyst))
 
-    // Load ALL actual_trades for template/profile building using pagination
-    // Supabase default limit is 1000 -- must paginate to get all 30k+ rows
     const twoYearsAgo = new Date(Date.now() - 2 * 365 * 24 * 60 * 60 * 1000).toISOString()
     const PAGE_SIZE = 1000
     const allTradeRows: any[] = []
@@ -276,7 +255,6 @@ async function main() {
       }
     }
 
-    // Group trades by market symbol (not market_id -- buildRecommendation matches on symbol)
     const { data: allMarketRows } = await db.from('markets').select('market_id, symbol')
     const symbolByMarketId = new Map((allMarketRows ?? []).map(m => [m.market_id, m.symbol]))
 
@@ -295,14 +273,11 @@ async function main() {
       } as RecommendationInputTrade)
     }
 
-    // Load analyst profiles for allocation scoring
     const { data: profileRows } = await db
       .from('analyst_profiles')
       .select('analyst_id, market_id, direction, zone, profile_data')
       .in('analyst_id', eligibleAnalysts.map(a => a.analyst))
 
-    // Load latest regime for each market -- stored at 22:00 UTC of the bar date
-    // so yesterday's regime row covers today's session
     const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
     const { data: regimeRows } = await db
       .from('market_regime_state')
@@ -311,7 +286,6 @@ async function main() {
       .is('session', null)
       .order('captured_at', { ascending: false })
 
-    // Keep only the latest regime per market
     const regimeByMarketId = new Map<string, any>()
     for (const r of (regimeRows ?? [])) {
       if (!regimeByMarketId.has(r.market_id)) {
@@ -320,50 +294,32 @@ async function main() {
     }
     console.log(`  Market regimes loaded: ${regimeByMarketId.size}`)
 
-    // Build profile lookup: analyst_id -> market_id -> direction -> avg_r
-    // Prefer regime-specific profiles when current regime matches
     const profileScores = new Map<string, number>()
     for (const p of (profileRows ?? [])) {
       const regime = regimeByMarketId.get(p.market_id)
       const profileRegime = p.profile_data?.regime
       const isRegimeMatch = regime && profileRegime && profileRegime === regime.trend_state
-
-      // Boost regime-matched profiles so they win in allocation
       const avgR = (p.profile_data?.avg_r ?? 0) + (isRegimeMatch ? 0.1 : 0)
       const key = `${p.analyst_id}::${p.market_id}::${p.direction}`
       const existing = profileScores.get(key) ?? -Infinity
       if (avgR > existing) profileScores.set(key, avgR)
     }
 
-    // Build regime-aware preferred direction per market
-    // For each market, find which direction has the best avg_r in current regime
-    // across all eligible analysts
     const preferredDirectionByMarketId = new Map<string, 'BUY' | 'SELL'>()
     for (const market of (marketRows ?? [])) {
       const regime = regimeByMarketId.get(market.market_id)
       if (!regime) continue
-
-      // Find best direction in current regime across all profiles for this market
       let bestBuyR = -Infinity, bestSellR = -Infinity
-
       for (const p of (profileRows ?? [])) {
         if (p.market_id !== market.market_id) continue
         const profileRegime = p.profile_data?.regime
-        // Only use regime-matched profiles for direction selection
         if (profileRegime !== regime.trend_state) continue
-
         const avgR = p.profile_data?.avg_r ?? 0
         if (p.direction === 'BUY' && avgR > bestBuyR) bestBuyR = avgR
         if (p.direction === 'SELL' && avgR > bestSellR) bestSellR = avgR
       }
-
-      // Only set preferred direction if we have enough signal
-      // (at least one direction has regime-matched profiles)
       if (bestBuyR > -Infinity || bestSellR > -Infinity) {
-        preferredDirectionByMarketId.set(
-          market.market_id,
-          bestBuyR >= bestSellR ? 'BUY' : 'SELL'
-        )
+        preferredDirectionByMarketId.set(market.market_id, bestBuyR >= bestSellR ? 'BUY' : 'SELL')
       }
     }
     console.log(`  Regime-preferred directions set: ${preferredDirectionByMarketId.size} markets`)
@@ -379,6 +335,7 @@ async function main() {
         marketTriggerRateByMarketId.set(p.market_id, (existing + p.profile_data.trigger_rate) / 2)
       }
     }
+
     if (unavailableIds.size > 0) console.log(`  Absent today: ${unavailableIds.size} analyst(s)`)
     console.log(`  Historical trades loaded: ${allTradeRows.length} (${page} pages)`)
     console.log(`  Analyst profiles loaded: ${profileRows?.length ?? 0}`)
@@ -410,13 +367,9 @@ async function main() {
       const bars = barsByMarketId.get(market.market_id) ?? []
       if (bars.length < ATR_PERIOD) { console.log(`  ${symbol}: insufficient bars`); continue }
 
-      // Band anchor: use the last completed weekday session close.
-      // CFD markets roll at 22:00 UK. The 'latest' bar from Finnhub may be
-      // a weekend/thin session bar. Find the last bar that falls on a weekday
-      // (Mon-Fri) -- that is the last proper completed daily close.
       const weekdayBars = bars.filter(b => {
         const day = new Date(b.date + 'T12:00:00Z').getUTCDay()
-        return day >= 1 && day <= 5 // Monday=1 to Friday=5
+        return day >= 1 && day <= 5
       })
       const anchorBar = weekdayBars.length >= 1
         ? weekdayBars[weekdayBars.length - 1]!
@@ -434,9 +387,6 @@ async function main() {
         parameters: { atrPeriod: ATR_PERIOD, zoneCount: ZONE_COUNT },
       })
 
-      // Override currentZone with the captured intraday zone -- more reliable
-      // than recomputing from daily bars since intraday snapshot uses same logic
-      // but with fresh price at actual capture time
       const currentZone = intraday.current_zone ?? marketState.currentZone
       const marketStateWithZone = { ...marketState, currentZone }
 
@@ -445,8 +395,6 @@ async function main() {
       const allTrades = tradesBySymbol.get(symbol) ?? []
       const rvId = randomUUID()
 
-      // Apply regime-preferred direction: filter trades to preferred direction
-      // when regime signal is strong enough (HIGH or MEDIUM confidence)
       const regime = regimeByMarketId.get(market.market_id)
       const preferredDir = preferredDirectionByMarketId.get(market.market_id)
       const regimeIsStrong = regime && ['HIGH', 'MEDIUM'].includes(regime.regime_confidence)
@@ -457,7 +405,8 @@ async function main() {
         console.log(`    Regime(${regime?.trend_state}) → preferred direction: ${preferredDir} (${trades.length}/${allTrades.length} trades)`)
       }
 
-      // Use profile-based trigger rate as fallback (more accurate than 0.5)
+      // Profile-based trigger rate -- used as both fallback and cap
+      // Backfill has triggered=true for all trades → 100% without cap
       const profileTriggerRate = marketTriggerRateByMarketId.get(market.market_id) ?? FALLBACK_TRIGGER_PROBABILITY
 
       try {
@@ -483,16 +432,19 @@ async function main() {
 
         const { opportunity: opp, recommendationVersion: rv, hiddenExecutionLevels: hidden, diagnostics } = result
 
-        // Debug: check what we got back
         if (!rv || rv.entryRangeLow === undefined) {
           console.log(`  ${symbol}: rv issue — entryRangeLow=${rv?.entryRangeLow}`)
           continue
         }
 
-        console.log(`  ${symbol}: zone=${marketStateWithZone.currentZone}, dir=${opp.direction}, action=${opp.analystAction}, entry=${rv.entryRangeLow?.toFixed(4)}-${rv.entryRangeHigh?.toFixed(4)}, R=${opp.expectedR?.toFixed(2)}, template=${diagnostics.templateSource}(${diagnostics.templateTrades} trades)`)
+        // Cap trigger probability at profile rate
+        // Backfill data has triggered=true for all trades → service returns 100%
+        // Profile rate (20-40%) is a more accurate approximation until shadow
+        // outcomes accumulate enough data for a real probability
+        const cappedTriggerProbability = Math.min(opp.triggerProbability, profileTriggerRate)
 
-        // Flag recommendations where entry range is unreachably far from current price
-        // Threshold: entry midpoint more than 1.5 ATRs from current price
+        console.log(`  ${symbol}: zone=${marketStateWithZone.currentZone}, dir=${opp.direction}, action=${opp.analystAction}, entry=${rv.entryRangeLow?.toFixed(4)}-${rv.entryRangeHigh?.toFixed(4)}, R=${opp.expectedR?.toFixed(2)}, trigger=${Math.round(cappedTriggerProbability * 100)}%, template=${diagnostics.templateSource}(${diagnostics.templateTrades} trades)`)
+
         const ENTRY_DISTANCE_THRESHOLD_ATR = 1.5
         let validityOverride: string | null = null
         if (rv.entryRangeLow !== undefined && rv.entryRangeHigh !== undefined && marketStateWithZone.atr14) {
@@ -505,7 +457,10 @@ async function main() {
           }
         }
 
-        generatedItems.push({ market, marketState: marketStateWithZone, opp, rv, hidden, diagnostics, rvId, validityOverride })
+        generatedItems.push({
+          market, marketState: marketStateWithZone, opp, rv, hidden, diagnostics,
+          rvId, validityOverride, cappedTriggerProbability,
+        })
         recommendationsCreated++
       } catch (err) {
         console.log(`  ${symbol}: ${(err as Error).message}`)
@@ -516,14 +471,12 @@ async function main() {
     console.log(`  Recommendations generated: ${recommendationsCreated}`)
     if (!isDryRun && stepId3) await completeStep(db, stepId3, 'SUCCESS', { recommendations: recommendationsCreated })
 
-    // ── Step 4: Allocate + write to DB ────────────────────────────────────────
+    // ── Step 4: Allocate + write to DB ──────────────────────────────────────
     if (!isDryRun) {
       console.log('\nStep 4: Allocating and writing to database...')
       const stepId4 = await createStep(db, engineRunId, 'ALLOCATE_AND_WRITE')
 
-      // Build allocation input -- use analyst_profiles for preferred analyst scoring
       const allocationInput: OpportunityForAllocation[] = generatedItems.map(item => {
-        // Find the eligible analyst with the best profile score for this market/direction
         let bestAnalystId: string | null = null
         let bestScore = -Infinity
         for (const a of eligibleAnalysts) {
@@ -531,12 +484,11 @@ async function main() {
           const score = profileScores.get(key) ?? -Infinity
           if (score > bestScore) { bestScore = score; bestAnalystId = a.analyst }
         }
-
         return {
           opportunityId: randomUUID(),
           recommendationVersionId: item.rvId,
           expectedR: item.opp.expectedR,
-          assignedAnalystId: bestAnalystId, // profile-based preference
+          assignedAnalystId: bestAnalystId,
           eligibleAnalysts: eligibleAnalysts.map(a => a.analyst),
         }
       })
@@ -550,20 +502,21 @@ async function main() {
       const allocationByRvId = new Map(allocations.map(a => [a.recommendationVersionId, a]))
 
       for (const item of generatedItems) {
-        const { market, marketState, opp, rv, hidden, diagnostics, validityOverride } = item
+        const { market, marketState, opp, rv, hidden, diagnostics, validityOverride, cappedTriggerProbability } = item
         const allocation = allocationByRvId.get(item.rvId)
         if (!allocation) continue
 
-        // Write opportunity
+        const intraday = intradayByMarket.get(market.market_id)
+
         const { data: oppRow, error: oppErr } = await db.from('opportunities').insert({
           date: today, market_id: market.market_id, session,
           publication_window_start_uk: `${String(windowStartHour).padStart(2,'0')}:00`,
           publication_window_end_uk: `${String(windowEndHour).padStart(2,'0')}:00`,
-          current_zone: marketState.currentZone ?? intraday.current_zone,
+          current_zone: marketState.currentZone ?? intraday?.current_zone,
           preferred_entry_zone: rv.zoneAtGeneration,
           direction: item.opp.direction,
           expected_r: opp.expectedR,
-          trigger_probability: opp.triggerProbability,
+          trigger_probability: cappedTriggerProbability,
           opportunity_lifecycle_status: 'ASSIGNED',
           analyst_action: opp.analystAction,
           assigned_analyst_id: allocation.assignedAnalystId,
@@ -572,7 +525,6 @@ async function main() {
         if (oppErr || !oppRow) { console.error(`  ${market.symbol} opp error: ${oppErr?.message}`); continue }
         opportunitiesCreated++
 
-        // Write recommendation_version
         const { data: rvRow, error: rvErr } = await db.from('recommendation_versions').insert({
           recommendation_version_id: item.rvId,
           opportunity_id: oppRow.opportunity_id,
@@ -591,12 +543,10 @@ async function main() {
 
         if (rvErr || !rvRow) { console.error(`  ${market.symbol} rv error: ${rvErr?.message}`); continue }
 
-        // Update opportunity with active rv
         await db.from('opportunities')
           .update({ active_recommendation_version_id: rvRow.recommendation_version_id })
           .eq('opportunity_id', oppRow.opportunity_id)
 
-        // Write coverage_allocation
         const { data: teamRow } = await db.from('teams').select('team_id').eq('active', true).single()
         if (teamRow) {
           await db.from('coverage_allocation').insert({
@@ -613,7 +563,6 @@ async function main() {
           })
         }
 
-        // Generate coaching recommendation
         try {
           const coachingId = randomUUID()
           const coaching = buildCoachingRecommendation({
@@ -630,7 +579,7 @@ async function main() {
             entryRangeHigh: rv.entryRangeHigh ?? 0,
             riskRange: rv.riskRange,
             targetRange: rv.targetRange,
-            triggerProbability: opp.triggerProbability,
+            triggerProbability: cappedTriggerProbability,
             expectedR: opp.expectedR,
             eventWarning: '',
             recommendationValidityStatus: validityOverride ?? rv.recommendationValidityStatus,
@@ -657,7 +606,6 @@ async function main() {
           console.log(`  ${market.symbol} coaching: ${(err as Error).message}`)
         }
 
-        // Create shadow trade
         try {
           const shadowId = randomUUID()
           const shadowOutcomeId = randomUUID()
