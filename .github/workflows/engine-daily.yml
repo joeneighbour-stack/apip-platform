@@ -281,7 +281,7 @@ jobs:
           cache: 'npm'
           cache-dependency-path: intelligence-engine/package-lock.json
       - run: npm ci
-      - run: npx tsx src/scripts/calculateKpis.ts
+      - run: npx tsx src/scripts/calculateKpis.ts --months=36
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
