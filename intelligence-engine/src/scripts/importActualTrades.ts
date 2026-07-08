@@ -60,6 +60,7 @@ const SYMBOL_OVERRIDES: Record<string, string> = {
   'SPX500':               'SP500',
   'US500':                'SP500',
   'US2000':               'US2000',
+  'XCUUSD':               'Copper',
   'COPPER':               'Copper',
   'PLATINUM':             'Platinum',
   'PALLADIUM':            'Palladium',
@@ -213,15 +214,18 @@ async function main() {
   console.log(`Fetched ${rawTrades.length} raw records in ${Date.now() - fetchStart}ms`)
 
   // ── Filter to Analyst only ───────────────────────────────────────────────
-  const analystTrades = rawTrades.filter(t =>
-    t.ReportType === 'Analyst' &&
-    !['STEVE TEST', 'TEST'].includes((t.Analyst ?? '').toUpperCase().trim())
-  )
+  const analystTrades = rawTrades.filter(t => {
+    if (t.ReportType !== 'Analyst') return false
+    const code = (t.Analyst ?? '').toUpperCase().trim()
+    if (['STEVE TEST', 'TEST'].includes(code)) return false
+    if (/^\d+$/.test(code)) return false // 60, 80 are confidence values in wrong field
+    return true
+  })
   const patternCount = rawTrades.length - analystTrades.length
   console.log(`  Analyst trades: ${analystTrades.length}, Pattern (skipped): ${patternCount}`)
 
   // ── Normalise and upsert ─────────────────────────────────────────────────
-  let successRows = 0, duplicateRows = 0, errorRows = 0
+  let successRows = 0, duplicateRows = 0, errorRows = 0, outOfScopeRows = 0
   let unknownAnalysts = new Set<string>()
   let unknownSymbols = new Set<string>()
 
@@ -241,7 +245,7 @@ async function main() {
     const marketId = marketIdBySymbol.get(normSymbol) ?? marketIdBySymbol.get(normSymbol.toLowerCase())
     if (!marketId) {
       unknownSymbols.add(rawSymbol)
-      errorRows++
+      outOfScopeRows++ // not an error -- equity outside APIP universe
       continue
     }
 
@@ -250,6 +254,12 @@ async function main() {
     const resultR = capResultR(t.RR ?? null, triggered)
     const direction = (t.Direction ?? '').toUpperCase() === 'SELL' ? 'SELL' : 'BUY'
     const session = deriveSession(t.PublicationDate, t.AssetClass)
+
+    // Skip trades with no entry price -- DB has not-null constraint
+    if (t.Entry == null) {
+      errorRows++
+      continue
+    }
 
     const tradeRow = {
       source_system: 'ACUITY_PERFORMANCE_API',
@@ -377,6 +387,7 @@ async function main() {
   console.log(`Analyst trades:   ${analystTrades.length}`)
   console.log(`Inserted:         ${successRows}`)
   console.log(`Updated:          ${duplicateRows}`)
+  console.log(`Out of scope:     ${outOfScopeRows} (equities not in APIP universe)`)
   console.log(`Errors:           ${errorRows}`)
 
   if (unknownAnalysts.size > 0) {
@@ -384,7 +395,7 @@ async function main() {
   }
   if (unknownSymbols.size > 0) {
     const shown = [...unknownSymbols].slice(0, 10)
-    console.log(`Unknown symbols:  ${shown.join(', ')}${unknownSymbols.size > 10 ? ` ... +${unknownSymbols.size - 10} more` : ''}`)
+    console.log(`Out of scope symbols: ${shown.join(', ')}${unknownSymbols.size > 10 ? ` ... +${unknownSymbols.size - 10} more` : ''}`)
   }
 
   if (isDryRun) console.log('\nDRY RUN -- nothing written.')
