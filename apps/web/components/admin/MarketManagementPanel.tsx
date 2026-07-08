@@ -17,9 +17,10 @@ export function MarketManagementPanel({ markets }: { markets: Market[] }) {
   const [changes, setChanges] = useState<Record<string, Partial<Market>>>({})
   const [saving, setSaving] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
-  const [filter, setFilter] = useState<'all' | 'active' | 'inactive'>('active')
+  const [filter, setFilter] = useState<'engine' | 'active' | 'inactive' | 'all'>('engine')
 
   const filtered = markets.filter(m => {
+    if (filter === 'engine' && !m.price_data_provider) return false
     if (filter === 'active' && !m.active) return false
     if (filter === 'inactive' && m.active) return false
     if (search && !m.symbol.toLowerCase().includes(search.toLowerCase())) return false
@@ -52,6 +53,8 @@ export function MarketManagementPanel({ markets }: { markets: Market[] }) {
     return (changes[marketId]?.[field] as T) ?? fallback
   }
 
+  const engineCount = markets.filter(m => m.price_data_provider).length
+
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between">
@@ -66,9 +69,10 @@ export function MarketManagementPanel({ markets }: { markets: Market[] }) {
           />
           <select value={filter} onChange={e => setFilter(e.target.value as any)}
             className="text-xs px-2 py-1.5 rounded-md border border-border bg-background">
+            <option value="engine">Engine markets ({engineCount})</option>
             <option value="active">Active only</option>
             <option value="inactive">Inactive only</option>
-            <option value="all">All</option>
+            <option value="all">All markets</option>
           </select>
           <span className="text-xs text-muted-foreground">{filtered.length} shown</span>
         </div>
@@ -102,7 +106,7 @@ export function MarketManagementPanel({ markets }: { markets: Market[] }) {
                     <input
                       value={getVal(market.market_id, 'price_data_provider', market.price_data_provider ?? '')}
                       onChange={e => updateChange(market.market_id, 'price_data_provider', e.target.value)}
-                      className="text-xs px-2 py-0.5 rounded border border-border bg-background w-32"
+                      className="text-xs px-2 py-0.5 rounded border border-border bg-background w-36"
                     />
                   ) : (
                     <span className="text-xs text-muted-foreground">{market.price_data_provider ?? '—'}</span>
@@ -113,7 +117,7 @@ export function MarketManagementPanel({ markets }: { markets: Market[] }) {
                     <input
                       value={getVal(market.market_id, 'price_data_symbol', market.price_data_symbol ?? '')}
                       onChange={e => updateChange(market.market_id, 'price_data_symbol', e.target.value)}
-                      className="text-xs px-2 py-0.5 rounded border border-border bg-background w-36"
+                      className="text-xs px-2 py-0.5 rounded border border-border bg-background w-40"
                     />
                   ) : (
                     <span className="text-xs font-mono text-muted-foreground">{market.price_data_symbol ?? '—'}</span>
