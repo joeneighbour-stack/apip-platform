@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 
 interface Dispute {
   dispute_id: string
@@ -46,6 +47,7 @@ interface OverrideFields {
 }
 
 export function DisputeResolutionPanel({ disputes }: { disputes: Dispute[] }) {
+  const router = useRouter()
   const [resolving, setResolving] = useState<string | null>(null)
   const [overrides, setOverrides] = useState<Record<string, OverrideFields>>({})
   const [saving, setSaving] = useState<string | null>(null)
@@ -89,7 +91,7 @@ export function DisputeResolutionPanel({ disputes }: { disputes: Dispute[] }) {
       setMessage(res.ok
         ? `Resolved: ${dispute.trade.market?.symbol} override applied`
         : data.error ?? 'Failed')
-      if (res.ok) setResolving(null)
+      if (res.ok) { setResolving(null); router.refresh() }
     } finally {
       setSaving(null)
     }
@@ -107,14 +109,15 @@ export function DisputeResolutionPanel({ disputes }: { disputes: Dispute[] }) {
       })
       const data = await res.json()
       setMessage(res.ok ? 'Dispute rejected' : data.error ?? 'Failed')
-      if (res.ok) setResolving(null)
+      if (res.ok) { setResolving(null); router.refresh() }
     } finally {
       setSaving(null)
     }
   }
 
   const open = disputes.filter(d => ['OPEN', 'UNDER_REVIEW'].includes(d.status))
-  const resolved = disputes.filter(d => ['RESOLVED', 'REJECTED'].includes(d.status))
+  const resolved = disputes.filter(d => ['RESOLVED', 'REJECTED'].includes(d.status)).slice(0, 10)
+  const resolvedTotal = disputes.filter(d => ['RESOLVED', 'REJECTED'].includes(d.status)).length
 
   return (
     <section className="space-y-3">
@@ -272,7 +275,8 @@ export function DisputeResolutionPanel({ disputes }: { disputes: Dispute[] }) {
       {/* Resolved disputes */}
       {resolved.length > 0 && (
         <div className="space-y-2">
-          <p className="text-xs font-medium text-muted-foreground">Resolved</p>
+          <p className="text-xs font-medium text-muted-foreground">
+            Resolved {resolvedTotal > 10 ? `(showing 10 of ${resolvedTotal})` : ''}</p>
           <div className="rounded-lg border border-border overflow-hidden">
             <table className="w-full text-sm">
               <thead className="bg-muted/50">
