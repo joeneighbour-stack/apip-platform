@@ -32,6 +32,7 @@ on:
     - cron: '15 5 * * 1'     # 05:15 UTC Monday -- weekly regime derivation
     - cron: '30 5 * * 1'     # 05:30 UTC Monday -- weekly KPI calculation
     - cron: '0 22 * * 1-5'   # 22:00 UTC Mon-Fri -- import actual trades (end of day)
+    - cron: '30 22 * * 1-5'  # 22:30 UTC Mon-Fri -- post-trade reviews (after import)
   workflow_dispatch:
     inputs:
       job:
@@ -354,5 +355,27 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           N8N_WEBHOOK_USERNAME: ${{ secrets.N8N_WEBHOOK_USERNAME }}
           N8N_WEBHOOK_PASSWORD: ${{ secrets.N8N_WEBHOOK_PASSWORD }}
+  
+  generate-post-trade-reviews:
+    name: Generate Post-Trade Reviews
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'generate-post-trade-reviews' ||
+      github.event_name == 'schedule' && startsWith(github.event.schedule, '30 22')
+    defaults:
+      run:
+        working-directory: intelligence-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: intelligence-engine/package-lock.json
+      - run: npm ci
+      - run: npx tsx src/scripts/generatePostTradeReviews.ts
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
    
