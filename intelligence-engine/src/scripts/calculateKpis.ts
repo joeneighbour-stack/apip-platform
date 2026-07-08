@@ -8,22 +8,35 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 function maxDrawdown(trades: { result_r: number }[]): { value: number; sequence_length: number } {
+  if (trades.length === 0) return { value: 0, sequence_length: 0 }
+
+  // Build equity curve
+  let equity = 0
+  let peak = 0
   let maxDD = 0
-  let runningDD = 0
   let maxSeq = 0
   let currentSeq = 0
+  let inDrawdown = false
 
   for (const t of trades) {
-    if (t.result_r < 0) {
-      runningDD += t.result_r
-      currentSeq++
-      if (runningDD < maxDD) maxDD = runningDD
-      if (currentSeq > maxSeq) maxSeq = currentSeq
-    } else {
-      runningDD = 0
+    equity += t.result_r
+
+    if (equity > peak) {
+      peak = equity
+      inDrawdown = false
       currentSeq = 0
+    } else {
+      const dd = equity - peak
+      if (dd < maxDD) maxDD = dd
+      if (t.result_r < 0) {
+        currentSeq++
+        if (currentSeq > maxSeq) maxSeq = currentSeq
+      } else {
+        currentSeq = 0
+      }
     }
   }
+
   return { value: maxDD, sequence_length: maxSeq }
 }
 
@@ -69,6 +82,24 @@ async function main() {
 
   // Load all trades for the window
   const windowStart = months[months.length - 1]!.start
+
+  // Load post-trade reviews for alignment rate
+  const { data: reviewRows } = await db
+    .from('post_trade_reviews')
+    .select(`
+      trade_id, alignment_score, direction_alignment, entry_alignment, created_at,
+      trade:trade_id ( analyst_id, published_at )
+    `)
+
+  // Group reviews by analyst_id
+  const reviewsByAnalystId = new Map<string, any[]>()
+  for (const r of (reviewRows ?? [])) {
+    const analystId = (r.trade as any)?.analyst_id
+    if (!analystId) continue
+    if (!reviewsByAnalystId.has(analystId)) reviewsByAnalystId.set(analystId, [])
+    reviewsByAnalystId.get(analystId)!.push(r)
+  }
+  console.log(`  Post-trade reviews loaded: ${reviewRows?.length ?? 0}`)
   const PAGE_SIZE = 1000
   const allTrades: any[] = []
   let page = 0, hasMore = true
@@ -102,8 +133,9 @@ async function main() {
       )
       if (monthTrades.length === 0) continue
 
-      // Return (R) -- sum of triggered result_r only
-      const triggered = monthTrades.filter(t => t.triggered)
+      // Return (R) -- sum of closed triggered trades only (exclude open/pending)
+      const allTriggered = monthTrades.filter(t => t.triggered)
+      const triggered = allTriggered.filter(t => t.result_r !== null) // closed only
       const returnR = triggered.reduce((s, t) => s + Number(t.result_r), 0)
 
       // Win rate -- wins / triggered
@@ -172,6 +204,34 @@ async function main() {
           }
         })
       }
+
+      // Alignment rate -- from post_trade_reviews for this analyst/month
+      const analystReviews = reviewsByAnalystId.get(analyst.analyst_id) ?? []
+      const monthReviews = analystReviews.filter(r => {
+        const pubDate = (r.trade as any)?.published_at?.slice(0, 10)
+        return pubDate >= start && pubDate <= end
+      })
+
+      if (monthReviews.length > 0) {
+        const fullyAligned = monthReviews.filter(r => r.alignment_score === 2).length
+        const partiallyAligned = monthReviews.filter(r => r.alignment_score === 1).length
+        const notAligned = monthReviews.filter(r => r.alignment_score === 0).length
+        // Weighted: full=1.0, partial=0.5, none=0
+        const alignmentRate = (fullyAligned + partiallyAligned * 0.5) / monthReviews.length
+        kpiRows.push({
+          ...baseKpi,
+          kpi_name: 'alignment_rate',
+          kpi_value: {
+            value: alignmentRate,
+            unit: 'rate',
+            fully_aligned: fullyAligned,
+            partially_aligned: partiallyAligned,
+            not_aligned: notAligned,
+            reviewed: monthReviews.length,
+          },
+          requires_recommendation_version: true,
+        })
+      }
     }
 
     const latestMonth = monthlyRows[0]
@@ -200,7 +260,7 @@ async function main() {
     .from('executive_kpis')
     .delete()
     .in('analyst_id', analystIds)
-    .in('kpi_name', ['total_return_r', 'return_r', 'win_rate', 'triggered_rate', 'trigger_rate', 'max_drawdown'])
+    .in('kpi_name', ['total_return_r', 'return_r', 'win_rate', 'triggered_rate', 'trigger_rate', 'max_drawdown', 'alignment_rate'])
 
   if (delError) { console.error('Delete error:', delError.message); process.exit(1) }
 

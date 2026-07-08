@@ -31,6 +31,8 @@ const TARGETS: Record<string, number> = {
 const MONTH_LABELS: Record<string, string> = {
   '2026-05-01': 'May', '2026-06-01': 'Jun', '2026-07-01': 'Jul',
   '2026-08-01': 'Aug', '2026-09-01': 'Sep', '2026-10-01': 'Oct',
+  '2026-11-01': 'Nov', '2026-12-01': 'Dec', '2026-01-01': 'Jan',
+  '2026-02-01': 'Feb', '2026-03-01': 'Mar', '2026-04-01': 'Apr',
 }
 
 function getValue(kpi: KpiRow | undefined): number | null {
@@ -45,11 +47,18 @@ function isOnTarget(name: string, value: number): boolean {
   return name === 'max_drawdown' ? value >= t : value >= t
 }
 
-function formatKpi(name: string, value: number | null): string {
+function formatKpi(name: string, value: number | null, kpiValue?: any): string {
   if (value === null) return '—'
   if (name === 'total_return_r') return `${value > 0 ? '+' : ''}${value.toFixed(2)}R`
-  if (name === 'win_rate' || name === 'triggered_rate' || name === 'alignment_rate')
+  if (name === 'win_rate' || name === 'triggered_rate')
     return `${Math.round(value * 100)}%`
+  if (name === 'alignment_rate') {
+    // Show full/partial/none breakdown if available
+    if (kpiValue?.fully_aligned !== undefined) {
+      return `${Math.round(value * 100)}%`
+    }
+    return `${Math.round(value * 100)}%`
+  }
   if (name === 'max_drawdown') return `${value.toFixed(2)}R`
   return String(value)
 }
@@ -63,7 +72,6 @@ const KPI_COLS = [
 ]
 
 export function TeamPerformanceGrid({ analysts, kpiData, currentMonthStart }: TeamPerformanceGridProps) {
-  // Index kpiData: analyst_id -> kpi_name -> period_start -> value
   const index = new Map<string, Map<string, KpiRow[]>>()
   for (const row of kpiData) {
     if (!index.has(row.analyst_id)) index.set(row.analyst_id, new Map())
@@ -88,7 +96,6 @@ export function TeamPerformanceGrid({ analysts, kpiData, currentMonthStart }: Te
     }
   }
 
-  // Return trend data for a given analyst + kpi
   function trendData(analystId: string, kpiName: string) {
     const rows = index.get(analystId)?.get(kpiName) ?? []
     return rows
@@ -105,8 +112,13 @@ export function TeamPerformanceGrid({ analysts, kpiData, currentMonthStart }: Te
         <div className="grid grid-cols-5 gap-3">
           {KPI_COLS.map(col => {
             const vals = teamAgg[col.name] ?? []
-            const avg = vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : null
-            const onTarget = avg !== null ? isOnTarget(col.name, avg) : null
+            // Return = sum; all others = average
+            const agg = vals.length > 0
+              ? col.name === 'total_return_r'
+                ? vals.reduce((a, b) => a + b, 0)
+                : vals.reduce((a, b) => a + b, 0) / vals.length
+              : null
+            const onTarget = agg !== null ? isOnTarget(col.name, agg) : null
             return (
               <div key={col.name} className={`rounded-lg border p-4 ${
                 onTarget === true ? 'border-green-200 bg-green-50/30' :
@@ -115,9 +127,11 @@ export function TeamPerformanceGrid({ analysts, kpiData, currentMonthStart }: Te
               }`}>
                 <p className="text-xs text-muted-foreground">{col.label}</p>
                 <p className="text-xl font-semibold mt-1 tabular-nums">
-                  {formatKpi(col.name, avg)}
+                  {formatKpi(col.name, agg)}
                 </p>
-                <p className="text-xs text-muted-foreground mt-0.5">Team avg</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {col.name === 'total_return_r' ? 'Team total' : 'Team avg'}
+                </p>
               </div>
             )
           })}
@@ -148,7 +162,8 @@ export function TeamPerformanceGrid({ analysts, kpiData, currentMonthStart }: Te
                   const rows = byName?.get(col.name) ?? []
                   const current = rows.find(r => r.period_start === currentMonthStart)
                   const val = getValue(current)
-                  return { col, val, hit: val !== null ? isOnTarget(col.name, val) : null }
+                  const kpiValue = current?.kpi_value
+                  return { col, val, kpiValue, hit: val !== null ? isOnTarget(col.name, val) : null }
                 })
                 const allHit = currentKpis.every(k => k.hit === true)
                 const anyMissed = currentKpis.some(k => k.hit === false)
@@ -163,15 +178,26 @@ export function TeamPerformanceGrid({ analysts, kpiData, currentMonthStart }: Te
                         {analyst.display_name}
                       </a>
                     </td>
-                    {currentKpis.map(({ col, val, hit }) => (
+                    {currentKpis.map(({ col, val, kpiValue, hit }) => (
                       <td key={col.name} className="px-4 py-3 tabular-nums">
-                        <span className={
-                          hit === true ? 'text-green-700 font-medium' :
-                          hit === false ? 'text-red-700 font-medium' :
-                          'text-muted-foreground'
-                        }>
-                          {formatKpi(col.name, val)}
-                        </span>
+                        {col.name === 'alignment_rate' && val !== null && kpiValue?.fully_aligned !== undefined ? (
+                          <div>
+                            <span className={hit === true ? 'text-green-700 font-medium' : hit === false ? 'text-red-700 font-medium' : ''}>
+                              {formatKpi(col.name, val)}
+                            </span>
+                            <span className="text-xs text-muted-foreground ml-1">
+                              ({kpiValue.fully_aligned}F/{kpiValue.partially_aligned ?? 0}P/{kpiValue.not_aligned ?? 0}N)
+                            </span>
+                          </div>
+                        ) : (
+                          <span className={
+                            hit === true ? 'text-green-700 font-medium' :
+                            hit === false ? 'text-red-700 font-medium' :
+                            'text-muted-foreground'
+                          }>
+                            {formatKpi(col.name, val, kpiValue)}
+                          </span>
+                        )}
                       </td>
                     ))}
                     <td className="px-4 py-3">
