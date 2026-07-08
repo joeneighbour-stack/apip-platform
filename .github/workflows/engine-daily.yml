@@ -31,6 +31,7 @@ on:
     - cron: '0 5 * * 1'      # 05:00 UTC Monday -- weekly profile regeneration
     - cron: '15 5 * * 1'     # 05:15 UTC Monday -- weekly regime derivation
     - cron: '30 5 * * 1'     # 05:30 UTC Monday -- weekly KPI calculation
+    - cron: '0 22 * * 1-5'   # 22:00 UTC Mon-Fri -- import actual trades (end of day)
   workflow_dispatch:
     inputs:
       job:
@@ -50,6 +51,7 @@ on:
           - calculate-kpis
           - shadow-lifecycle
           - condition-awareness
+          - import-actual-trades
 
 jobs:
 
@@ -328,3 +330,29 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+
+  import-actual-trades:
+    name: Import Actual Trades
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'import-actual-trades' ||
+      github.event_name == 'schedule' && startsWith(github.event.schedule, '0 22')
+    defaults:
+      run:
+        working-directory: intelligence-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: intelligence-engine/package-lock.json
+      - run: npm ci
+      - run: npx tsx src/scripts/importActualTrades.ts
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          N8N_WEBHOOK_USERNAME: ${{ secrets.N8N_WEBHOOK_USERNAME }}
+          N8N_WEBHOOK_PASSWORD: ${{ secrets.N8N_WEBHOOK_PASSWORD }}
+
+   
