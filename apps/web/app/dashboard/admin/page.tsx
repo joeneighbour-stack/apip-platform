@@ -6,6 +6,7 @@ import { UserManagementPanel } from '@/components/admin/UserManagementPanel'
 import { MarketManagementPanel } from '@/components/admin/MarketManagementPanel'
 import { AnalystManagementPanel } from '@/components/admin/AnalystManagementPanel'
 import { ThresholdsPanel } from '@/components/admin/ThresholdsPanel'
+import { DisputeResolutionPanel } from '@/components/admin/DisputeResolutionPanel'
 
 export default async function AdminCentrePage() {
   const user = await getCurrentUser()
@@ -38,6 +39,22 @@ export default async function AdminCentrePage() {
     .select('analyst_id, display_name, active, sessions')
     .order('display_name')
 
+  // Trade disputes
+  const { data: disputes } = await supabase
+    .from('trade_disputes')
+    .select(`
+      dispute_id, status, dispute_type, analyst_note, admin_note,
+      original_values, override_values, created_at,
+      trade:trade_id (
+        trade_id, entry, stop, target, triggered, result_r,
+        published_at, direction,
+        market:market_id ( symbol )
+      ),
+      analyst:raised_by_analyst_id ( display_name )
+    `)
+    .order('created_at', { ascending: false })
+    .limit(50)
+
   return (
     <div className="space-y-8">
       <div>
@@ -48,6 +65,7 @@ export default async function AdminCentrePage() {
       </div>
 
       <EngineRunsPanel runs={engineRuns ?? []} />
+      <DisputeResolutionPanel disputes={disputes ?? []} />
       <UserManagementPanel users={appUsers ?? []} analysts={analysts ?? []} isAdmin={user.role === 'ADMIN'} />
       <AnalystManagementPanel analysts={analysts ?? []} />
       <MarketManagementPanel markets={markets ?? []} />

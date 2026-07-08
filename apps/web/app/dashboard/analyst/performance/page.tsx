@@ -27,7 +27,7 @@ export default async function AnalystPerformancePage() {
 
   const kpis = (kpiTrend ?? []).filter(k => k.period_start === monthStart)
 
-  // All trades for breakdown -- paginate to get all trades, not just first 1000
+  // All trades for breakdown -- paginated
   const allTrades: any[] = []
   const PAGE_SIZE = 1000
   let page = 0
@@ -55,9 +55,22 @@ export default async function AnalystPerformancePage() {
     }
   }
 
-  // Recent trades for the history table (last 90 days)
+  // Recent trades for history table (last 90 days)
   const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()
   const recentTrades = allTrades.filter(t => t.published_at >= ninetyDaysAgo)
+
+  // Recent trades need entry/stop/target for the dispute modal
+  const tradeIds = recentTrades.map(t => t.trade_id)
+  const { data: tradeDetails } = await supabase
+    .from('actual_trades')
+    .select('trade_id, entry, stop, target, session')
+    .in('trade_id', tradeIds)
+
+  const detailsByTradeId = new Map((tradeDetails ?? []).map(t => [t.trade_id, t]))
+  const recentTradesWithDetails = recentTrades.map(t => ({
+    ...t,
+    ...(detailsByTradeId.get(t.trade_id) ?? {}),
+  }))
 
   // Compliance reviews
   const { data: reviews } = await supabase
@@ -93,7 +106,11 @@ export default async function AnalystPerformancePage() {
 
       <KpiSummary kpis={kpis} kpiTrend={kpiTrend ?? []} />
       <PerformanceBreakdown trades={allTrades} />
-      <TradeHistoryTable trades={recentTrades} disputesByTradeId={disputesByTradeId} />
+      <TradeHistoryTable
+        trades={recentTradesWithDetails}
+        disputesByTradeId={disputesByTradeId}
+        analystId={user.analystId}
+      />
       <CompliancePanel reviews={reviews ?? []} />
     </div>
   )
