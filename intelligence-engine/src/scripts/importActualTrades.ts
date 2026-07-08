@@ -24,11 +24,15 @@ const WEBHOOK_PASSWORD = process.env.N8N_WEBHOOK_PASSWORD ?? 'barcelona123'
 
 // Analyst code → display name for lookup
 const ANALYST_CODE_MAP: Record<string, string> = {
-  IAN: 'Ian Coleman',
-  KG:  'Khaled Gad',
-  MAG: 'Maged Darwish',
-  MOH: 'Mona Hassan',
-  TIV: 'Tibor Vrbovsky',
+  IAN:        'Ian Coleman',
+  KG:         'Khaled Gad',
+  MAG:        'Maged Darwish',
+  MOH:        'Mona Hassan',
+  MONA:       'Mona Hassan',
+  MPH:        'Mona Hassan',
+  TIV:        'Tibor Vrbovsky',
+  TIVS:       'Tibor Vrbovsky',
+  JN:         'Joe Neighbour',
 }
 
 // Symbol normalisations — API name → APIP market symbol
@@ -127,8 +131,8 @@ async function main() {
       fromDate = lastSync.toISOString().slice(0, 10)
       console.log(`Sync window: ${fromDate} → ${toDate} (incremental from last sync)`)
     } else {
-      // No previous sync -- default to 2024-01-01
-      fromDate = '2024-01-01'
+      // No previous sync -- default to 2026-06-19 (manual backfill ends 2026-06-18)
+      fromDate = '2026-06-19'
       console.log(`Sync window: ${fromDate} → ${toDate} (no previous sync, using default)`)
     }
   }
@@ -209,7 +213,10 @@ async function main() {
   console.log(`Fetched ${rawTrades.length} raw records in ${Date.now() - fetchStart}ms`)
 
   // ── Filter to Analyst only ───────────────────────────────────────────────
-  const analystTrades = rawTrades.filter(t => t.ReportType === 'Analyst')
+  const analystTrades = rawTrades.filter(t =>
+    t.ReportType === 'Analyst' &&
+    !['STEVE TEST', 'TEST'].includes((t.Analyst ?? '').toUpperCase().trim())
+  )
   const patternCount = rawTrades.length - analystTrades.length
   console.log(`  Analyst trades: ${analystTrades.length}, Pattern (skipped): ${patternCount}`)
 
