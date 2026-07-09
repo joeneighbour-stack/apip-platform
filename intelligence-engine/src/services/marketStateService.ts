@@ -32,16 +32,13 @@ export interface MarketStateOutput {
   zone3Top: number | null;
   upperBand: number | null;
   currentZone: AtrZone | null;
-  currentPrice: number; // the price currentZone was derived from -- always populated, even when atr14/zones could not be computed (the notebook passes current_price through unconditionally; it's an input, not a derived value)
+  currentPrice: number;
   stateGeneratedAt: string;
 }
 
 /**
  * True Range for a single bar against the previous bar's close.
  * Matches notebook: tr1 = high-low, tr2 = |high-prevClose|, tr3 = |low-prevClose|, TR = max(tr1,tr2,tr3).
- * For the very first bar in a series (no previous close), prevClose is undefined and tr2/tr3
- * are excluded from the max -- this matches pandas' behaviour where a NaN comparand is
- * simply never the max, not treated as zero.
  */
 function trueRange(bar: OhlcBar, prevClose: number | undefined): number {
   const tr1 = bar.high - bar.low;
@@ -52,9 +49,7 @@ function trueRange(bar: OhlcBar, prevClose: number | undefined): number {
 }
 
 /**
- * Rolling mean of True Range over `period` bars. Matches notebook's
- * `rolling(period, min_periods=period).mean()` -- returns null until at least
- * `period` True Range values are available, never a partial-window average.
+ * Rolling mean of True Range over `period` bars.
  */
 function calculateAtr(ohlcSeries: OhlcBar[], period: number): number | null {
   const trueRanges: number[] = [];
@@ -63,11 +58,6 @@ function calculateAtr(ohlcSeries: OhlcBar[], period: number): number | null {
     trueRanges.push(trueRange(ohlcSeries[i]!, prevClose));
   }
 
-  // Matches notebook's rolling(period, min_periods=period).mean() -- returns
-  // null until at least `period` True Range values are available, never a
-  // partial-window average. trueRanges.length always equals ohlcSeries.length
-  // (even the first bar has a computable TR, via tr1 alone), so this check
-  // is equivalent to requiring `period` OHLC bars.
   if (trueRanges.length < period) return null;
   const window = trueRanges.slice(trueRanges.length - period);
   const sum = window.reduce((acc, v) => acc + v, 0);
@@ -84,10 +74,15 @@ interface AtrZoneBands {
 }
 
 /**
- * Matches notebook's calculate_atr_zones exactly, including the band-collapse
- * guard. high/low here are the MOST RECENT bar's high/low (the notebook
- * applies this per-row to the latest row only, via build_market_state's
- * `.groupby('market').tail(1)`).
+ * ATR band calculation per Pine Script definition:
+ *   upperBand = daily_low + ATR14
+ *   lowerBand = daily_high - ATR14
+ *
+ * Zones 1-4 split the band from lowerBand (bottom) to upperBand (top):
+ *   ZONE_1 = lowerBand to lowerBand + step       (lowest, near lowerBand)
+ *   ZONE_2 = lowerBand + step to lowerBand + 2*step
+ *   ZONE_3 = lowerBand + 2*step to lowerBand + 3*step
+ *   ZONE_4 = lowerBand + 3*step to upperBand     (highest, near upperBand)
  */
 function calculateAtrZones(
   latestHigh: number, latestLow: number, atr14: number | null, latestClose: number,
@@ -99,8 +94,14 @@ function calculateAtrZones(
     return { lowerBand: null, zone1Top: null, zone2Top: null, zone3Top: null, upperBand: null, currentZone: null };
   }
 
-  let lowerBand = latestClose - atr14;
-  let upperBand = latestClose + atr14;
+  // Pine Script: upperband = atr + daily_low, lowerband = daily_high - atr
+  const lowerBand = latestHigh - atr14;
+  const upperBand = latestLow + atr14;
+
+  // Guard against band collapse (high - low < ATR can cause inversion)
+  if (upperBand <= lowerBand) {
+    return { lowerBand: null, zone1Top: null, zone2Top: null, zone3Top: null, upperBand: null, currentZone: null };
+  }
 
   const step = (upperBand - lowerBand) / zoneCount;
   const zone1Top = lowerBand + step;
