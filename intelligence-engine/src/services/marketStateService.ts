@@ -49,19 +49,29 @@ function trueRange(bar: OhlcBar, prevClose: number | undefined): number {
 }
 
 /**
- * Rolling mean of True Range over `period` bars.
+ * Wilder's RMA (Running Moving Average) of True Range over `period` bars.
+ * Matches Pine Script's atr(len) which uses rma() not sma().
+ * Seed: simple average of first `period` TR values.
+ * Then: rma = (rma_prev * (period - 1) + tr) / period
  */
 function calculateAtr(ohlcSeries: OhlcBar[], period: number): number | null {
-  const trueRanges: number[] = [];
+  if (ohlcSeries.length < period) return null
+
+  const trueRanges: number[] = []
   for (let i = 0; i < ohlcSeries.length; i++) {
-    const prevClose = i > 0 ? ohlcSeries[i - 1]!.close : undefined;
-    trueRanges.push(trueRange(ohlcSeries[i]!, prevClose));
+    const prevClose = i > 0 ? ohlcSeries[i - 1]!.close : undefined
+    trueRanges.push(trueRange(ohlcSeries[i]!, prevClose))
   }
 
-  if (trueRanges.length < period) return null;
-  const window = trueRanges.slice(trueRanges.length - period);
-  const sum = window.reduce((acc, v) => acc + v, 0);
-  return sum / period;
+  // Seed with simple average of first `period` TR values
+  let rma = trueRanges.slice(0, period).reduce((a, b) => a + b, 0) / period
+
+  // Apply Wilder's smoothing for remaining bars
+  for (let i = period; i < trueRanges.length; i++) {
+    rma = (rma * (period - 1) + trueRanges[i]!) / period
+  }
+
+  return rma
 }
 
 interface AtrZoneBands {
