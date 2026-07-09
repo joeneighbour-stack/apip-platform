@@ -108,11 +108,18 @@ async function main() {
   console.log(`Mode: ${isDryRun ? 'DRY RUN' : 'LIVE'}`)
 
   // ── Determine sync window ────────────────────────────────────────────────
+  // Hard floor -- manual backfill is source of truth before this date
+  const MIN_API_DATE = '2026-06-19'
+
   let fromDate: string
   let toDate = toArg ?? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
   if (fromArg) {
-    fromDate = fromArg
+    // Enforce floor even on explicit --from argument
+    fromDate = fromArg < MIN_API_DATE ? MIN_API_DATE : fromArg
+    if (fromArg < MIN_API_DATE) {
+      console.log(`  Warning: --from=${fromArg} is before MIN_API_DATE, clamped to ${MIN_API_DATE}`)
+    }
     console.log(`Sync window: ${fromDate} → ${toDate} (explicit)`)
   } else {
     // Find last successful ACUITY_PERFORMANCE_API sync
@@ -228,6 +235,7 @@ async function main() {
   let successRows = 0, duplicateRows = 0, errorRows = 0, outOfScopeRows = 0
   let unknownAnalysts = new Set<string>()
   let unknownSymbols = new Set<string>()
+  const tradeRows: any[] = []
 
   for (const t of analystTrades) {
     // Resolve analyst
@@ -245,7 +253,7 @@ async function main() {
     const marketId = marketIdBySymbol.get(normSymbol) ?? marketIdBySymbol.get(normSymbol.toLowerCase())
     if (!marketId) {
       unknownSymbols.add(rawSymbol)
-      outOfScopeRows++ // not an error -- equity outside APIP universe
+      outOfScopeRows++
       continue
     }
 
@@ -255,13 +263,10 @@ async function main() {
     const direction = (t.Direction ?? '').toUpperCase() === 'SELL' ? 'SELL' : 'BUY'
     const session = deriveSession(t.PublicationDate, t.AssetClass)
 
-    // Skip trades with no entry price -- DB has not-null constraint
-    if (t.Entry == null) {
-      errorRows++
-      continue
-    }
+    // Skip trades with no entry price
+    if (t.Entry == null) { errorRows++; continue }
 
-    const tradeRow = {
+    tradeRows.push({
       source_system: 'ACUITY_PERFORMANCE_API',
       source_record_id: t.ReportId,
       historical_backfill: false,
@@ -272,7 +277,7 @@ async function main() {
       market_id: marketId,
       session,
       direction,
-      entry: t.Entry ?? null,
+      entry: t.Entry,
       stop: t.StopLoss ?? null,
       target: t.TakeProfit ?? null,
       expiry: t.Expiry ?? null,
@@ -280,36 +285,33 @@ async function main() {
       closed_at: t.ExitDate ?? null,
       result_r: resultR,
       raw_payload: t,
-    }
+    })
 
-    if (isDryRun) {
-      successRows++
-      continue
-    }
+    if (isDryRun) successRows++
+  }
 
-    const { error, status } = await db
-      .from('actual_trades')
-      .upsert(tradeRow, { onConflict: 'source_system,source_record_id' })
+  if (!isDryRun && tradeRows.length > 0) {
+    // Batch upsert in chunks of 500 for performance
+    const BATCH_SIZE = 500
+    let processed = 0
+    for (let i = 0; i < tradeRows.length; i += BATCH_SIZE) {
+      const batch = tradeRows.slice(i, i + BATCH_SIZE)
+      const { error } = await db
+        .from('actual_trades')
+        .upsert(batch, { onConflict: 'source_system,source_record_id' })
 
-    if (error) {
-      console.error(`  Error on ${t.ReportId}: ${error.message}`)
-      errorRows++
-
-      if (batchId) {
-        await db.from('import_errors').insert({
-          import_batch_id: batchId,
-          source_record_id: t.ReportId,
-          error_type: 'SCHEMA_MISMATCH',
-          error_detail: error.message,
-          raw_payload: { response_body: t },
-          resolved: false,
-        })
+      if (error) {
+        console.error(`  Batch error at ${i}: ${error.message}`)
+        errorRows += batch.length
+      } else {
+        successRows += batch.length
       }
-    } else if (status === 200) {
-      duplicateRows++ // existing row updated
-    } else {
-      successRows++
+      processed += batch.length
+      process.stdout.write(`\r  Upserted ${processed}/${tradeRows.length}`)
     }
+    console.log('')
+  } else if (isDryRun) {
+    // already counted above
   }
 
   // ── Link to recommendation_versions (post-platform trades) ───────────────
