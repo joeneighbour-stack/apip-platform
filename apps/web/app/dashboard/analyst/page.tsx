@@ -17,8 +17,9 @@ export default async function AnalystWorkspacePage() {
   }
 
   const supabase = await createClient()
+  const today = new Date().toISOString().slice(0, 10)
 
-  const { data: recommendations } = await supabase
+  const { data: allRecs } = await supabase
     .from('coaching_recommendations')
     .select(`
       recommendation_id,
@@ -44,8 +45,17 @@ export default async function AnalystWorkspacePage() {
       )
     `)
     .eq('analyst_id', user.analystId)
-    .gte('shown_at', new Date().toISOString().slice(0, 10) + 'T00:00:00Z')
+    .gte('shown_at', today + 'T00:00:00Z')
     .order('shown_at', { ascending: false })
+
+  // Deduplicate: keep only the most recent recommendation per market symbol
+  const seenSymbols = new Set<string>()
+  const recommendations = (allRecs ?? []).filter(rec => {
+    const symbol = (rec.opportunity as any)?.market?.symbol
+    if (!symbol || seenSymbols.has(symbol)) return false
+    seenSymbols.add(symbol)
+    return true
+  })
 
   const { data: reviews } = await supabase
     .from('post_trade_reviews')
@@ -64,7 +74,7 @@ export default async function AnalystWorkspacePage() {
 
       <section className="space-y-3">
         <h2 className="text-sm font-medium text-foreground">Today's Markets</h2>
-        {!recommendations || recommendations.length === 0 ? (
+        {recommendations.length === 0 ? (
           <div className="rounded-lg border border-border p-6">
             <p className="text-sm text-muted-foreground">
               No coaching recommendations for today's session yet.
@@ -74,7 +84,8 @@ export default async function AnalystWorkspacePage() {
           recommendations.map((rec) => {
             const opp = rec.opportunity as any
             const rv = rec.recommendation_version as any
-            const symbol = (opp?.market as any)?.symbol ?? '—'
+            const symbol = opp?.market?.symbol ?? '—'
+            const direction = opp?.direction ?? null
             const action = opp?.analyst_action ?? ''
             const validity = rv?.recommendation_validity_status ?? 'VALID'
             const isDoNotUse = validity === 'DO_NOT_USE_RECALCULATE'
@@ -90,15 +101,17 @@ export default async function AnalystWorkspacePage() {
 
                 {/* Header */}
                 <div className="flex items-start justify-between gap-4">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 flex-wrap">
                     <span className="font-semibold text-base">{symbol}</span>
-                    <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
-                      opp?.direction === 'BUY'
-                        ? 'bg-green-100 text-green-800'
-                        : 'bg-red-100 text-red-800'
-                    }`}>
-                      {opp?.direction ?? '—'}
-                    </span>
+                    {direction && (
+                      <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
+                        direction === 'BUY'
+                          ? 'bg-green-100 text-green-800'
+                          : 'bg-red-100 text-red-800'
+                      }`}>
+                        {direction}
+                      </span>
+                    )}
                     {!isDoNotUse && (
                       <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
                         action === 'ENTER_NOW'
@@ -167,7 +180,7 @@ export default async function AnalystWorkspacePage() {
                   </div>
                 </div>
 
-                {/* Stale price warning */}
+                {/* Stale warning */}
                 {isStale && rv?.volatility_warning && (
                   <div className="rounded-md bg-amber-50 border border-amber-100 px-3 py-2">
                     <p className="text-xs text-amber-800">{rv.volatility_warning}</p>
@@ -186,11 +199,11 @@ export default async function AnalystWorkspacePage() {
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-medium text-foreground">Post-Trade Reviews</h2>
+        <h2 className="text-sm font-medium text-foreground">Pending Reviews</h2>
         {!reviews || reviews.length === 0 ? (
           <div className="rounded-lg border border-border p-6">
             <p className="text-sm text-muted-foreground">
-              No post-trade reviews available yet.
+              No post-trade reviews pending acknowledgement.
             </p>
           </div>
         ) : (
