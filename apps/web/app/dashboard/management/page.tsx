@@ -30,6 +30,7 @@ export default async function ManagementWorkspacePage() {
       analyst:assigned_analyst_id ( analyst_id, display_name )
     `)
     .eq('allocation_status', 'ASSIGNED')
+    .gte('assigned_at', today + 'T00:00:00Z')
     .order('assigned_at', { ascending: false })
     .limit(50)
 
