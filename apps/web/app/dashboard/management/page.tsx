@@ -7,6 +7,7 @@ import { DisputeQueue } from '@/components/management/DisputeQueue'
 import { StaleExceptions } from '@/components/management/StaleExceptions'
 import { AbsenceQueue } from '@/components/management/AbsenceQueue'
 import { EmergencyAbsence } from '@/components/management/EmergencyAbsence'
+import { NotificationsPanel } from '@/components/management/NotificationsPanel'
 
 export default async function ManagementWorkspacePage() {
   const user = await getCurrentUser()
@@ -15,7 +16,7 @@ export default async function ManagementWorkspacePage() {
   const supabase = await createClient()
   const today = new Date().toISOString().split('T')[0]
 
-  // Today's allocations -- join to opportunities and markets
+  // Today's allocations
   const { data: allocations } = await supabase
     .from('coverage_allocation')
     .select(`
@@ -43,7 +44,7 @@ export default async function ManagementWorkspacePage() {
     .in('status', ['OPEN', 'UNDER_REVIEW'])
     .order('created_at', { ascending: false })
 
-  // Stale/invalid active recommendations -- fetch separately and join manually
+  // Stale/invalid active recommendations
   const { data: staleRecs } = await supabase
     .from('recommendation_versions')
     .select(`
@@ -56,8 +57,6 @@ export default async function ManagementWorkspacePage() {
     .order('generated_at', { ascending: true })
     .limit(20)
 
-  // Fetch market symbols for each stale rec via opportunity -- query markets directly
-  // to avoid RLS on opportunities blocking the manager view
   const staleRecsWithMarkets = await Promise.all(
     (staleRecs ?? []).map(async (rec) => {
       const { data: opp } = await supabase
@@ -80,13 +79,13 @@ export default async function ManagementWorkspacePage() {
     })
   )
 
-  // Analyst availability today -- for workload context
+  // Analyst availability today
   const { data: availability } = await supabase
     .from('analyst_availability')
     .select('analyst_id, available, workload_cap, session')
     .eq('date', today)
 
-  // Absence requests -- pending + upcoming approved
+  // Absence requests
   const nextThirtyDays = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
   const { data: absenceRequests } = await supabase
     .from('analyst_availability')
@@ -106,6 +105,15 @@ export default async function ManagementWorkspacePage() {
     .eq('active', true)
     .order('display_name')
 
+  // Notifications -- WARNING and CRITICAL for managers
+  const { data: notifications } = await supabase
+    .from('notifications')
+    .select('notification_id, severity, notification_type, notification_status, title, message, related_table, related_id, sla_due_at, escalated_at, created_at')
+    .in('notification_status', ['OPEN', 'ACKNOWLEDGED'])
+    .in('severity', ['WARNING', 'CRITICAL', 'SYSTEM_FAILURE'])
+    .order('created_at', { ascending: false })
+    .limit(50)
+
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
@@ -118,6 +126,7 @@ export default async function ManagementWorkspacePage() {
         <EmergencyAbsence analysts={activeAnalysts ?? []} />
       </div>
 
+      <NotificationsPanel notifications={notifications ?? []} />
       <WorkloadPanel allocations={allocations ?? []} availability={availability ?? []} />
       <AllocationTable allocations={allocations ?? []} />
       <AbsenceQueue requests={(absenceRequests ?? []) as any} />

@@ -26,6 +26,14 @@ import path from 'node:path'
 const STALE_ATR_THRESHOLD = 0.25
 const FORCE_RECALC_ATR_THRESHOLD = 0.50
 
+// SLA minutes per severity (per spec sheet 29)
+const SLA_MINUTES: Record<string, number> = {
+  CRITICAL:       30,
+  WARNING:        240,  // 4 hours
+  INFO:           0,
+  SYSTEM_FAILURE: 15,
+}
+
 async function fetchCurrentPrice(finnhubSymbol: string, apiKey: string): Promise<number | null> {
   try {
     const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(finnhubSymbol)}&token=${apiKey}`
@@ -58,7 +66,7 @@ async function main() {
 
   const today = new Date().toISOString().slice(0, 10)
 
-  // Load today's opportunities first, then get their recommendation versions
+  // Load today's opportunities
   const { data: todayOpps } = await db
     .from('opportunities')
     .select('opportunity_id, date, session, market:market_id(market_id, symbol, price_data_symbol, price_data_provider)')
@@ -83,7 +91,6 @@ async function main() {
     return
   }
 
-  // Build opp lookup
   const oppById = new Map(todayOpps.map(o => [o.opportunity_id, o]))
 
   // Load latest ATR14 per market
@@ -112,11 +119,9 @@ async function main() {
 
     const atr14 = atr14ByMarketId.get(market.market_id) ?? null
 
-    // Fetch current price
     const currentPrice = await fetchCurrentPrice(market.price_data_symbol, FINNHUB_API_KEY)
     if (!currentPrice) { summary.errors++; continue }
 
-    // Get current zone from intraday snapshot
     const { data: intraday } = await db
       .from('market_state_intraday')
       .select('current_zone')
@@ -129,7 +134,6 @@ async function main() {
 
     const currentZone = intraday?.current_zone ?? null
 
-    // Assess condition using existing service
     const assessment = assessCondition({
       currentPrice,
       priceAtGeneration: Number(rec.price_at_generation),
@@ -143,7 +147,6 @@ async function main() {
     const newStatus = assessment.recommendationValidityStatus
     const oldStatus = rec.recommendation_validity_status
 
-    // Only update if status changed
     if (newStatus !== oldStatus) {
       console.log(`  ${market.symbol}: ${oldStatus} → ${newStatus} (price=${currentPrice}, atrMove=${assessment.atrMoveSinceGeneration?.toFixed(2) ?? '?'})`)
 
@@ -156,17 +159,22 @@ async function main() {
           })
           .eq('recommendation_version_id', rec.recommendation_version_id)
 
-        // Create notification for STALE_PRICE, ZONE_CHANGED, DO_NOT_USE_RECALCULATE
+        // Create notification with routing and SLA (per spec sheet 29)
         if (['STALE_PRICE', 'ZONE_CHANGED', 'DO_NOT_USE_RECALCULATE', 'ENTRY_ALREADY_PASSED'].includes(newStatus)) {
           const severity = newStatus === 'DO_NOT_USE_RECALCULATE' ? 'CRITICAL' : 'WARNING'
+          const slaMins = SLA_MINUTES[severity] ?? 240
+          const sla_due_at = new Date(Date.now() + slaMins * 60 * 1000).toISOString()
+
           await db.from('notifications').insert({
             notification_type: 'STALE_RECOMMENDATION',
             severity,
+            recipient_role: severity === 'CRITICAL' ? 'ADMIN' : 'MANAGER',
             title: `${market.symbol} recommendation ${newStatus.toLowerCase().replace(/_/g, ' ')}`,
             message: assessment.volatilityWarning || `${market.symbol} recommendation requires attention.`,
             related_table: 'recommendation_versions',
             related_id: rec.recommendation_version_id,
             notification_status: 'OPEN',
+            sla_due_at,
           })
         }
       }
@@ -174,7 +182,6 @@ async function main() {
       console.log(`  ${market.symbol}: ${oldStatus} (unchanged, atrMove=${assessment.atrMoveSinceGeneration?.toFixed(2) ?? '?'})`)
     }
 
-    // Count by status
     switch (newStatus) {
       case 'VALID': summary.valid++; break
       case 'CAUTION_VOLATILITY': summary.caution++; break

@@ -7,6 +7,7 @@ import { MarketManagementPanel } from '@/components/admin/MarketManagementPanel'
 import { AnalystManagementPanel } from '@/components/admin/AnalystManagementPanel'
 import { ThresholdsPanel } from '@/components/admin/ThresholdsPanel'
 import { DisputeResolutionPanel } from '@/components/admin/DisputeResolutionPanel'
+import { NotificationsPanel } from '@/components/management/NotificationsPanel'
 
 export default async function AdminCentrePage() {
   const user = await getCurrentUser()
@@ -55,6 +56,14 @@ export default async function AdminCentrePage() {
     .order('created_at', { ascending: false })
     .limit(50)
 
+  // All notifications for admin (all severities)
+  const { data: notifications } = await supabase
+    .from('notifications')
+    .select('notification_id, severity, notification_type, notification_status, title, message, related_table, related_id, sla_due_at, escalated_at, created_at')
+    .in('notification_status', ['OPEN', 'ACKNOWLEDGED'])
+    .order('created_at', { ascending: false })
+    .limit(100)
+
   return (
     <div className="space-y-8">
       <div>
@@ -64,6 +73,7 @@ export default async function AdminCentrePage() {
         </p>
       </div>
 
+      <NotificationsPanel notifications={notifications ?? []} showAll={true} />
       <EngineRunsPanel runs={engineRuns ?? []} />
       <DisputeResolutionPanel disputes={disputes ?? []} />
       <UserManagementPanel users={appUsers ?? []} analysts={analysts ?? []} isAdmin={user.role === 'ADMIN'} />
