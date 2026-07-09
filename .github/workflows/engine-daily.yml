@@ -3,10 +3,10 @@
 # ============================================================================
 # Runs the three session engine cycles at the correct UK times.
 # All times in UTC. UK = UTC+1 (BST summer) / UTC+0 (GMT winter).
-# Adjust offsets seasonally if needed (currently set for BST/summer UTC+1).
 #
 # Schedule:
 #   05:30 UK (04:30 UTC) -- populateMarketStateDaily
+#   05:35 UK (04:35 UTC) -- derive market regime
 #   05:45 UK (04:45 UTC) -- captureIntradaySnapshot EUROPEAN
 #   05:50 UK (04:50 UTC) -- runEngineSession EUROPEAN
 #   11:45 UK (10:45 UTC) -- captureIntradaySnapshot US
@@ -21,6 +21,7 @@ on:
   schedule:
     - cron: '*/30 5-20 * * 1-5'  # every 30 mins Mon-Fri 05:00-20:00 UTC -- shadow outcomes
     - cron: '*/15 5-20 * * 1-5'  # every 15 mins Mon-Fri 05:00-20:00 UTC -- condition awareness
+    - cron: '30 4 * * 1-5'   # 04:30 UTC Mon-Fri -- populate daily market state
     - cron: '35 4 * * 1-5'   # 04:35 UTC Mon-Fri -- derive market regime
     - cron: '45 4 * * 1-5'   # 04:45 UTC Mon-Fri -- European snapshot
     - cron: '50 4 * * 1-5'   # 04:50 UTC Mon-Fri -- European engine
@@ -53,6 +54,7 @@ on:
           - shadow-lifecycle
           - condition-awareness
           - import-actual-trades
+          - generate-post-trade-reviews
 
 jobs:
 
@@ -82,7 +84,6 @@ jobs:
   derive-regime:
     name: Derive Market Regime
     runs-on: ubuntu-latest
-    needs: populate-daily
     if: |
       github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'derive-regime' ||
       github.event_name == 'schedule' && startsWith(github.event.schedule, '35 4') ||
@@ -106,7 +107,6 @@ jobs:
   snapshot-european:
     name: Intraday Snapshot -- European
     runs-on: ubuntu-latest
-    needs: derive-regime
     if: |
       github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'snapshot-european' ||
       github.event_name == 'schedule' && startsWith(github.event.schedule, '45 4')
@@ -130,7 +130,6 @@ jobs:
   engine-european:
     name: Engine Session -- European
     runs-on: ubuntu-latest
-    needs: snapshot-european
     if: |
       github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'engine-european' ||
       github.event_name == 'schedule' && startsWith(github.event.schedule, '50 4')
@@ -176,7 +175,6 @@ jobs:
   engine-us:
     name: Engine Session -- US
     runs-on: ubuntu-latest
-    needs: snapshot-us
     if: |
       github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'engine-us' ||
       github.event_name == 'schedule' && startsWith(github.event.schedule, '50 10')
@@ -222,7 +220,6 @@ jobs:
   engine-apac:
     name: Engine Session -- APAC
     runs-on: ubuntu-latest
-    needs: snapshot-apac
     if: |
       github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'engine-apac' ||
       github.event_name == 'schedule' && startsWith(github.event.schedule, '50 14')
@@ -355,7 +352,7 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           N8N_WEBHOOK_USERNAME: ${{ secrets.N8N_WEBHOOK_USERNAME }}
           N8N_WEBHOOK_PASSWORD: ${{ secrets.N8N_WEBHOOK_PASSWORD }}
-  
+
   generate-post-trade-reviews:
     name: Generate Post-Trade Reviews
     runs-on: ubuntu-latest
@@ -377,5 +374,3 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-
-   
