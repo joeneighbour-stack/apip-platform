@@ -236,6 +236,7 @@ async function main() {
   let unknownAnalysts = new Set<string>()
   let unknownSymbols = new Set<string>()
   const tradeRows: any[] = []
+  const pubRows: any[] = []
 
   for (const t of analystTrades) {
     // Resolve analyst
@@ -287,6 +288,26 @@ async function main() {
       raw_payload: t,
     })
 
+    // Also build publication row -- captures ALL setups including non-triggered
+    // Used for accurate trigger rate calculation
+    pubRows.push({
+      source_system: 'ACUITY_PERFORMANCE_API',
+      source_record_id: t.ReportId,
+      analyst_id: analystId,
+      market_id: marketId,
+      published_at: t.PublicationDate,
+      direction,
+      entry: t.Entry,
+      stop: t.StopLoss ?? null,
+      target: t.TakeProfit ?? null,
+      original_triggered: triggered,
+      effective_triggered: triggered,
+      reconciliation_status: triggered ? 'WEBHOOK_TRUE' : 'WEBHOOK_FALSE_CONFIRMED',
+      import_batch_id: batchId,
+      imported_at: new Date().toISOString(),
+      raw_payload: t,
+    })
+
     if (isDryRun) successRows++
   }
 
@@ -310,6 +331,20 @@ async function main() {
       process.stdout.write(`\r  Upserted ${processed}/${tradeRows.length}`)
     }
     console.log('')
+
+    // Also upsert analyst_publications for trigger rate calculation
+    if (pubRows.length > 0) {
+      let pubProcessed = 0
+      for (let i = 0; i < pubRows.length; i += BATCH_SIZE) {
+        const batch = pubRows.slice(i, i + BATCH_SIZE)
+        await db
+          .from('analyst_publications')
+          .upsert(batch, { onConflict: 'source_system,source_record_id' })
+        pubProcessed += batch.length
+        process.stdout.write(`\r  Publications upserted ${pubProcessed}/${pubRows.length}`)
+      }
+      console.log('')
+    }
   } else if (isDryRun) {
     // already counted above
   }

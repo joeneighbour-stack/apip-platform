@@ -80,8 +80,39 @@ async function main() {
   const { data: teamRow } = await db.from('teams').select('team_id').eq('active', true).single()
   const teamId = teamRow?.team_id ?? null
 
-  // Load all trades for the window
+  // Load analyst publications for trigger rate -- more accurate than actual_trades
+  // analyst_publications has both triggered and non-triggered setups from the API
+  // with reconciliation against the corrected backfill
   const windowStart = months[months.length - 1]!.start
+
+  const allPubRows: any[] = []
+  let pubPage = 0, pubHasMore = true
+  while (pubHasMore) {
+    const { data: pubBatch } = await db
+      .from('analyst_publications')
+      .select('analyst_id, published_at, reconciliation_status')
+      .gte('published_at', windowStart)
+      .range(pubPage * 1000, pubPage * 1000 + 999)
+    if (!pubBatch?.length) { pubHasMore = false } else {
+      allPubRows.push(...pubBatch)
+      pubHasMore = pubBatch.length === 1000
+      pubPage++
+    }
+  }
+
+  // Group publications by analyst_id + month
+  const pubsByAnalystMonth = new Map<string, { total: number; triggered: number }>()
+  for (const p of allPubRows) {
+    const month = p.published_at.slice(0, 7) // YYYY-MM
+    const key = `${p.analyst_id}::${month}`
+    const existing = pubsByAnalystMonth.get(key) ?? { total: 0, triggered: 0 }
+    const isTriggered = ['WEBHOOK_TRUE', 'WEBHOOK_FALSE_OVERRIDDEN'].includes(p.reconciliation_status)
+    pubsByAnalystMonth.set(key, {
+      total: existing.total + 1,
+      triggered: existing.triggered + (isTriggered ? 1 : 0),
+    })
+  }
+  console.log(`  Publications loaded: ${allPubRows.length}`)
 
   // Load post-trade reviews for alignment rate
   const { data: reviewRows } = await db
@@ -142,10 +173,14 @@ async function main() {
       const wins = triggered.filter(t => Number(t.result_r) > 0)
       const winRate = triggered.length > 0 ? wins.length / triggered.length : null
 
-      // Trigger rate -- triggered / total published setups
-      // This is the real metric: of all setups published, how many triggered?
-      const totalSetups = monthTrades.length
-      const triggerRate = totalSetups > 0 ? triggered.length / totalSetups : null
+      // Trigger rate -- from analyst_publications (has both triggered and non-triggered)
+      const monthKey = `${analyst.analyst_id}::${start.slice(0, 7)}`
+      const pubStats = pubsByAnalystMonth.get(monthKey)
+      const triggerRate = pubStats && pubStats.total >= 5
+        ? pubStats.triggered / pubStats.total
+        : null
+      const totalSetups = pubStats?.total ?? 0
+      const apiTriggered = pubStats?.triggered ?? 0
 
       // Max drawdown -- on triggered trades only, sorted by date
       const sortedTriggered = [...triggered].sort((a, b) =>
@@ -199,7 +234,7 @@ async function main() {
           kpi_value: {
             value: triggerRate,
             unit: 'rate',
-            triggered: triggered.length,
+            triggered: apiTriggered,
             total_setups: totalSetups,
           }
         })
