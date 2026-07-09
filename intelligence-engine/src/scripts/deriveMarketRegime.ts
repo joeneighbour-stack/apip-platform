@@ -230,7 +230,7 @@ async function main() {
 
   // Load all bars -- need at least 200 for EMA200
   const MIN_BARS = 210 // 200 + buffer
-  const LOOKBACK_DAYS = isBackfill ? 1000 : 60 // full history or recent
+  const LOOKBACK_DAYS = isBackfill ? 1000 : 300 // full history or recent 300 days for EMA200
   const windowStart = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000)
     .toISOString().slice(0, 10)
 
