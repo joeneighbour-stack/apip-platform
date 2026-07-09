@@ -30,12 +30,15 @@ function isOnTarget(kpiName: string, value: number): boolean {
   return t.direction === 'above' ? value >= t.target : value <= t.target
 }
 
+const MONTH_LABELS: Record<string, string> = {
+  '2026-05-01': 'May', '2026-06-01': 'Jun', '2026-07-01': 'Jul',
+  '2026-08-01': 'Aug', '2026-09-01': 'Sep', '2026-10-01': 'Oct',
+  '2026-11-01': 'Nov', '2026-12-01': 'Dec', '2026-01-01': 'Jan',
+  '2026-02-01': 'Feb', '2026-03-01': 'Mar', '2026-04-01': 'Apr',
+}
+
 function monthLabel(period_start: string) {
-  const d = new Date(period_start + 'T12:00:00Z')
-  const mon = d.toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' })
-  const yr = d.getUTCFullYear().toString().slice(2)
-  const currentYear = new Date().getUTCFullYear()
-  return d.getUTCFullYear() === currentYear ? mon : `${mon} ${yr}`
+  return MONTH_LABELS[period_start] ?? period_start.slice(0, 7)
 }
 
 function getValue(kpi: Kpi | undefined): number | null {
@@ -44,9 +47,10 @@ function getValue(kpi: Kpi | undefined): number | null {
   return typeof v === 'object' ? (v.value ?? null) : Number(v)
 }
 
-function trendData(allKpis: Kpi[], name: string) {
+function trendData(allKpis: Kpi[], name: string, limitMonths = 12) {
   const months = [...new Set(allKpis.map(k => k.period_start))].sort()
-  return months.map(month => {
+  const recentMonths = months.slice(-limitMonths)
+  return recentMonths.map(month => {
     const kpi = allKpis.find(k => k.kpi_name === name && k.period_start === month)
     return { month: monthLabel(month), value: getValue(kpi) }
   })
