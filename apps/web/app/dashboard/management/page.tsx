@@ -16,7 +16,7 @@ export default async function ManagementWorkspacePage() {
   const supabase = await createClient()
   const today = new Date().toISOString().split('T')[0]
 
-  // Today's allocations -- filter via opportunity date
+  // Most recent allocations -- deduplicated by market (latest per market)
   const { data: allocations } = await supabase
     .from('coverage_allocation')
     .select(`
@@ -31,12 +31,16 @@ export default async function ManagementWorkspacePage() {
     `)
     .eq('allocation_status', 'ASSIGNED')
     .order('assigned_at', { ascending: false })
-    .limit(100)
+    .limit(200)
 
-  // Filter to today's opportunities only (opportunity.date = today)
-  const todayAllocations = (allocations ?? []).filter(a =>
-    (a.opportunity as any)?.date === today
-  )
+  // Deduplicate: keep only the most recent allocation per market symbol
+  const seenMarkets = new Set<string>()
+  const todayAllocations = (allocations ?? []).filter(a => {
+    const symbol = (a.opportunity as any)?.market?.symbol
+    if (!symbol || seenMarkets.has(symbol)) return false
+    seenMarkets.add(symbol)
+    return true
+  })
 
   // Open disputes
   const { data: disputes } = await supabase
