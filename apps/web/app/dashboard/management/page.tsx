@@ -16,7 +16,7 @@ export default async function ManagementWorkspacePage() {
   const supabase = await createClient()
   const today = new Date().toISOString().split('T')[0]
 
-  // Today's allocations
+  // Today's allocations -- filter via opportunity date
   const { data: allocations } = await supabase
     .from('coverage_allocation')
     .select(`
@@ -30,9 +30,13 @@ export default async function ManagementWorkspacePage() {
       analyst:assigned_analyst_id ( analyst_id, display_name )
     `)
     .eq('allocation_status', 'ASSIGNED')
-    .gte('assigned_at', today + 'T00:00:00Z')
     .order('assigned_at', { ascending: false })
-    .limit(50)
+    .limit(100)
+
+  // Filter to today's opportunities only (opportunity.date = today)
+  const todayAllocations = (allocations ?? []).filter(a =>
+    (a.opportunity as any)?.date === today
+  )
 
   // Open disputes
   const { data: disputes } = await supabase
@@ -128,8 +132,8 @@ export default async function ManagementWorkspacePage() {
       </div>
 
       <NotificationsPanel notifications={notifications ?? []} />
-      <WorkloadPanel allocations={allocations ?? []} availability={availability ?? []} />
-      <AllocationTable allocations={allocations ?? []} />
+      <WorkloadPanel allocations={todayAllocations} availability={availability ?? []} />
+      <AllocationTable allocations={todayAllocations} />
       <AbsenceQueue requests={(absenceRequests ?? []) as any} />
       <StaleExceptions recommendations={staleRecsWithMarkets ?? []} />
       <DisputeQueue disputes={disputes ?? []} isAdmin={user.role === 'ADMIN'} />
