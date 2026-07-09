@@ -8,15 +8,15 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  // Phase 1.7 -- operational daily workflow
-  { href: '/dashboard/analyst',             label: 'My Workspace',    roles: ['ANALYST'] },
-  { href: '/dashboard/analyst/performance', label: 'My Performance',  roles: ['ANALYST'] },
-  { href: '/dashboard/analyst/availability',label: 'My Availability', roles: ['ANALYST'] },
-  { href: '/dashboard/management',             label: 'Management',      roles: ['MANAGER', 'ADMIN'] },
-  { href: '/dashboard/management/performance', label: 'Team Performance',roles: ['MANAGER', 'ADMIN'] },
-  { href: '/dashboard/analytics',              label: 'Analytics',       roles: ['MANAGER', 'ADMIN', 'EXECUTIVE'] },
-  { href: '/dashboard/opportunities',          label: 'Opportunities',   roles: ['ANALYST', 'MANAGER', 'ADMIN'] },
-  { href: '/dashboard/admin',                  label: 'Admin Centre',    roles: ['ADMIN', 'MANAGER'] },
+  { href: '/dashboard/analyst',                label: 'My Workspace',       roles: ['ANALYST'] },
+  { href: '/dashboard/analyst/performance',    label: 'My Performance',     roles: ['ANALYST'] },
+  { href: '/dashboard/analyst/availability',   label: 'My Availability',    roles: ['ANALYST'] },
+  { href: '/dashboard/management',             label: 'Management',         roles: ['MANAGER', 'ADMIN'] },
+  { href: '/dashboard/management/performance', label: 'Team Performance',   roles: ['MANAGER', 'ADMIN'] },
+  { href: '/dashboard/management/shadow',      label: 'Shadow Monitoring',  roles: ['MANAGER', 'ADMIN'] },
+  { href: '/dashboard/analytics',              label: 'Analytics',          roles: ['MANAGER', 'ADMIN', 'EXECUTIVE'] },
+  { href: '/dashboard/opportunities',          label: 'Opportunities',      roles: ['ANALYST', 'MANAGER', 'ADMIN'] },
+  { href: '/dashboard/admin',                  label: 'Admin Centre',       roles: ['ADMIN', 'MANAGER'] },
 ]
 
 interface NavProps {
@@ -26,6 +26,7 @@ interface NavProps {
 
 export function DashboardNav({ role, displayName }: NavProps) {
   const visibleItems = NAV_ITEMS.filter(item => item.roles.includes(role))
+
   return (
     <nav className="flex items-center justify-between px-6 py-3 border-b border-border bg-card">
       <div className="flex items-center gap-8">
