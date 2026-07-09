@@ -49,26 +49,25 @@ function trueRange(bar: OhlcBar, prevClose: number | undefined): number {
 }
 
 /**
- * Wilder's RMA (Running Moving Average) of True Range over `period` bars.
- * Matches Pine Script's atr(len) which uses rma() not sma().
- * Seed: simple average of first `period` TR values.
- * Then: rma = (rma_prev * (period - 1) + tr) / period
+ * Wilder's ATR using EWM with alpha=1/period, adjust=False.
+ * Matches notebook: d["atr14"] = d["true_range"].ewm(alpha=1/length, adjust=False).mean()
+ * Seeds from the very first TR value (no SMA seed).
  */
 function calculateAtr(ohlcSeries: OhlcBar[], period: number): number | null {
   if (ohlcSeries.length < period) return null
 
-  const trueRanges: number[] = []
+  const alpha = 1 / period
+  let rma: number | null = null
+
   for (let i = 0; i < ohlcSeries.length; i++) {
     const prevClose = i > 0 ? ohlcSeries[i - 1]!.close : undefined
-    trueRanges.push(trueRange(ohlcSeries[i]!, prevClose))
-  }
+    const tr = trueRange(ohlcSeries[i]!, prevClose)
 
-  // Seed with simple average of first `period` TR values
-  let rma = trueRanges.slice(0, period).reduce((a, b) => a + b, 0) / period
-
-  // Apply Wilder's smoothing for remaining bars
-  for (let i = period; i < trueRanges.length; i++) {
-    rma = (rma * (period - 1) + trueRanges[i]!) / period
+    if (rma === null) {
+      rma = tr // seed from first TR value
+    } else {
+      rma = rma * (1 - alpha) + tr * alpha
+    }
   }
 
   return rma
