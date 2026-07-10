@@ -30,15 +30,9 @@ function isOnTarget(kpiName: string, value: number): boolean {
   return t.direction === 'above' ? value >= t.target : value <= t.target
 }
 
-const MONTH_LABELS: Record<string, string> = {
-  '2026-05-01': 'May', '2026-06-01': 'Jun', '2026-07-01': 'Jul',
-  '2026-08-01': 'Aug', '2026-09-01': 'Sep', '2026-10-01': 'Oct',
-  '2026-11-01': 'Nov', '2026-12-01': 'Dec', '2026-01-01': 'Jan',
-  '2026-02-01': 'Feb', '2026-03-01': 'Mar', '2026-04-01': 'Apr',
-}
-
 function monthLabel(period_start: string) {
-  return MONTH_LABELS[period_start] ?? period_start.slice(0, 7)
+  const date = new Date(period_start + 'T12:00:00Z')
+  return date.toLocaleString('en-GB', { month: 'short', year: '2-digit' })
 }
 
 function getValue(kpi: Kpi | undefined): number | null {

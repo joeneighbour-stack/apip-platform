@@ -22,7 +22,7 @@ export default async function AnalystPerformancePage() {
     .from('executive_kpis')
     .select('kpi_name, kpi_value, period_start, period_end')
     .eq('analyst_id', user.analystId)
-    .gte('period_start', threeMonthsAgo)
+    .gte('period_start', twoYearsAgo)
     .order('period_start', { ascending: true })
 
   const kpis = (kpiTrend ?? []).filter(k => k.period_start === monthStart)
