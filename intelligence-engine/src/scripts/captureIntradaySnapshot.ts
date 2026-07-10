@@ -2,19 +2,17 @@
 // APIP Trading Intelligence & Performance Platform
 // Intraday Market State Snapshot Script
 // ============================================================================
-// Captures current price from Finnhub and computes current zone against the
-// latest daily state. Writes to market_state_intraday.
-// Symbol mappings read from markets.price_data_symbol -- not hardcoded.
+// Captures current price and today's developing high/low from Finnhub.
+// Computes current zone against full daily bar history.
+// Writes to market_state_intraday.
 //
 // Run:
 //   npx tsx src/scripts/captureIntradaySnapshot.ts --session=EUROPEAN
 //   npx tsx src/scripts/captureIntradaySnapshot.ts --session=US
 //   npx tsx src/scripts/captureIntradaySnapshot.ts --session=APAC
-//   npx tsx src/scripts/captureIntradaySnapshot.ts --dry-run --session=EUROPEAN
 //
 // Required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, FINNHUB_API_KEY
 // ============================================================================
-
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -23,59 +21,42 @@ import { buildMarketState, type OhlcBar } from '../services/marketStateService.j
 const ATR_PERIOD = 14
 const ZONE_COUNT = 4
 
-// Markets covered per session -- matches analyst coverage sheet
-// These are the market symbols as they appear in the markets table
 const SESSION_MARKETS: Record<string, string[]> = {
   EUROPEAN: [
-    // Tibor
     'EURNZD', 'EURGBP', 'Natural Gas', 'AUDCAD',
-    // Mona
     'FTSE', 'GBPCHF', 'Silver', 'Brent', 'GBPUSD',
-    // Maged
     'USDMXN', 'AUDJPY', 'USDTRY', 'USDCAD', 'EURJPY',
-    // Ian
     'Oil', 'USDJPY', 'CAC', 'Palladium', 'Gold', 'EURSEK',
-    // Khaled
     'AUDUSD', 'GBPJPY', 'EURCHF', 'Platinum', 'Copper', 'EURUSD', 'USDCHF', 'DAX',
   ],
   US: [
-    // Tibor
     'DOW', 'SP500', 'Litecoin',
-    // Mona
     'US2000', 'Ripple', 'Solana',
-    // Ian
     'NASDAQ', 'Ethereum', 'Bitcoin',
   ],
   APAC: [
-    // Tibor
     'CHINA A50', 'ASX200', 'GBPAUD', 'NZDJPY',
-    // Maged
     'NZDUSD', 'HS50', 'NIKKEI', 'EURAUD', 'GBPNZD',
   ],
 }
 
 interface FinnhubQuote { c: number; h: number; l: number; o: number; t: number }
 
-async function fetchCurrentPrice(finnhubSymbol: string, apiKey: string, isCrypto: boolean): Promise<number> {
-  // Both OANDA and crypto use the standard quote endpoint
-  // Crypto candle endpoint requires higher tier -- quote works for both
+async function fetchQuote(finnhubSymbol: string, apiKey: string): Promise<FinnhubQuote> {
   const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(finnhubSymbol)}&token=${apiKey}`
-
   const response = await fetch(url)
   if (!response.ok) throw new Error(`Finnhub HTTP ${response.status}`)
-
   const quote: FinnhubQuote = await response.json()
   if (!quote.c || quote.c === 0) throw new Error(`No current price for ${finnhubSymbol}`)
-  return quote.c
+  return quote
 }
 
 async function main() {
   const SUPABASE_URL = process.env.SUPABASE_URL
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
   const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY
-
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !FINNHUB_API_KEY) {
-    console.error('Missing required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, FINNHUB_API_KEY')
+    console.error('Missing required env vars')
     process.exit(1)
   }
 
@@ -99,7 +80,7 @@ async function main() {
   const today = capturedAt.slice(0, 10)
   const sessionSymbols = SESSION_MARKETS[session]!
 
-  // Load market data from DB for this session's markets
+  // Load market data
   const { data: marketRows } = await db
     .from('markets')
     .select('market_id, symbol, price_data_provider, price_data_symbol')
@@ -109,15 +90,25 @@ async function main() {
     (marketRows ?? []).map(m => [m.symbol, m])
   )
 
-  // Load recent daily bars for zone recalculation with live price
-  const { data: recentBars } = await db
-    .from('market_state_daily')
-    .select('market_id, date, open, high, low, close')
-    .gte('date', new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
-    .order('date', { ascending: true })
+  // Load FULL bar history for each market -- needed for ATR convergence
+  // Use all available bars, not just recent 20
+  const allBars: any[] = []
+  let page = 0, hasMore = true
+  while (hasMore) {
+    const { data } = await db
+      .from('market_state_daily')
+      .select('market_id, date, open, high, low, close')
+      .order('date', { ascending: true })
+      .range(page * 1000, page * 1000 + 999)
+    if (!data?.length) { hasMore = false } else {
+      allBars.push(...data)
+      hasMore = data.length === 1000
+      page++
+    }
+  }
 
   const barsByMarketId = new Map<string, OhlcBar[]>()
-  for (const bar of (recentBars ?? [])) {
+  for (const bar of allBars) {
     if (!barsByMarketId.has(bar.market_id)) barsByMarketId.set(bar.market_id, [])
     barsByMarketId.get(bar.market_id)!.push({
       date: bar.date,
@@ -125,16 +116,6 @@ async function main() {
       low: Number(bar.low), close: Number(bar.close),
     })
   }
-
-  // Load today's daily state for zone fallback
-  const { data: dailyStates } = await db
-    .from('market_state_daily')
-    .select('market_id, zone')
-    .eq('date', today)
-
-  const dailyZoneByMarketId = new Map(
-    (dailyStates ?? []).map(d => [d.market_id, d.zone])
-  )
 
   const summary = { captured: 0, skipped: 0, errors: 0 }
 
@@ -145,13 +126,11 @@ async function main() {
       summary.skipped++
       continue
     }
-
     if (!market.price_data_symbol) {
       console.log(`  ${symbol}: no price_data_symbol mapped, skipping`)
       summary.skipped++
       continue
     }
-
     if (market.price_data_provider === 'IC_MARKETS') {
       console.log(`  ${symbol}: IC Markets provider -- manual feed required, skipping`)
       summary.skipped++
@@ -159,16 +138,47 @@ async function main() {
     }
 
     try {
-      const isCrypto = market.price_data_provider === 'FINNHUB_CRYPTO'
-      const currentPrice = await fetchCurrentPrice(market.price_data_symbol, FINNHUB_API_KEY, isCrypto)
+      // Fetch quote -- includes current price AND today's developing high/low
+      const quote = await fetchQuote(market.price_data_symbol, FINNHUB_API_KEY)
+      const currentPrice = quote.c
+      // Today's intraday high/low from Finnhub quote (h=day high, l=day low)
+      const sessionHigh = quote.h > 0 ? quote.h : null
+      const sessionLow = quote.l > 0 ? quote.l : null
 
-      let currentZone: string | null = dailyZoneByMarketId.get(market.market_id) ?? null
+      // Build market state using full bar history for accurate ATR
+      // Use today's intraday high/low for band calculation if available
       const bars = barsByMarketId.get(market.market_id) ?? []
+      let currentZone: string | null = null
 
       if (bars.length >= ATR_PERIOD) {
+        // If we have today's intraday high/low, use them for band calculation
+        // by creating a synthetic "today" bar with the developing range
+        let barsForState = bars
+        if (sessionHigh && sessionLow) {
+          const lastBar = bars[bars.length - 1]!
+          if (lastBar.date < today) {
+            // Previous day's bar is latest -- add today's developing bar
+            barsForState = [...bars, {
+              date: today,
+              open: currentPrice,
+              high: sessionHigh,
+              low: sessionLow,
+              close: currentPrice,
+            }]
+          } else {
+            // Today's bar exists -- update with latest intraday h/l
+            barsForState = [...bars.slice(0, -1), {
+              ...lastBar,
+              high: Math.max(lastBar.high, sessionHigh),
+              low: Math.min(lastBar.low, sessionLow),
+              close: currentPrice,
+            }]
+          }
+        }
+
         const state = buildMarketState({
           marketId: market.market_id,
-          ohlcSeries: bars,
+          ohlcSeries: barsForState,
           currentPrice: { price: currentPrice, capturedAt },
           parameters: { atrPeriod: ATR_PERIOD, zoneCount: ZONE_COUNT },
         })
@@ -187,6 +197,8 @@ async function main() {
         captured_at: capturedAt,
         current_price: currentPrice,
         current_zone: currentZone,
+        session_high: sessionHigh,
+        session_low: sessionLow,
       }
 
       if (!isDryRun) {
@@ -198,9 +210,8 @@ async function main() {
         }
       }
 
-      console.log(`  ${symbol}: price=${currentPrice}, zone=${currentZone}${isDryRun ? ' [DRY RUN]' : ''}`)
+      console.log(`  ${symbol}: price=${currentPrice}, zone=${currentZone}, h=${sessionHigh}, l=${sessionLow}${isDryRun ? ' [DRY RUN]' : ''}`)
       summary.captured++
-
     } catch (err) {
       console.error(`  ${symbol}: ${(err as Error).message}`)
       summary.errors++
