@@ -112,9 +112,6 @@ export function TeamPerformanceGrid({
   const shadowTriggered = shadowOutcomes.filter(o =>
     ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED'].includes(o.trade_outcome_status)
   )
-  const shadowResolved = shadowOutcomes.filter(o =>
-    ['TARGET_HIT', 'STOP_HIT', 'EXPIRY'].includes(o.trade_outcome_status)
-  )
   const shadowWins = shadowOutcomes.filter(o => o.trade_outcome_status === 'TARGET_HIT')
   const shadowWinRate = shadowTriggered.length > 0 ? shadowWins.length / shadowTriggered.length : null
   const shadowTriggerRate = shadowOutcomes.length > 0 ? shadowTriggered.length / shadowOutcomes.length : null
@@ -127,7 +124,7 @@ export function TeamPerformanceGrid({
   const actualTriggerRate = actualTrades.length > 0 ? actualTriggered.length / actualTrades.length : null
   const actualTotalR = actualTriggered.reduce((s, t) => s + (t.result_r ?? 0), 0)
 
-  // Team long-term R trend (sum across all analysts per month)
+  // Team long-term R trend
   const allMonths = [...new Set(kpiData
     .filter(k => k.kpi_name === 'total_return_r')
     .map(k => k.period_start)
@@ -146,96 +143,12 @@ export function TeamPerformanceGrid({
     const rows = index.get(analystId)?.get(kpiName) ?? []
     return rows
       .sort((a, b) => a.period_start.localeCompare(b.period_start))
-      .slice(-6) // last 6 months for sparkline
+      .slice(-6)
       .map(r => ({ month: monthLabel(r.period_start), value: getValue(r) }))
   }
 
   return (
     <div className="space-y-8">
-
-      {/* Shadow vs Actual summary */}
-      <section className="space-y-3">
-        <h2 className="text-sm font-medium">Shadow vs Actual Comparison</h2>
-        <div className="grid grid-cols-3 gap-3">
-          <div className="rounded-lg border border-border bg-card p-4 space-y-2">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Shadow Benchmark</p>
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Total setups</span><span className="font-medium">{shadowOutcomes.length}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger rate</span><span className="font-medium">{shadowTriggerRate !== null ? `${Math.round(shadowTriggerRate * 100)}%` : '—'}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate</span><span className="font-medium">{shadowWinRate !== null ? `${Math.round(shadowWinRate * 100)}%` : '—'}</span></div>
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Total R</span>
-                <span className={`font-medium ${shadowTotalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                  {shadowTotalR > 0 ? '+' : ''}{shadowTotalR.toFixed(2)}R
-                </span>
-              </div>
-            </div>
-          </div>
-          <div className="rounded-lg border border-border bg-card p-4 space-y-2">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Analyst Actual (30 days)</p>
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Total setups</span><span className="font-medium">{actualTrades.length}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger rate</span><span className="font-medium">{actualTriggerRate !== null ? `${Math.round(actualTriggerRate * 100)}%` : '—'}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate</span><span className="font-medium">{actualWinRate !== null ? `${Math.round(actualWinRate * 100)}%` : '—'}</span></div>
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Total R</span>
-                <span className={`font-medium ${actualTotalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                  {actualTotalR > 0 ? '+' : ''}{actualTotalR.toFixed(2)}R
-                </span>
-              </div>
-            </div>
-          </div>
-          <div className="rounded-lg border border-border bg-card p-4 space-y-2">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Delta (Shadow − Actual)</p>
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate delta</span>
-                <span className="font-medium">
-                  {shadowWinRate !== null && actualWinRate !== null
-                    ? `${((shadowWinRate - actualWinRate) * 100).toFixed(1)}pp` : '—'}
-                </span>
-              </div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger delta</span>
-                <span className="font-medium">
-                  {shadowTriggerRate !== null && actualTriggerRate !== null
-                    ? `${((shadowTriggerRate - actualTriggerRate) * 100).toFixed(1)}pp` : '—'}
-                </span>
-              </div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Status</span>
-                <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-                  {shadowTriggered.length < 30 ? `Accumulating (${shadowTriggered.length}/30)` : 'Ready'}
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Team long-term R trend */}
-      {teamReturnTrend.length > 0 && (
-        <section className="space-y-3">
-          <h2 className="text-sm font-medium">Team Total Return — Long Term</h2>
-          <div className="rounded-lg border border-border bg-card p-4">
-            <div className="h-40">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={teamReturnTrend} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                  <XAxis dataKey="month" tick={{ fontSize: 10 }} axisLine={false} tickLine={false}
-                    interval={Math.floor(teamReturnTrend.length / 12)} />
-                  <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false}
-                    tickFormatter={v => `${v > 0 ? '+' : ''}${v.toFixed(0)}R`} />
-                  <Tooltip formatter={(v: any) => [`${Number(v).toFixed(2)}R`, 'Team Return']}
-                    contentStyle={{ fontSize: 11 }} />
-                  <ReferenceLine y={0} stroke="hsl(var(--border))" />
-                  <Bar dataKey="value" radius={[2, 2, 0, 0]}>
-                    {teamReturnTrend.map((entry, i) => (
-                      <Cell key={i} fill={entry.value >= 0 ? '#22c55e' : '#ef4444'} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </section>
-      )}
 
       {/* Team summary row */}
       <section className="space-y-3">
@@ -359,6 +272,91 @@ export function TeamPerformanceGrid({
           </table>
         </div>
       </section>
+
+      {/* Team long-term R trend */}
+      {teamReturnTrend.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-medium">Team Total Return — Long Term</h2>
+          <div className="rounded-lg border border-border bg-card p-4">
+            <div className="h-40">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={teamReturnTrend} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <XAxis dataKey="month" tick={{ fontSize: 10 }} axisLine={false} tickLine={false}
+                    interval={Math.floor(teamReturnTrend.length / 12)} />
+                  <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false}
+                    tickFormatter={v => `${v > 0 ? '+' : ''}${v.toFixed(0)}R`} />
+                  <Tooltip formatter={(v: any) => [`${Number(v).toFixed(2)}R`, 'Team Return']}
+                    contentStyle={{ fontSize: 11 }} />
+                  <ReferenceLine y={0} stroke="hsl(var(--border))" />
+                  <Bar dataKey="value" radius={[2, 2, 0, 0]}>
+                    {teamReturnTrend.map((entry, i) => (
+                      <Cell key={i} fill={entry.value >= 0 ? '#22c55e' : '#ef4444'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Shadow vs Actual summary */}
+      <section className="space-y-3">
+        <h2 className="text-sm font-medium">Shadow vs Actual Comparison</h2>
+        <div className="grid grid-cols-3 gap-3">
+          <div className="rounded-lg border border-border bg-card p-4 space-y-2">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Shadow Benchmark</p>
+            <div className="space-y-1.5">
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Total setups</span><span className="font-medium">{shadowOutcomes.length}</span></div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger rate</span><span className="font-medium">{shadowTriggerRate !== null ? `${Math.round(shadowTriggerRate * 100)}%` : '—'}</span></div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate</span><span className="font-medium">{shadowWinRate !== null ? `${Math.round(shadowWinRate * 100)}%` : '—'}</span></div>
+              <div className="flex justify-between text-xs">
+                <span className="text-muted-foreground">Total R</span>
+                <span className={`font-medium ${shadowTotalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                  {shadowTotalR > 0 ? '+' : ''}{shadowTotalR.toFixed(2)}R
+                </span>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-lg border border-border bg-card p-4 space-y-2">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Analyst Actual (30 days)</p>
+            <div className="space-y-1.5">
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Total setups</span><span className="font-medium">{actualTrades.length}</span></div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger rate</span><span className="font-medium">{actualTriggerRate !== null ? `${Math.round(actualTriggerRate * 100)}%` : '—'}</span></div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate</span><span className="font-medium">{actualWinRate !== null ? `${Math.round(actualWinRate * 100)}%` : '—'}</span></div>
+              <div className="flex justify-between text-xs">
+                <span className="text-muted-foreground">Total R</span>
+                <span className={`font-medium ${actualTotalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                  {actualTotalR > 0 ? '+' : ''}{actualTotalR.toFixed(2)}R
+                </span>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-lg border border-border bg-card p-4 space-y-2">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Delta (Shadow − Actual)</p>
+            <div className="space-y-1.5">
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate delta</span>
+                <span className="font-medium">
+                  {shadowWinRate !== null && actualWinRate !== null
+                    ? `${((shadowWinRate - actualWinRate) * 100).toFixed(1)}pp` : '—'}
+                </span>
+              </div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger delta</span>
+                <span className="font-medium">
+                  {shadowTriggerRate !== null && actualTriggerRate !== null
+                    ? `${((shadowTriggerRate - actualTriggerRate) * 100).toFixed(1)}pp` : '—'}
+                </span>
+              </div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Status</span>
+                <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                  {shadowTriggered.length < 30 ? `Accumulating (${shadowTriggered.length}/30)` : 'Ready'}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
     </div>
   )
 }
