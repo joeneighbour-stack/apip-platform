@@ -620,6 +620,8 @@ async function main() {
             target: hidden.target,
             rr: hidden.rr,
             templateSource: diagnostics.templateSource,
+            direction: result.opportunity.direction,
+            session,
           })
 
           const { data: shadowRow, error: shadowError } = await db.from('shadow_trades').insert({
@@ -632,6 +634,8 @@ async function main() {
             rr: shadowTrade.rr,
             template_source: shadowTrade.templateSource,
             confidence_label: shadowTrade.confidenceLabel,
+            direction: shadowTrade.direction,
+            session: shadowTrade.session,
             generated_at: generatedAt,
           }).select('shadow_trade_id').single()
 
