@@ -26,7 +26,6 @@
 // in V1; a reader joins back to template_profiles/analyst_profiles instead.
 // They remain available in the `diagnostics` return value for debugging/
 // testing ONLY -- diagnostics is explicitly not a persisted shape.
-
 import type { AtrZone, Direction, SessionType, ImplementedValidityState } from '../types/domain.js';
 import type { MarketStateOutput } from './marketStateService.js';
 import type { MarketRegimeOutput } from './marketRegimeService.js';
@@ -38,9 +37,7 @@ import { estimateTriggerProbability } from './triggerProbabilityService.js';
 import { calculateExpectedR } from './expectedRService.js';
 import { assessCondition } from './recommendationLifecycleService.js';
 import { formatGuidanceRange } from './guidanceRangeFormatter.js';
-
 export interface RecommendationInputTrade extends HistoricalTradeForProfiling, AnalystHistoricalTrade {}
-
 export interface BuildRecommendationInput {
   recommendationVersionId: string;
   generatedAt: string;
@@ -60,9 +57,7 @@ export interface BuildRecommendationInput {
   parameterSnapshotHash: string;
   marketDisplayPrecision: number | null; // from markets.display_precision -- see guidanceRangeFormatter.ts
 }
-
 export type OpportunityLifecycleStatus = 'DRAFT' | 'GENERATED' | 'ASSIGNED' | 'SHOWN' | 'ACTIVE' | 'CLOSED' | 'CANCELLED';
-
 /** Maps to the `opportunities` table. */
 export interface OpportunityOutput {
   opportunityId: string;
@@ -75,10 +70,9 @@ export interface OpportunityOutput {
   analystAction: 'ENTER_NOW' | 'WAIT_FOR_PREFERRED_ZONE';
   expectedR: number;
   triggerProbability: number;
-  assignedAnalystId: string | null; // a PREFERENCE (AnalystProfileService's pick) -- AllocationService's coverage_allocation may differ, see Section 3.5
-  opportunityLifecycleStatus: OpportunityLifecycleStatus; // set to 'GENERATED' by this service; later transitions are other services' responsibility
+  assignedAnalystId: string | null;
+  opportunityLifecycleStatus: OpportunityLifecycleStatus;
 }
-
 /** Maps to the `recommendation_versions` table -- analyst-facing fields only. */
 export interface RecommendationVersionOutput {
   recommendationVersionId: string;
@@ -96,20 +90,12 @@ export interface RecommendationVersionOutput {
   regimeTags: string[];
   parameterSnapshot: Record<string, unknown>;
   parameterSnapshotHash: string;
-  // Persisted columns, per migration 031_display_precision_and_condition_fields.sql:
-  // these explain why a recommendation became stale and must not be
-  // recomputed later from market data that has since moved on.
   volatilityWarning: string;
   atrMoveSinceGeneration: number | null;
 }
-
 /**
- * Precise numeric levels for the HIDDEN shadow trade only (ShadowTradeService,
- * Step 7, not yet built). Never shown to an analyst, never persisted to
- * recommendation_versions -- that table gets the TEXT riskRange/targetRange
- * instead. Kept as a structurally separate return value, not merged into
- * RecommendationVersionOutput, so a future accidental analyst-facing read of
- * "the recommendation" cannot pick these up by mistake.
+ * Precise numeric levels for the HIDDEN shadow trade only (ShadowTradeService).
+ * Never shown to an analyst, never persisted to recommendation_versions.
  */
 export interface HiddenExecutionLevels {
   entryMid: number;
@@ -117,7 +103,6 @@ export interface HiddenExecutionLevels {
   target: number;
   rr: number;
 }
-
 /** NOT a persisted shape. Debugging/testing aid only -- see file header. */
 export interface RecommendationDiagnostics {
   templateSource: 'historical_template' | 'fallback';
@@ -131,16 +116,14 @@ export interface RecommendationDiagnostics {
   profileTrades: number;
   profileQuality: 'HIGH' | 'MEDIUM' | 'LOW';
   eligibleAnalysts: string[];
-  eventWarning: string; // no column home on opportunities or recommendation_versions -- see file header
+  eventWarning: string;
 }
-
 export interface BuildRecommendationOutput {
   opportunity: OpportunityOutput;
   recommendationVersion: RecommendationVersionOutput;
   hiddenExecutionLevels: HiddenExecutionLevels;
   diagnostics: RecommendationDiagnostics;
 }
-
 export function buildRecommendation(input: BuildRecommendationInput): BuildRecommendationOutput {
   const {
     recommendationVersionId, generatedAt, market, session, marketState, marketRegime, eventRisks,
@@ -148,41 +131,28 @@ export function buildRecommendation(input: BuildRecommendationInput): BuildRecom
     staleAtrThreshold, forceRecalcAtrThreshold, parameterSnapshot, parameterSnapshotHash,
     marketDisplayPrecision,
   } = input;
-
   const templates: TemplateProfile[] = buildTemplateProfiles(trades);
   const template = selectBestTemplate(market, templates);
   const direction = template.direction;
   const zone = template.preferredEntryZone;
-
   const analystProfiles: AnalystProfile[] = buildAnalystProfiles(trades);
   const profile = selectBestAnalyst(market, direction, zone, analystProfiles, activeAnalysts, session);
-
   const entryStopTarget = buildEntryOptimizer({ marketState, direction, preferredZone: zone, minimumRr });
-
   const trigger = estimateTriggerProbability({
     market, direction, zone, trades, minTriggerSample, fallbackProbability: fallbackTriggerProbability,
   });
-
   const expected = calculateExpectedR({
     template: { templateAvgR: template.templateAvgR, templateTrades: template.templateTrades },
     profile: { profileAvgR: profile.profileAvgR, profileTrades: profile.profileTrades },
     trigger: { triggerProbability: trigger.triggerProbability },
   });
-
   const topEventRisk = eventRisks.length > 0 ? [...eventRisks].sort((a, b) => b.riskScore - a.riskScore)[0]! : null;
   const eventRiskStatus = topEventRisk?.eventRiskStatus ?? 'NONE';
   const eventWarning = topEventRisk?.analystWarning ?? '';
-
   const dateOnly = generatedAt.slice(0, 10);
-  const opportunityId = `${dateOnly}_${market}_${session}_v1`; // literal "_v1" suffix -- not versionNumber
-
+  const opportunityId = `${dateOnly}_${market}_${session}_v1`;
   const analystAction: 'ENTER_NOW' | 'WAIT_FOR_PREFERRED_ZONE' =
     marketState.currentZone === zone ? 'ENTER_NOW' : 'WAIT_FOR_PREFERRED_ZONE';
-
-  // Generation-time condition assessment: trivially compares this market
-  // state snapshot against itself (current === generation, by construction)
-  // -- per Architecture Section 5.1, always VALID in practice. Real drift
-  // detection happens in the periodic re-check (Step 6), not here.
   const condition = assessCondition({
     currentPrice: marketState.currentPrice,
     priceAtGeneration: marketState.currentPrice,
@@ -192,12 +162,21 @@ export function buildRecommendation(input: BuildRecommendationInput): BuildRecom
     staleAtrThreshold, forceRecalcAtrThreshold,
   });
 
+  // ── Analyst-facing guidance ranges ──────────────────────────────────────
+  // Uses ATR-normalised distance distributions (q25–q75) from validated
+  // historical data. NOT arbitrary tolerance bands around shadow prices.
   const riskRange = formatGuidanceRange({
-    anchorPrice: entryStopTarget.stop, atr: marketState.atr14 ?? NaN, direction, type: 'risk',
+    entryMid: entryStopTarget.entryMid,
+    distanceLow: entryStopTarget.riskRangeLow,
+    distanceHigh: entryStopTarget.riskRangeHigh,
+    direction, type: 'risk',
     displayPrecision: marketDisplayPrecision,
   });
   const targetRange = formatGuidanceRange({
-    anchorPrice: entryStopTarget.target, atr: marketState.atr14 ?? NaN, direction, type: 'target',
+    entryMid: entryStopTarget.entryMid,
+    distanceLow: entryStopTarget.targetRangeLow,
+    distanceHigh: entryStopTarget.targetRangeHigh,
+    direction, type: 'target',
     displayPrecision: marketDisplayPrecision,
   });
 
@@ -207,7 +186,6 @@ export function buildRecommendation(input: BuildRecommendationInput): BuildRecom
     expectedR: expected.expectedR, triggerProbability: trigger.triggerProbability,
     assignedAnalystId: profile.assignedAnalyst, opportunityLifecycleStatus: 'GENERATED',
   };
-
   const recommendationVersion: RecommendationVersionOutput = {
     recommendationVersionId, opportunityId, versionNumber: 1,
     entryRangeLow: entryStopTarget.entryRangeLow, entryRangeHigh: entryStopTarget.entryRangeHigh,
@@ -218,11 +196,9 @@ export function buildRecommendation(input: BuildRecommendationInput): BuildRecom
     parameterSnapshot, parameterSnapshotHash,
     volatilityWarning: condition.volatilityWarning, atrMoveSinceGeneration: condition.atrMoveSinceGeneration,
   };
-
   const hiddenExecutionLevels: HiddenExecutionLevels = {
     entryMid: entryStopTarget.entryMid, stop: entryStopTarget.stop, target: entryStopTarget.target, rr: entryStopTarget.rr,
   };
-
   const diagnostics: RecommendationDiagnostics = {
     templateSource: template.templateSource, templateAvgR: template.templateAvgR, templateWinRate: template.templateWinRate,
     templateTrades: template.templateTrades, templateQuality: template.templateQuality,
@@ -231,6 +207,5 @@ export function buildRecommendation(input: BuildRecommendationInput): BuildRecom
     eligibleAnalysts: profile.eligibleAnalysts,
     eventWarning,
   };
-
   return { opportunity, recommendationVersion, hiddenExecutionLevels, diagnostics };
 }
