@@ -21,7 +21,7 @@ const SYSTEM_ENGINE_ID = 'ab9359b6-0e78-49fc-8a0a-1cf589552280'
 const ATR_PERIOD = 14
 const ZONE_COUNT = 4
 const MINIMUM_RR = 2.0
-const MIN_TRIGGER_SAMPLE = 5
+const MIN_TRIGGER_SAMPLE = 20
 const FALLBACK_TRIGGER_PROBABILITY = 0.5
 const STALE_ATR_THRESHOLD = 0.25
 const FORCE_RECALC_ATR_THRESHOLD = 0.5
@@ -391,6 +391,12 @@ async function main() {
       const marketStateWithZone = { ...marketState, currentZone }
 
       if (!currentZone) { console.log(`  ${symbol}: no zone`); continue }
+
+            const opportunityAssessment = assessOpportunity({ marketState: marketStateWithZone })
+      if (!opportunityAssessment.hasOpportunity) {
+        console.log(`  ${symbol}: no opportunity (${opportunityAssessment.noRecommendationReason})`)
+        continue
+      }
 
       const allTrades = tradesBySymbol.get(symbol) ?? []
       const rvId = randomUUID()
