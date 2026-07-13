@@ -69,7 +69,7 @@ export function ThresholdsPanel() {
         </div>
 
         <div className="pt-2 border-t border-border flex items-center gap-3">
-          <button onClick={handleSave}
+          <button onClick={handleSave} disabled={true}
             className="text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
             Save thresholds
           </button>

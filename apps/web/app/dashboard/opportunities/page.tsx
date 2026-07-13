@@ -1,8 +1,10 @@
 import { getCurrentUser } from '@/lib/auth'
+import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 
 export default async function OpportunityCentrePage() {
   const user = await getCurrentUser()
+  if (!['ANALYST', 'MANAGER', 'ADMIN'].includes(user.role)) redirect('/login')
   const supabase = await createClient()
   const isManager = ['MANAGER', 'ADMIN'].includes(user.role)
   const today = new Date().toISOString().split('T')[0]
@@ -237,3 +239,5 @@ export default async function OpportunityCentrePage() {
     </div>
   )
 }
+
+
