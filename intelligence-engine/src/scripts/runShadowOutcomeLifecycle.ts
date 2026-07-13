@@ -6,20 +6,26 @@
 //   - Session low/high reaches entry range → TRIGGERED
 //   - Session high/low hits target → TARGET_HIT
 //   - Session low/high hits stop → STOP_HIT
-//   - Expiry time passed without trigger → EXPIRY
+//   - Expiry time passed without trigger/resolution → EXPIRY
 //
 // Uses market_state_intraday session_high/session_low for all price checks.
-// This is correct because:
-//   BUY  entries are limit orders BELOW current price -- triggered when low falls to entry
-//   SELL entries are limit orders ABOVE current price -- triggered when high rises to entry
-//   Never use current price alone -- it cannot tell you if entry was touched intraday.
+// Snapshots are matched by BOTH market_id AND session -- a US shadow trade
+// only uses US session snapshot data, never European. This ensures band
+// calculations are reset correctly at each session open.
 //
-// Session expiry windows (UK time):
-//   European: 21:00 same day
-//   US:       21:00 same day
-//   APAC:     16:00 following day
+// BUY  entries are limit orders BELOW current price -- triggered when low falls to entry
+// SELL entries are limit orders ABOVE current price -- triggered when high rises to entry
 //
-// Run after each session snapshot:
+// Session expiry windows (UTC):
+//   European: 20:00 UTC same day
+//   US:       20:00 UTC same day
+//   APAC:     15:00 UTC following day
+//   CRYPTO:   11:00 UTC following day (12:00 UK BST)
+//
+// Expiry applies to both NOT_TRIGGERED and TRIGGERED trades.
+// Stop is checked before target -- if both hit in same session, stop wins.
+//
+// Run via cron every 30 mins Mon-Fri 05:00-20:00 UTC:
 //   npx tsx src/scripts/runShadowOutcomeLifecycle.ts
 //   npx tsx src/scripts/runShadowOutcomeLifecycle.ts --dry-run
 //
@@ -29,16 +35,15 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
-// Session expiry rules (UK time, approximate UTC offset for BST)
-function getExpiryUtc(opportunityDate: string, session: string): Date {
+function getExpiryUtc(opportunityDate: string, session: string, assetClass: string | null): Date {
   const date = new Date(opportunityDate + 'T00:00:00Z')
-  if (session === 'APAC') {
-    // Expires 16:00 UK following day ≈ 15:00 UTC (BST)
-    return new Date(date.getTime() + 39 * 60 * 60 * 1000)
-  } else {
-    // European and US expire 21:00 UK same day ≈ 20:00 UTC (BST)
-    return new Date(date.getTime() + 20 * 60 * 60 * 1000)
+  if (assetClass === 'CRYPTO') {
+    return new Date(date.getTime() + 35 * 60 * 60 * 1000) // next day 11:00 UTC
   }
+  if (session === 'APAC') {
+    return new Date(date.getTime() + 39 * 60 * 60 * 1000) // next day 15:00 UTC
+  }
+  return new Date(date.getTime() + 20 * 60 * 60 * 1000) // same day 20:00 UTC
 }
 
 async function main() {
@@ -59,20 +64,20 @@ async function main() {
 
   const now = new Date()
 
-  // Load all active shadow trades (NOT_TRIGGERED and TRIGGERED)
-  // TRIGGERED trades need re-evaluation for TARGET_HIT/STOP_HIT
+  // Load active shadow trades (NOT_TRIGGERED and TRIGGERED)
   const { data: activeTrades } = await db
     .from('shadow_trade_outcomes')
     .select(`
       shadow_outcome_id,
       shadow_trade_id,
       trade_outcome_status,
+      result_r,
       shadow_trade:shadow_trade_id (
         entry, stop, target, rr, direction, session,
         opportunity:opportunity_id (
           opportunity_id, date, session,
           market:market_id (
-            market_id, symbol, display_precision
+            market_id, symbol, display_precision, asset_class
           )
         )
       )
@@ -86,19 +91,19 @@ async function main() {
 
   console.log(`Active trades to evaluate: ${activeTrades.length} (NOT_TRIGGERED + TRIGGERED)`)
 
-  // Load latest intraday snapshot for each market/session
-  // We use session_high and session_low for accurate trigger detection
+  // Load intraday snapshots -- index by market_id + session (most recent per combination)
   const { data: snapshots } = await db
     .from('market_state_intraday')
     .select('market_id, session, session_high, session_low, current_price, captured_at')
     .gte('captured_at', new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString())
     .order('captured_at', { ascending: false })
 
-  // Index snapshots by market_id -- take most recent per market
-  const snapshotByMarket = new Map<string, any>()
+  // Index: `${market_id}::${session}` → most recent snapshot
+  const snapshotByMarketSession = new Map<string, any>()
   for (const snap of (snapshots ?? [])) {
-    if (!snapshotByMarket.has(snap.market_id)) {
-      snapshotByMarket.set(snap.market_id, snap)
+    const key = `${snap.market_id}::${snap.session}`
+    if (!snapshotByMarketSession.has(key)) {
+      snapshotByMarketSession.set(key, snap)
     }
   }
 
@@ -112,25 +117,34 @@ async function main() {
     if (!st || !opp || !market) { summary.errors++; continue }
 
     const session = st.session ?? opp.session ?? 'EUROPEAN'
-    const expiryUtc = getExpiryUtc(opp.date, session)
+    const assetClass = market.asset_class ?? null
+    const expiryUtc = getExpiryUtc(opp.date, session, assetClass)
 
-    // Check expiry first
-    if (now > expiryUtc && outcome.trade_outcome_status === 'NOT_TRIGGERED') {
-      console.log(`  ${market.symbol}: EXPIRY (expired ${expiryUtc.toISOString()})`)
+    // ── Expiry check -- applies to BOTH NOT_TRIGGERED and TRIGGERED ─────────
+    if (now > expiryUtc) {
+      const resultR = outcome.trade_outcome_status === 'TRIGGERED'
+        ? (Number(outcome.result_r) ?? 0)
+        : 0
+      console.log(`  ${market.symbol} (${session}): ${outcome.trade_outcome_status} → EXPIRY (expired ${expiryUtc.toISOString()})`)
       if (!isDryRun) {
         await db.from('shadow_trade_outcomes').update({
           trade_outcome_status: 'EXPIRY',
           outcome_timestamp: expiryUtc.toISOString(),
-          result_r: 0,
+          result_r: resultR,
         }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
       }
       summary.expired++
       continue
     }
 
-    // Get intraday snapshot for this market
-    const snap = snapshotByMarket.get(market.market_id)
+    // ── Get session-matched snapshot ────────────────────────────────────────
+    // Critical: only use snapshot data from the SAME session as the trade.
+    // A US trade must not use European session high/low data.
+    const snapKey = `${market.market_id}::${session}`
+    const snap = snapshotByMarketSession.get(snapKey)
+
     if (!snap?.session_high || !snap?.session_low) {
+      // No snapshot for this session yet -- session may not have started
       summary.unchanged++
       continue
     }
@@ -140,16 +154,15 @@ async function main() {
     const target = Number(st.target)
     const rr     = Number(st.rr)
 
-    // Direction: use stored direction, fall back to deriving from stop/target
     const direction = st.direction ?? (target > entry ? 'BUY' : 'SELL')
     const isBuy = direction === 'BUY'
 
     const sessionHigh = Number(snap.session_high)
     const sessionLow  = Number(snap.session_low)
 
-    // ── Trigger check using session high/low ────────────────────────────────
-    // BUY:  price must DROP to entry → check session_low <= entry
-    // SELL: price must RISE to entry → check session_high >= entry
+    // ── Trigger check ───────────────────────────────────────────────────────
+    // BUY:  triggered when session_low <= entry (price dropped to buy zone)
+    // SELL: triggered when session_high >= entry (price rallied to sell zone)
     const priceReachedEntry = isBuy
       ? sessionLow <= entry
       : sessionHigh >= entry
@@ -160,41 +173,25 @@ async function main() {
     }
 
     // ── Outcome determination ───────────────────────────────────────────────
-    // Once entry is reached, check if stop or target was also hit same candle
-    // BUY:  target = high >= target; stop = low <= stop
-    // SELL: target = low <= target;  stop = high >= stop
+    // Stop checked BEFORE target -- if both breached in same session, stop wins.
     let newStatus: string
     let resultR: number
 
     if (isBuy) {
-      if (sessionHigh >= target) {
-        newStatus = 'TARGET_HIT'
-        resultR = rr
-      } else if (sessionLow <= stop) {
-        newStatus = 'STOP_HIT'
-        resultR = -1
-      } else if (priceReachedEntry) {
-        // Entry reached but neither target nor stop hit yet
-        const currentPrice = Number(snap.current_price)
-        newStatus = 'TRIGGERED'
-        resultR = (currentPrice - entry) / Math.abs(entry - stop)
+      if (sessionLow <= stop) {
+        newStatus = 'STOP_HIT'; resultR = -1
+      } else if (sessionHigh >= target) {
+        newStatus = 'TARGET_HIT'; resultR = rr
       } else {
-        // TRIGGERED trade: re-check target/stop with latest prices
         const currentPrice = Number(snap.current_price)
         newStatus = 'TRIGGERED'
         resultR = (currentPrice - entry) / Math.abs(entry - stop)
       }
     } else {
-      if (sessionLow <= target) {
-        newStatus = 'TARGET_HIT'
-        resultR = rr
-      } else if (sessionHigh >= stop) {
-        newStatus = 'STOP_HIT'
-        resultR = -1
-      } else if (priceReachedEntry) {
-        const currentPrice = Number(snap.current_price)
-        newStatus = 'TRIGGERED'
-        resultR = (entry - currentPrice) / Math.abs(entry - stop)
+      if (sessionHigh >= stop) {
+        newStatus = 'STOP_HIT'; resultR = -1
+      } else if (sessionLow <= target) {
+        newStatus = 'TARGET_HIT'; resultR = rr
       } else {
         const currentPrice = Number(snap.current_price)
         newStatus = 'TRIGGERED'
@@ -202,14 +199,14 @@ async function main() {
       }
     }
 
-    // Only update if status has changed or result_r has improved
-    if (newStatus === outcome.trade_outcome_status && newStatus === 'TRIGGERED') {
+    // Skip if already TRIGGERED and still TRIGGERED (no meaningful update)
+    if (newStatus === 'TRIGGERED' && outcome.trade_outcome_status === 'TRIGGERED') {
       summary.unchanged++
       continue
     }
 
     const precision = market.display_precision ?? 4
-    console.log(`  ${market.symbol} ${direction}: ${outcome.trade_outcome_status} → ${newStatus}`)
+    console.log(`  ${market.symbol} ${direction} (${session}): ${outcome.trade_outcome_status} → ${newStatus}`)
     console.log(`    entry=${entry.toFixed(precision)}, low=${sessionLow.toFixed(precision)}, high=${sessionHigh.toFixed(precision)}, stop=${stop.toFixed(precision)}, target=${target.toFixed(precision)}, R=${resultR.toFixed(2)}`)
 
     if (!isDryRun) {
