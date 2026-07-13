@@ -526,7 +526,7 @@ async function main() {
           opportunity_lifecycle_status: 'ASSIGNED',
           analyst_action: opp.analystAction,
           assigned_analyst_id: allocation.assignedAnalystId,
-        }, { onConflict: 'date,market_id,session' }).select('opportunity_id').single()
+        }, { onConflict: 'date,market_id,session,version' }).select('opportunity_id').single()
 
         if (oppErr || !oppRow) { console.error(`  ${market.symbol} opp error: ${oppErr?.message}`); continue }
         opportunitiesCreated++
