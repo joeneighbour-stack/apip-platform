@@ -93,7 +93,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
   )
   const wins = shadowOutcomes.filter(o => o.trade_outcome_status === 'TARGET_HIT')
   const shadowWinRate = triggered.length > 0 ? wins.length / triggered.length : null
-  const shadowTriggerRate = resolved.length > 0 ? triggered.length / resolved.length : null
+  const shadowTriggerRate = shadowOutcomes.length > 0 ? triggered.length / shadowOutcomes.length : null
   const shadowTotalR = triggered.reduce((sum, o) => sum + (shadowResultR(o) ?? 0), 0)
   const shadowAvgRr = triggered.length > 0
     ? triggered.reduce((s, o) => s + (o.shadow_trade?.rr ?? 0), 0) / triggered.length
