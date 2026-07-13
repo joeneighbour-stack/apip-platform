@@ -14,7 +14,6 @@
 //
 // Required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, FINNHUB_API_KEY
 // ============================================================================
-
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -22,6 +21,7 @@ import { buildMarketState, type OhlcBar } from '../services/marketStateService.j
 
 const ATR_PERIOD = 14
 const ZONE_COUNT = 4
+
 const daysArg = process.argv.find(a => a.startsWith('--days='))?.split('=')[1]
 const DAYS_TO_FETCH = Number(daysArg ?? 60)
 
@@ -32,7 +32,6 @@ interface FinnhubCandleResponse {
 async function fetchRecentOhlc(finnhubSymbol: string, days: number, apiKey: string, isCrypto = false): Promise<OhlcBar[]> {
   const to = Math.floor(Date.now() / 1000)
   const from = to - days * 24 * 60 * 60
-  // Crypto uses /crypto/candle, FX/indices use /forex/candle
   const endpoint = isCrypto
     ? `https://finnhub.io/api/v1/crypto/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=D&from=${from}&to=${to}&token=${apiKey}`
     : `https://finnhub.io/api/v1/forex/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=D&from=${from}&to=${to}&token=${apiKey}`
@@ -52,7 +51,6 @@ async function main() {
   const SUPABASE_URL = process.env.SUPABASE_URL
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
   const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY
-
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !FINNHUB_API_KEY) {
     console.error('Missing required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, FINNHUB_API_KEY')
     process.exit(1)
@@ -66,7 +64,6 @@ async function main() {
   console.log(`Mode: ${isDryRun ? 'DRY RUN' : 'LIVE'}`)
   console.log(`Fetching last ${DAYS_TO_FETCH} days of daily OHLC\n`)
 
-  // Load all active markets with Finnhub OANDA symbols from DB
   const { data: marketRows, error: marketError } = await db
     .from('markets')
     .select('market_id, symbol, price_data_provider, price_data_symbol')
@@ -92,15 +89,10 @@ async function main() {
 
   const summary = { upserted: 0, skipped: 0, errors: 0 }
   const today = new Date().toISOString().slice(0, 10)
-
-  // Deduplicate by finnhub symbol -- some markets share the same feed (e.g. DOW/DOW Futures)
   const seen = new Set<string>()
 
   for (const market of markets) {
     if (!market.price_data_symbol) continue
-    if (seen.has(market.price_data_symbol)) {
-      // Still upsert with this market_id pointing to same source data
-    }
     seen.add(market.price_data_symbol)
 
     try {
@@ -117,16 +109,13 @@ async function main() {
       for (let i = ATR_PERIOD - 1; i < bars.length; i++) {
         const bar = bars[i]!
         if (bar.date > today) continue
-
         const state = buildMarketState({
           marketId: market.market_id,
           ohlcSeries: bars.slice(0, i + 1),
           currentPrice: { price: bar.close, capturedAt: bar.date },
           parameters: { atrPeriod: ATR_PERIOD, zoneCount: ZONE_COUNT },
         })
-
         if (state.currentZone === null || state.atr14 === null) continue
-
         rows.push({
           market_id: market.market_id,
           date: bar.date,
@@ -145,7 +134,7 @@ async function main() {
           .from('market_state_daily')
           .upsert(rows, { onConflict: 'market_id,date' })
         if (error) {
-          console.error(`  ${market.symbol}: upsert error — ${error.message}`)
+          console.error(`  ${market.symbol}: upsert error -- ${error.message}`)
           summary.errors++
           continue
         }
@@ -158,10 +147,8 @@ async function main() {
         currentPrice: { price: latestBar.close, capturedAt: latestBar.date },
         parameters: { atrPeriod: ATR_PERIOD, zoneCount: ZONE_COUNT },
       })
-
       console.log(`  ${market.symbol}: ${rows.length} rows. Latest (${latestBar.date}): close=${latestBar.close}, ATR=${latestState.atr14?.toFixed(4)}, zone=${latestState.currentZone}${isDryRun ? ' [DRY RUN]' : ''}`)
       summary.upserted += rows.length
-
     } catch (err) {
       console.error(`  ${market.symbol}: ${(err as Error).message}`)
       summary.errors++
@@ -175,6 +162,12 @@ async function main() {
   console.log(`Markets skipped: ${summary.skipped}`)
   console.log(`Errors: ${summary.errors}`)
   if (isDryRun) console.log('\nDRY RUN -- nothing written.')
+
+  // Exit 1 if all markets failed -- ensures CI/cron alerts fire on total failure
+  if (!isDryRun && summary.errors > 0 && summary.upserted === 0) {
+    console.error('All markets failed to populate -- exiting with code 1')
+    process.exit(1)
+  }
 }
 
 const thisFilePath = fileURLToPath(import.meta.url)

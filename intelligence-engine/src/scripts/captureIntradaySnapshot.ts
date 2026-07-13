@@ -91,7 +91,6 @@ async function main() {
   )
 
   // Load FULL bar history for each market -- needed for ATR convergence
-  // Use all available bars, not just recent 20
   const allBars: any[] = []
   let page = 0, hasMore = true
   while (hasMore) {
@@ -138,26 +137,19 @@ async function main() {
     }
 
     try {
-      // Fetch quote -- includes current price AND today's developing high/low
       const quote = await fetchQuote(market.price_data_symbol, FINNHUB_API_KEY)
       const currentPrice = quote.c
-      // Today's intraday high/low from Finnhub quote (h=day high, l=day low)
       const sessionHigh = quote.h > 0 ? quote.h : null
       const sessionLow = quote.l > 0 ? quote.l : null
 
-      // Build market state using full bar history for accurate ATR
-      // Use today's intraday high/low for band calculation if available
       const bars = barsByMarketId.get(market.market_id) ?? []
       let currentZone: string | null = null
 
       if (bars.length >= ATR_PERIOD) {
-        // If we have today's intraday high/low, use them for band calculation
-        // by creating a synthetic "today" bar with the developing range
         let barsForState = bars
         if (sessionHigh && sessionLow) {
           const lastBar = bars[bars.length - 1]!
           if (lastBar.date < today) {
-            // Previous day's bar is latest -- add today's developing bar
             barsForState = [...bars, {
               date: today,
               open: currentPrice,
@@ -166,7 +158,6 @@ async function main() {
               close: currentPrice,
             }]
           } else {
-            // Today's bar exists -- update with latest intraday h/l
             barsForState = [...bars.slice(0, -1), {
               ...lastBar,
               high: Math.max(lastBar.high, sessionHigh),
@@ -175,7 +166,6 @@ async function main() {
             }]
           }
         }
-
         const state = buildMarketState({
           marketId: market.market_id,
           ohlcSeries: barsForState,
@@ -204,7 +194,7 @@ async function main() {
       if (!isDryRun) {
         const { error } = await db.from('market_state_intraday').insert(row)
         if (error) {
-          console.error(`  ${symbol}: insert error — ${error.message}`)
+          console.error(`  ${symbol}: insert error -- ${error.message}`)
           summary.errors++
           continue
         }
@@ -225,6 +215,12 @@ async function main() {
   console.log(`Skipped: ${summary.skipped}`)
   console.log(`Errors: ${summary.errors}`)
   if (isDryRun) console.log('\nDRY RUN -- nothing written.')
+
+  // Exit 1 if all markets failed -- ensures CI/cron alerts fire on total failure
+  if (!isDryRun && summary.errors > 0 && summary.captured === 0) {
+    console.error('All markets failed to capture -- exiting with code 1')
+    process.exit(1)
+  }
 }
 
 const thisFilePath = fileURLToPath(import.meta.url)

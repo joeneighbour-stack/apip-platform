@@ -337,9 +337,10 @@ async function main() {
       let pubProcessed = 0
       for (let i = 0; i < pubRows.length; i += BATCH_SIZE) {
         const batch = pubRows.slice(i, i + BATCH_SIZE)
-        await db
+        const { error: pubErr } = await db
           .from('analyst_publications')
           .upsert(batch, { onConflict: 'source_system,source_record_id' })
+        if (pubErr) console.error(`  analyst_publications upsert error: ${pubErr.message}`)
         pubProcessed += batch.length
         process.stdout.write(`\r  Publications upserted ${pubProcessed}/${pubRows.length}`)
       }
