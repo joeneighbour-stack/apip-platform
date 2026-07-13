@@ -89,7 +89,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
     ['TARGET_HIT', 'STOP_HIT', 'EXPIRY'].includes(o.trade_outcome_status)
   )
   const triggered = shadowOutcomes.filter(o =>
-    ['TARGET_HIT', 'STOP_HIT'].includes(o.trade_outcome_status)
+    ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED'].includes(o.trade_outcome_status)
   )
   const wins = shadowOutcomes.filter(o => o.trade_outcome_status === 'TARGET_HIT')
   const shadowWinRate = triggered.length > 0 ? wins.length / triggered.length : null
@@ -117,7 +117,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
     const assetClass = st?.opportunity?.market?.asset_class ?? ''
     if (!symbol) continue
     const existing = byMarket.get(symbol) ?? { symbol, assetClass, total: 0, triggered: 0, wins: 0, totalR: 0, avgRr: 0, rrCount: 0 }
-    const isTriggered = ['TARGET_HIT', 'STOP_HIT'].includes(o.trade_outcome_status)
+    const isTriggered = ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED'].includes(o.trade_outcome_status)
     const r = shadowResultR(o) ?? 0
     byMarket.set(symbol, {
       ...existing,
@@ -212,45 +212,6 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
           </div>
         </div>
       </section>
-
-      {/* Per-market */}
-      {marketRows.length > 0 && (
-        <section className="space-y-3">
-          <h2 className="text-sm font-medium">By Market (All Time)</h2>
-          <div className="rounded-lg border border-border overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/50">
-                <tr>
-                  {['Market', 'Class', 'Setups', 'Triggered', 'Win Rate', 'Avg RR', 'Total R'].map(h => (
-                    <th key={h} className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {marketRows.map(row => (
-                  <tr key={row.symbol} className="hover:bg-muted/30">
-                    <td className="px-4 py-2.5 font-medium text-xs">{row.symbol}</td>
-                    <td className="px-4 py-2.5 text-xs text-muted-foreground">{row.assetClass}</td>
-                    <td className="px-4 py-2.5 text-xs text-muted-foreground">{row.total}</td>
-                    <td className="px-4 py-2.5 text-xs tabular-nums">
-                      {row.triggered}/{row.total} ({Math.round(row.triggered / row.total * 100)}%)
-                    </td>
-                    <td className="px-4 py-2.5 text-xs tabular-nums">
-                      {row.triggered > 0 ? `${Math.round(row.wins / row.triggered * 100)}%` : '—'}
-                    </td>
-                    <td className="px-4 py-2.5 text-xs tabular-nums text-muted-foreground">
-                      {row.rrCount > 0 ? `${(row.avgRr / row.rrCount).toFixed(1)}:1` : '—'}
-                    </td>
-                    <td className={`px-4 py-2.5 text-xs font-medium tabular-nums ${row.totalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                      {row.totalR > 0 ? '+' : ''}{row.totalR.toFixed(2)}R
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
 
       {/* Outcomes table */}
       <section className="space-y-3">
@@ -367,6 +328,45 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
           </table>
         </div>
       </section>
+      {/* Per-market */}
+      {marketRows.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-medium">By Market (All Time)</h2>
+          <div className="rounded-lg border border-border overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50">
+                <tr>
+                  {['Market', 'Class', 'Setups', 'Triggered', 'Win Rate', 'Avg RR', 'Total R'].map(h => (
+                    <th key={h} className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {marketRows.map(row => (
+                  <tr key={row.symbol} className="hover:bg-muted/30">
+                    <td className="px-4 py-2.5 font-medium text-xs">{row.symbol}</td>
+                    <td className="px-4 py-2.5 text-xs text-muted-foreground">{row.assetClass}</td>
+                    <td className="px-4 py-2.5 text-xs text-muted-foreground">{row.total}</td>
+                    <td className="px-4 py-2.5 text-xs tabular-nums">
+                      {row.triggered}/{row.total} ({Math.round(row.triggered / row.total * 100)}%)
+                    </td>
+                    <td className="px-4 py-2.5 text-xs tabular-nums">
+                      {row.triggered > 0 ? `${Math.round(row.wins / row.triggered * 100)}%` : '—'}
+                    </td>
+                    <td className="px-4 py-2.5 text-xs tabular-nums text-muted-foreground">
+                      {row.rrCount > 0 ? `${(row.avgRr / row.rrCount).toFixed(1)}:1` : '—'}
+                    </td>
+                    <td className={`px-4 py-2.5 text-xs font-medium tabular-nums ${row.totalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                      {row.totalR > 0 ? '+' : ''}{row.totalR.toFixed(2)}R
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
     </div>
   )
 }
