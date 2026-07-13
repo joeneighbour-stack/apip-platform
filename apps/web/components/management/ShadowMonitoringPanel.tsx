@@ -1,5 +1,6 @@
 'use client'
 import { useState, useMemo } from 'react'
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Legend } from 'recharts'
 
 interface ShadowOutcome {
   shadow_outcome_id: string
@@ -18,7 +19,7 @@ interface ShadowOutcome {
     generated_at: string
     opportunity: {
       date: string
-      market: { symbol: string; asset_class: string; display_precision: number | null } | null
+      market: { symbol: string; asset_class: string; display_precision: number | null; market_id: string } | null
     } | null
   } | null
 }
@@ -29,8 +30,7 @@ interface ActualTrade {
   result_r: number | null
   triggered: boolean
   published_at: string
-  analyst: { display_name: string } | null
-  market: { symbol: string; asset_class: string } | null
+  market: { symbol: string; asset_class: string; market_id: string } | null
 }
 
 interface Props {
@@ -55,6 +55,12 @@ const DATE_RANGES = [
   { label: 'All time', days: 0 },
 ]
 
+const COMPARISON_WINDOWS = [
+  { label: '30 days', days: 30 },
+  { label: '60 days', days: 60 },
+  { label: '90 days', days: 90 },
+]
+
 function fmtPrice(price: number, precision: number | null | undefined): string {
   return price.toFixed(precision ?? 4)
 }
@@ -68,49 +74,109 @@ function shadowResultR(outcome: ShadowOutcome): number | null {
   return null
 }
 
+function monthLabel(dateStr: string) {
+  const d = new Date(dateStr + 'T12:00:00Z')
+  return d.toLocaleString('en-GB', { day: 'numeric', month: 'short' })
+}
+
 export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
   const [sessionFilter, setSessionFilter] = useState('ALL')
   const [assetFilter, setAssetFilter] = useState('ALL')
   const [outcomeFilter, setOutcomeFilter] = useState('ALL')
-  const [dateRangeDays, setDateRangeDays] = useState(1) // default: today only
+  const [dateRangeDays, setDateRangeDays] = useState(1)
+  const [comparisonWindow, setComparisonWindow] = useState(30)
 
-  // Apply date range filter to outcomes table
-  const dateFilteredOutcomes = useMemo(() => {
-    if (dateRangeDays === 0) return shadowOutcomes
-    const cutoff = new Date(Date.now() - dateRangeDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-    return shadowOutcomes.filter(o => {
-      const date = o.shadow_trade?.opportunity?.date ?? ''
-      return date >= cutoff
+  // ── Like-for-like comparison ─────────────────────────────────────────────
+  // For each shadow trade, find matching analyst trades (same market, same date)
+  // If no analyst traded that market that day → analyst R = 0 (missed opportunity)
+  const likeForLike = useMemo(() => {
+    const cutoff = new Date(Date.now() - comparisonWindow * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+
+    // Index actual trades by market_id + date
+    const actualByMarketDate = new Map<string, number>()
+    for (const at of actualTrades) {
+      const marketId = (at.market as any)?.market_id
+      const date = at.published_at.slice(0, 10)
+      if (!marketId || date < cutoff) continue
+      const key = `${marketId}::${date}`
+      // Sum all analyst R for this market+date (multiple analysts may have traded)
+      const existing = actualByMarketDate.get(key) ?? 0
+      const r = at.triggered && at.result_r !== null ? Number(at.result_r) : 0
+      actualByMarketDate.set(key, existing + r)
+    }
+
+    // Build daily comparison data
+    const dailyData = new Map<string, { date: string; shadowR: number; analystR: number; count: number }>()
+
+    for (const outcome of shadowOutcomes) {
+      const st = outcome.shadow_trade
+      const opp = st?.opportunity
+      const market = opp?.market
+      if (!opp?.date || opp.date < cutoff) continue
+
+      const shadowR = shadowResultR(outcome) ?? 0
+      const marketId = market?.market_id
+      const key = `${marketId}::${opp.date}`
+      const analystR = actualByMarketDate.get(key) ?? 0 // 0 if analyst didn't trade
+
+      const existing = dailyData.get(opp.date) ?? { date: opp.date, shadowR: 0, analystR: 0, count: 0 }
+      dailyData.set(opp.date, {
+        date: opp.date,
+        shadowR: existing.shadowR + shadowR,
+        analystR: existing.analystR + analystR,
+        count: existing.count + 1,
+      })
+    }
+
+    // Sort by date and compute cumulative R
+    const sorted = [...dailyData.values()].sort((a, b) => a.date.localeCompare(b.date))
+    let cumulativeShadow = 0
+    let cumulativeAnalyst = 0
+
+    return sorted.map(d => {
+      cumulativeShadow += d.shadowR
+      cumulativeAnalyst += d.analystR
+      return {
+        date: monthLabel(d.date),
+        dailyShadowR: d.shadowR,
+        dailyAnalystR: d.analystR,
+        cumulativeShadowR: cumulativeShadow,
+        cumulativeAnalystR: cumulativeAnalyst,
+        count: d.count,
+      }
     })
-  }, [shadowOutcomes, dateRangeDays])
+  }, [shadowOutcomes, actualTrades, comparisonWindow])
 
-  // Summary always uses ALL data
-  const resolved = shadowOutcomes.filter(o =>
-    ['TARGET_HIT', 'STOP_HIT', 'EXPIRY'].includes(o.trade_outcome_status)
-  )
+  const totalShadowR = likeForLike.length > 0 ? likeForLike[likeForLike.length - 1]!.cumulativeShadowR : 0
+  const totalAnalystR = likeForLike.length > 0 ? likeForLike[likeForLike.length - 1]!.cumulativeAnalystR : 0
+  const deltaR = totalShadowR - totalAnalystR
+
+  // ── Standard summary stats ───────────────────────────────────────────────
   const triggered = shadowOutcomes.filter(o =>
     ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED'].includes(o.trade_outcome_status)
+  )
+  const resolved = shadowOutcomes.filter(o =>
+    ['TARGET_HIT', 'STOP_HIT', 'EXPIRY'].includes(o.trade_outcome_status)
   )
   const wins = shadowOutcomes.filter(o => o.trade_outcome_status === 'TARGET_HIT')
   const shadowWinRate = triggered.length > 0 ? wins.length / triggered.length : null
   const shadowTriggerRate = shadowOutcomes.length > 0 ? triggered.length / shadowOutcomes.length : null
-  const shadowTotalR = triggered.reduce((sum, o) => sum + (shadowResultR(o) ?? 0), 0)
+  const shadowTotalR = triggered.reduce((s, o) => s + (shadowResultR(o) ?? 0), 0)
   const shadowAvgRr = triggered.length > 0
     ? triggered.reduce((s, o) => s + (o.shadow_trade?.rr ?? 0), 0) / triggered.length
     : null
 
-  // Actual summary
-  const actualTriggered = actualTrades.filter(t => t.triggered && t.result_r !== null)
+  // Actual 30-day summary
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  const recentActual = actualTrades.filter(t => t.published_at >= thirtyDaysAgo)
+  const actualTriggered = recentActual.filter(t => t.triggered && t.result_r !== null)
   const actualWins = actualTriggered.filter(t => (t.result_r ?? 0) > 0)
   const actualWinRate = actualTriggered.length > 0 ? actualWins.length / actualTriggered.length : null
-  const actualTotalR = actualTriggered.reduce((sum, t) => sum + (t.result_r ?? 0), 0)
-  const actualTriggerRate = actualTrades.length > 0 ? actualTriggered.length / actualTrades.length : null
+  const actualTotalR = actualTriggered.reduce((s, t) => s + (t.result_r ?? 0), 0)
+  const actualTriggerRate = recentActual.length > 0 ? actualTriggered.length / recentActual.length : null
 
-  // Per-market (all time)
-  const byMarket = new Map<string, {
-    symbol: string; assetClass: string; total: number; triggered: number;
-    wins: number; totalR: number; avgRr: number; rrCount: number
-  }>()
+  // Per-market
+  const byMarket = new Map<string, { symbol: string; assetClass: string; total: number; triggered: number; wins: number; totalR: number; avgRr: number; rrCount: number }>()
   for (const o of shadowOutcomes) {
     const st = o.shadow_trade
     const symbol = st?.opportunity?.market?.symbol
@@ -131,12 +197,17 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
   }
   const marketRows = [...byMarket.values()].sort((a, b) => b.totalR - a.totalR)
 
-  // Filtered outcomes for table
+  // Date-filtered outcomes for table
+  const dateFilteredOutcomes = useMemo(() => {
+    if (dateRangeDays === 0) return shadowOutcomes
+    const cutoff = new Date(Date.now() - dateRangeDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    return shadowOutcomes.filter(o => (o.shadow_trade as any)?.opportunity?.date >= cutoff)
+  }, [shadowOutcomes, dateRangeDays])
+
   const filtered = dateFilteredOutcomes.filter(o => {
-    const st = o.shadow_trade
-    const opp = st?.opportunity
+    const st = o.shadow_trade as any
     if (sessionFilter !== 'ALL' && st?.session !== sessionFilter) return false
-    if (assetFilter !== 'ALL' && opp?.market?.asset_class !== assetFilter) return false
+    if (assetFilter !== 'ALL' && st?.opportunity?.market?.asset_class !== assetFilter) return false
     if (outcomeFilter !== 'ALL' && o.trade_outcome_status !== outcomeFilter) return false
     return true
   })
@@ -150,18 +221,96 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
         </p>
       </div>
 
-      {/* Summary */}
+      {/* Like-for-like comparison chart */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-medium">Shadow vs Analyst — Like-for-Like Comparison</h2>
+          <div className="flex items-center gap-1">
+            {COMPARISON_WINDOWS.map(w => (
+              <button key={w.days}
+                onClick={() => setComparisonWindow(w.days)}
+                className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
+                  comparisonWindow === w.days
+                    ? 'bg-foreground text-background border-foreground'
+                    : 'border-border text-muted-foreground hover:text-foreground'
+                }`}>
+                {w.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          Analyst R = 0 for any market the engine covered but analyst did not trade. Same markets, same dates.
+        </p>
+
+        {/* Summary cards */}
+        <div className="grid grid-cols-3 gap-3">
+          <div className="rounded-lg border border-border bg-card p-4 space-y-2">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Shadow R ({comparisonWindow}d)</p>
+            <p className={`text-2xl font-semibold tabular-nums ${totalShadowR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+              {totalShadowR > 0 ? '+' : ''}{totalShadowR.toFixed(2)}R
+            </p>
+            <p className="text-xs text-muted-foreground">{likeForLike.length} trading days</p>
+          </div>
+          <div className="rounded-lg border border-border bg-card p-4 space-y-2">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Analyst R ({comparisonWindow}d)</p>
+            <p className={`text-2xl font-semibold tabular-nums ${totalAnalystR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+              {totalAnalystR > 0 ? '+' : ''}{totalAnalystR.toFixed(2)}R
+            </p>
+            <p className="text-xs text-muted-foreground">Same markets only</p>
+          </div>
+          <div className="rounded-lg border border-border bg-card p-4 space-y-2">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Framework Edge</p>
+            <p className={`text-2xl font-semibold tabular-nums ${deltaR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+              {deltaR > 0 ? '+' : ''}{deltaR.toFixed(2)}R
+            </p>
+            <p className="text-xs text-muted-foreground">Shadow minus analyst</p>
+          </div>
+        </div>
+
+        {/* Cumulative R chart */}
+        {likeForLike.length > 0 ? (
+          <div className="rounded-lg border border-border bg-card p-4">
+            <p className="text-xs text-muted-foreground mb-3">Cumulative R — Shadow vs Analyst (like-for-like)</p>
+            <div className="h-48">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={likeForLike} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false}
+                    interval={Math.max(0, Math.floor(likeForLike.length / 8))} />
+                  <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false}
+                    tickFormatter={v => `${v > 0 ? '+' : ''}${v.toFixed(0)}R`} />
+                  <Tooltip
+                    formatter={(v: any, name: string) => [`${Number(v) > 0 ? '+' : ''}${Number(v).toFixed(2)}R`, name]}
+                    contentStyle={{ fontSize: 11 }} />
+                  <ReferenceLine y={0} stroke="hsl(var(--border))" />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Line type="monotone" dataKey="cumulativeShadowR" name="Shadow" stroke="#6366f1" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="cumulativeAnalystR" name="Analyst" stroke="#22c55e" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-border bg-card p-6 text-center">
+            <p className="text-sm text-muted-foreground">No like-for-like data yet.</p>
+            <p className="text-xs text-muted-foreground/70 mt-1">Data will appear once shadow trades resolve and analyst trades are imported for the same markets.</p>
+          </div>
+        )}
+      </section>
+
+      {/* Standard summary */}
       <section className="space-y-3">
         <h2 className="text-sm font-medium">Shadow vs Actual — Since Platform Launch</h2>
         <div className="grid grid-cols-3 gap-3">
-          <div className="rounded-lg border border-border bg-card p-4 space-y-3">
+          <div className="rounded-lg border border-border bg-card p-4 space-y-2">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Shadow Benchmark</p>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Total setups</span><span className="font-medium">{shadowOutcomes.length}</span></div>
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Resolved</span><span className="font-medium">{resolved.length}</span></div>
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger rate</span><span className="font-medium">{shadowTriggerRate !== null ? `${Math.round(shadowTriggerRate * 100)}%` : '—'}</span></div>
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate</span><span className="font-medium">{shadowWinRate !== null ? `${Math.round(shadowWinRate * 100)}%` : '—'}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Avg planned RR</span><span className="font-medium">{shadowAvgRr !== null ? `${shadowAvgRr.toFixed(1)}:1` : '—'}</span></div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Avg RR</span><span className="font-medium">{shadowAvgRr !== null ? `${shadowAvgRr.toFixed(1)}:1` : '—'}</span></div>
               <div className="flex justify-between text-xs">
                 <span className="text-muted-foreground">Total R</span>
                 <span className={`font-medium ${shadowTotalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
@@ -170,15 +319,13 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
               </div>
             </div>
           </div>
-
-          <div className="rounded-lg border border-border bg-card p-4 space-y-3">
+          <div className="rounded-lg border border-border bg-card p-4 space-y-2">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Analyst Actual (30 days)</p>
-            <div className="space-y-2">
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Total setups</span><span className="font-medium">{actualTrades.length}</span></div>
+            <div className="space-y-1.5">
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Total setups</span><span className="font-medium">{recentActual.length}</span></div>
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Triggered</span><span className="font-medium">{actualTriggered.length}</span></div>
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger rate</span><span className="font-medium">{actualTriggerRate !== null ? `${Math.round(actualTriggerRate * 100)}%` : '—'}</span></div>
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate</span><span className="font-medium">{actualWinRate !== null ? `${Math.round(actualWinRate * 100)}%` : '—'}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Avg planned RR</span><span className="font-medium text-muted-foreground">—</span></div>
               <div className="flex justify-between text-xs">
                 <span className="text-muted-foreground">Total R</span>
                 <span className={`font-medium ${actualTotalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
@@ -187,20 +334,17 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
               </div>
             </div>
           </div>
-
-          <div className="rounded-lg border border-border bg-card p-4 space-y-3">
+          <div className="rounded-lg border border-border bg-card p-4 space-y-2">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Delta (Shadow − Actual)</p>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate delta</span>
                 <span className="font-medium">
-                  {shadowWinRate !== null && actualWinRate !== null
-                    ? `${((shadowWinRate - actualWinRate) * 100).toFixed(1)}pp` : '—'}
+                  {shadowWinRate !== null && actualWinRate !== null ? `${((shadowWinRate - actualWinRate) * 100).toFixed(1)}pp` : '—'}
                 </span>
               </div>
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger delta</span>
                 <span className="font-medium">
-                  {shadowTriggerRate !== null && actualTriggerRate !== null
-                    ? `${((shadowTriggerRate - actualTriggerRate) * 100).toFixed(1)}pp` : '—'}
+                  {shadowTriggerRate !== null && actualTriggerRate !== null ? `${((shadowTriggerRate - actualTriggerRate) * 100).toFixed(1)}pp` : '—'}
                 </span>
               </div>
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Status</span>
@@ -213,7 +357,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
         </div>
       </section>
 
-      {/* Outcomes table */}
+      {/* Shadow outcomes table */}
       <section className="space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-medium">
@@ -221,7 +365,6 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
             {dateRangeDays > 0 ? ` — last ${dateRangeDays === 1 ? '24 hours' : `${dateRangeDays} days`}` : ' — all time'})
           </h2>
           <div className="flex items-center gap-2 flex-wrap justify-end">
-            {/* Date range buttons */}
             <div className="flex items-center gap-1">
               {DATE_RANGES.map(r => (
                 <button key={r.days}
@@ -261,6 +404,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
             </select>
           </div>
         </div>
+
         <div className="rounded-lg border border-border overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-muted/50">
@@ -278,7 +422,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
                   </td>
                 </tr>
               ) : filtered.map(outcome => {
-                const st = outcome.shadow_trade
+                const st = outcome.shadow_trade as any
                 const opp = st?.opportunity
                 const precision = opp?.market?.display_precision ?? 4
                 const resultR = shadowResultR(outcome)
@@ -328,7 +472,8 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
           </table>
         </div>
       </section>
-      {/* Per-market */}
+
+      {/* By market */}
       {marketRows.length > 0 && (
         <section className="space-y-3">
           <h2 className="text-sm font-medium">By Market (All Time)</h2>
@@ -366,7 +511,6 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
           </div>
         </section>
       )}
-
     </div>
   )
 }

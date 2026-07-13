@@ -8,9 +8,10 @@ export default async function ShadowMonitoringPage() {
   if (!['MANAGER', 'ADMIN'].includes(user.role)) redirect('/login')
 
   const supabase = await createClient()
+  const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
-  // Fetch all shadow outcomes ordered by date desc -- client panel handles date filtering
+  // Shadow outcomes -- all resolved outcomes for like-for-like comparison
   const { data: shadowOutcomes } = await supabase
     .from('shadow_trade_outcomes')
     .select(`
@@ -26,30 +27,29 @@ export default async function ShadowMonitoringPage() {
         generated_at,
         opportunity:opportunity_id (
           date,
-          market:market_id ( symbol, asset_class, display_precision )
+          market:market_id ( symbol, asset_class, display_precision, market_id )
         )
       )
     `)
     .order('shadow_outcome_id', { ascending: false })
 
-  // Sort by opportunity date desc (most recent first)
-  const sorted = (shadowOutcomes ?? []).sort((a, b) => {
-    const dateA = a.shadow_trade?.opportunity?.date ?? ''
-    const dateB = b.shadow_trade?.opportunity?.date ?? ''
-    return dateB.localeCompare(dateA)
-  })
-
-  // Actual trades for comparison
+  // Actual trades for like-for-like -- last 90 days
   const { data: actualTrades } = await supabase
     .from('actual_trades')
     .select(`
       trade_id, direction, result_r, triggered, published_at,
-      analyst:analyst_id ( display_name ),
-      market:market_id ( symbol, asset_class )
+      market:market_id ( symbol, asset_class, market_id )
     `)
     .eq('source_system', 'ACUITY_PERFORMANCE_API')
-    .gte('published_at', thirtyDaysAgo)
+    .gte('published_at', ninetyDaysAgo)
     .order('published_at', { ascending: false })
+
+  // Sort shadow by date desc
+  const sorted = (shadowOutcomes ?? []).sort((a, b) => {
+    const dateA = (a.shadow_trade as any)?.opportunity?.date ?? ''
+    const dateB = (b.shadow_trade as any)?.opportunity?.date ?? ''
+    return dateB.localeCompare(dateA)
+  })
 
   return (
     <div className="space-y-8">
