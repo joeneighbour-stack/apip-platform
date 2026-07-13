@@ -117,7 +117,7 @@ export function TeamPerformanceGrid({
   )
   const shadowWins = shadowOutcomes.filter(o => o.trade_outcome_status === 'TARGET_HIT')
   const shadowWinRate = shadowTriggered.length > 0 ? shadowWins.length / shadowTriggered.length : null
-  const shadowTriggerRate = shadowResolved.length > 0 ? shadowTriggered.length / shadowResolved.length : null
+  const shadowTriggerRate = shadowOutcomes.length > 0 ? shadowTriggered.length / shadowOutcomes.length : null
   const shadowTotalR = shadowTriggered.reduce((s, o) => s + (shadowResultR(o) ?? 0), 0)
 
   // Actual summary
