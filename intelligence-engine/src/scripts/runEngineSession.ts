@@ -620,7 +620,7 @@ async function main() {
             target: hidden.target,
             rr: hidden.rr,
             templateSource: diagnostics.templateSource,
-            direction: result.opportunity.direction,
+            direction: item.opp.direction,
             session,
           })
 
