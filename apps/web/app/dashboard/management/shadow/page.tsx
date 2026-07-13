@@ -8,26 +8,31 @@ export default async function ShadowMonitoringPage() {
   if (!['MANAGER', 'ADMIN'].includes(user.role)) redirect('/dashboard')
 
   const supabase = await createClient()
-
-  const today = new Date().toISOString().slice(0, 10)
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
-  // Shadow outcomes with market and opportunity context
+  // Shadow trades with full detail -- direction/session from shadow_trades directly
   const { data: shadowOutcomes } = await supabase
     .from('shadow_trade_outcomes')
     .select(`
-      shadow_outcome_id, trade_outcome_status,
+      shadow_outcome_id,
+      trade_outcome_status,
+      result_r,
+      outcome_timestamp,
       shadow_trade:shadow_trade_id (
-        shadow_trade_id, entry, stop, target, rr, generated_at,
+        shadow_trade_id,
+        entry, stop, target, rr,
+        direction, session,
+        template_source,
+        generated_at,
         opportunity:opportunity_id (
-          date, session, direction,
-          market:market_id ( symbol, asset_class )
+          date,
+          market:market_id ( symbol, asset_class, display_precision )
         )
       )
     `)
     .order('shadow_outcome_id', { ascending: false })
 
-  // Actual trades for comparison -- only API trades (have proper triggered status)
+  // Actual trades for comparison
   const { data: actualTrades } = await supabase
     .from('actual_trades')
     .select(`
@@ -38,11 +43,6 @@ export default async function ShadowMonitoringPage() {
     .eq('source_system', 'ACUITY_PERFORMANCE_API')
     .gte('published_at', thirtyDaysAgo)
     .order('published_at', { ascending: false })
-
-  // Shadow summary stats
-  const { data: summaryStats } = await supabase
-    .from('shadow_trade_outcomes')
-    .select('trade_outcome_status, shadow_trade:shadow_trade_id ( rr )')
 
   return (
     <div className="space-y-8">
@@ -55,14 +55,12 @@ export default async function ShadowMonitoringPage() {
         </div>
         <a href="/dashboard/management"
           className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-          ← Management
+          ← Back to Management
         </a>
       </div>
-
       <ShadowMonitoringPanel
         shadowOutcomes={shadowOutcomes ?? []}
         actualTrades={actualTrades ?? []}
-        summaryStats={summaryStats ?? []}
       />
     </div>
   )
