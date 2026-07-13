@@ -12,9 +12,9 @@ const NAV_ITEMS: NavItem[] = [
   { href: '/dashboard/analyst/performance',    label: 'My Performance',     roles: ['ANALYST'] },
   { href: '/dashboard/analyst/availability',   label: 'My Availability',    roles: ['ANALYST'] },
   { href: '/dashboard/management',             label: 'Management',         roles: ['MANAGER', 'ADMIN'] },
-  { href: '/dashboard/management/performance', label: 'Team Performance',   roles: ['MANAGER', 'ADMIN'] },
-  { href: '/dashboard/management/shadow',      label: 'Shadow Monitoring',  roles: ['MANAGER', 'ADMIN'] },
-  { href: '/dashboard/analytics',              label: 'Analytics',          roles: ['MANAGER', 'ADMIN', 'EXECUTIVE'] },
+  { href: '/dashboard/management/performance', label: 'Team Performance',   roles: ['MANAGER', 'ADMIN', 'EXECUTIVE'] },
+  { href: '/dashboard/management/shadow',      label: 'Shadow Monitoring',  roles: ['MANAGER', 'ADMIN', 'RESEARCH'] },
+  { href: '/dashboard/analytics',              label: 'Analytics',          roles: ['MANAGER', 'ADMIN', 'EXECUTIVE', 'RESEARCH'] },
   { href: '/dashboard/opportunities',          label: 'Opportunities',      roles: ['ANALYST', 'MANAGER', 'ADMIN'] },
   { href: '/dashboard/admin',                  label: 'Admin Centre',       roles: ['ADMIN', 'MANAGER'] },
 ]
@@ -26,7 +26,6 @@ interface NavProps {
 
 export function DashboardNav({ role, displayName }: NavProps) {
   const visibleItems = NAV_ITEMS.filter(item => item.roles.includes(role))
-
   return (
     <nav className="flex items-center justify-between px-6 py-3 border-b border-border bg-card">
       <div className="flex items-center gap-8">
@@ -44,7 +43,7 @@ export function DashboardNav({ role, displayName }: NavProps) {
         </div>
       </div>
       <div className="flex items-center gap-3">
-        <span className="text-sm text-muted-foreground">{displayName}</span>
+        <span className="text-xs text-muted-foreground">{displayName}</span>
         <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium">
           {role}
         </span>
