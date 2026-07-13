@@ -8,12 +8,14 @@ export default async function ManagementPerformancePage() {
   if (!['MANAGER', 'ADMIN'].includes(user.role)) redirect('/dashboard')
 
   const supabase = await createClient()
-
   const now = new Date()
   const year = now.getUTCFullYear()
   const month = now.getUTCMonth()
   const monthStart = `${year}-${String(month + 1).padStart(2, '0')}-01`
-  const threeMonthsAgo = `${month >= 2 ? year : year - 1}-${String(((month - 2 + 12) % 12) + 1).padStart(2, '0')}-01`
+
+  // 36 months for long-term trend
+  const d36 = new Date(Date.UTC(year, month - 35, 1))
+  const thirtyySixMonthsAgo = d36.toISOString().slice(0, 10)
 
   // Active analysts
   const { data: analysts } = await supabase
@@ -22,14 +24,30 @@ export default async function ManagementPerformancePage() {
     .eq('active', true)
     .order('display_name')
 
-  // KPI data for last 3 months
+  // KPI data for last 36 months
   const { data: kpiData } = await supabase
     .from('executive_kpis')
     .select('analyst_id, kpi_name, kpi_value, period_start')
-    .gte('period_start', threeMonthsAgo)
+    .gte('period_start', thirtyySixMonthsAgo)
     .order('period_start', { ascending: true })
 
-  // Only show analysts that have KPI data in the trend period
+  // Shadow summary for comparison
+  const { data: shadowOutcomes } = await supabase
+    .from('shadow_trade_outcomes')
+    .select(`
+      trade_outcome_status,
+      result_r,
+      shadow_trade:shadow_trade_id ( rr )
+    `)
+
+  // Actual trades last 30 days for comparison
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  const { data: actualTrades } = await supabase
+    .from('actual_trades')
+    .select('result_r, triggered')
+    .eq('source_system', 'ACUITY_PERFORMANCE_API')
+    .gte('published_at', thirtyDaysAgo)
+
   const analystIdsWithData = new Set((kpiData ?? []).map(k => k.analyst_id))
   const analystsWithData = (analysts ?? []).filter(a => analystIdsWithData.has(a.analyst_id))
 
@@ -44,14 +62,15 @@ export default async function ManagementPerformancePage() {
         </div>
         <a href="/dashboard/management"
           className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-          ← Management
+          ← Back to Management
         </a>
       </div>
-
       <TeamPerformanceGrid
         analysts={analystsWithData}
         kpiData={kpiData ?? []}
         currentMonthStart={monthStart}
+        shadowOutcomes={shadowOutcomes ?? []}
+        actualTrades={actualTrades ?? []}
       />
     </div>
   )
