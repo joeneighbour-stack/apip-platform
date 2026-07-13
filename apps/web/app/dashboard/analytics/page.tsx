@@ -5,7 +5,7 @@ import { PerformanceAnalytics } from '@/components/analytics/PerformanceAnalytic
 
 export default async function PerformanceAnalyticsPage() {
   const user = await getCurrentUser()
-  if (!['MANAGER', 'ADMIN', 'EXECUTIVE'].includes(user.role)) redirect('/dashboard')
+  if (!['MANAGER', 'ADMIN', 'EXECUTIVE'].includes(user.role)) redirect('/login')
 
   const supabase = await createClient()
 

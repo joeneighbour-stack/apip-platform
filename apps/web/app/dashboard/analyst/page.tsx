@@ -5,7 +5,7 @@ import { RecommendationStats } from '@/components/analyst/RecommendationStats'
 
 export default async function AnalystWorkspacePage() {
   const user = await getCurrentUser()
-  if (user.role !== 'ANALYST') redirect('/dashboard')
+  if (user.role !== 'ANALYST') redirect('/login')
   if (!user.analystId) {
     return (
       <div className="rounded-lg border border-border p-6">

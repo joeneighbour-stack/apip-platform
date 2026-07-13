@@ -5,7 +5,7 @@ import { ShadowMonitoringPanel } from '@/components/management/ShadowMonitoringP
 
 export default async function ShadowMonitoringPage() {
   const user = await getCurrentUser()
-  if (!['MANAGER', 'ADMIN'].includes(user.role)) redirect('/dashboard')
+  if (!['MANAGER', 'ADMIN'].includes(user.role)) redirect('/login')
 
   const supabase = await createClient()
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)

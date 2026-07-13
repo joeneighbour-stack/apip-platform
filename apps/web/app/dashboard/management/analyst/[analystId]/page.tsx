@@ -10,7 +10,7 @@ export default async function AnalystDrillDownPage({
   params: { analystId: string }
 }) {
   const user = await getCurrentUser()
-  if (!['MANAGER', 'ADMIN'].includes(user.role)) redirect('/dashboard')
+  if (!['MANAGER', 'ADMIN'].includes(user.role)) redirect('/login')
 
   const supabase = await createClient()
   const { analystId } = params

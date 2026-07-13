@@ -11,7 +11,7 @@ import { NotificationsPanel } from '@/components/management/NotificationsPanel'
 
 export default async function ManagementWorkspacePage() {
   const user = await getCurrentUser()
-  if (!['MANAGER', 'ADMIN'].includes(user.role)) redirect('/dashboard')
+  if (!['MANAGER', 'ADMIN'].includes(user.role)) redirect('/login')
 
   const supabase = await createClient()
   const today = new Date().toISOString().split('T')[0]

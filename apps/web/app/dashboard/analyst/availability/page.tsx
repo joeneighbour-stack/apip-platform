@@ -5,7 +5,7 @@ import { AbsenceBooking } from '@/components/analyst/AbsenceBooking'
 
 export default async function AnalystAvailabilityPage() {
   const user = await getCurrentUser()
-  if (user.role !== 'ANALYST') redirect('/dashboard')
+  if (user.role !== 'ANALYST') redirect('/login')
   if (!user.analystId) redirect('/dashboard/analyst')
 
   const supabase = await createClient()

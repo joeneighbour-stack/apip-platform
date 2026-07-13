@@ -11,7 +11,7 @@ import { NotificationsPanel } from '@/components/management/NotificationsPanel'
 
 export default async function AdminCentrePage() {
   const user = await getCurrentUser()
-  if (!['ADMIN', 'MANAGER'].includes(user.role)) redirect('/dashboard')
+  if (!['ADMIN', 'MANAGER'].includes(user.role)) redirect('/login')
 
   const supabase = await createClient()
 

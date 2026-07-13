@@ -5,7 +5,7 @@ import { TeamPerformanceGrid } from '@/components/management/TeamPerformanceGrid
 
 export default async function ManagementPerformancePage() {
   const user = await getCurrentUser()
-  if (!['MANAGER', 'ADMIN'].includes(user.role)) redirect('/dashboard')
+  if (!['MANAGER', 'ADMIN'].includes(user.role)) redirect('/login')
 
   const supabase = await createClient()
   const now = new Date()

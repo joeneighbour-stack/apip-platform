@@ -8,7 +8,7 @@ import { PerformanceBreakdown } from '@/components/analyst/PerformanceBreakdown'
 
 export default async function AnalystPerformancePage() {
   const user = await getCurrentUser()
-  if (user.role !== 'ANALYST') redirect('/dashboard')
+  if (user.role !== 'ANALYST') redirect('/login')
   if (!user.analystId) redirect('/dashboard/analyst')
 
   const supabase = await createClient()
