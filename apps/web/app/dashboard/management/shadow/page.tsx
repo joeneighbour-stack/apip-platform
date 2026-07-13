@@ -10,7 +10,7 @@ export default async function ShadowMonitoringPage() {
   const supabase = await createClient()
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
-  // Shadow trades with full detail -- direction/session from shadow_trades directly
+  // Fetch all shadow outcomes ordered by date desc -- client panel handles date filtering
   const { data: shadowOutcomes } = await supabase
     .from('shadow_trade_outcomes')
     .select(`
@@ -31,6 +31,13 @@ export default async function ShadowMonitoringPage() {
       )
     `)
     .order('shadow_outcome_id', { ascending: false })
+
+  // Sort by opportunity date desc (most recent first)
+  const sorted = (shadowOutcomes ?? []).sort((a, b) => {
+    const dateA = a.shadow_trade?.opportunity?.date ?? ''
+    const dateB = b.shadow_trade?.opportunity?.date ?? ''
+    return dateB.localeCompare(dateA)
+  })
 
   // Actual trades for comparison
   const { data: actualTrades } = await supabase
@@ -59,7 +66,7 @@ export default async function ShadowMonitoringPage() {
         </a>
       </div>
       <ShadowMonitoringPanel
-        shadowOutcomes={shadowOutcomes ?? []}
+        shadowOutcomes={sorted}
         actualTrades={actualTrades ?? []}
       />
     </div>

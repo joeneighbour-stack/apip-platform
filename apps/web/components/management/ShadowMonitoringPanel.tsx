@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 
 interface ShadowOutcome {
   shadow_outcome_id: string
@@ -46,6 +46,15 @@ const STATUS_STYLES: Record<string, string> = {
   NOT_TRIGGERED: 'bg-slate-100 text-slate-600',
 }
 
+const DATE_RANGES = [
+  { label: 'Today', days: 1 },
+  { label: '3 days', days: 3 },
+  { label: '7 days', days: 7 },
+  { label: '14 days', days: 14 },
+  { label: '30 days', days: 30 },
+  { label: 'All time', days: 0 },
+]
+
 function fmtPrice(price: number, precision: number | null | undefined): string {
   return price.toFixed(precision ?? 4)
 }
@@ -63,8 +72,19 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
   const [sessionFilter, setSessionFilter] = useState('ALL')
   const [assetFilter, setAssetFilter] = useState('ALL')
   const [outcomeFilter, setOutcomeFilter] = useState('ALL')
+  const [dateRangeDays, setDateRangeDays] = useState(1) // default: today only
 
-  // Shadow summary
+  // Apply date range filter to outcomes table
+  const dateFilteredOutcomes = useMemo(() => {
+    if (dateRangeDays === 0) return shadowOutcomes
+    const cutoff = new Date(Date.now() - dateRangeDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    return shadowOutcomes.filter(o => {
+      const date = o.shadow_trade?.opportunity?.date ?? ''
+      return date >= cutoff
+    })
+  }, [shadowOutcomes, dateRangeDays])
+
+  // Summary always uses ALL data
   const resolved = shadowOutcomes.filter(o =>
     ['TARGET_HIT', 'STOP_HIT', 'EXPIRY'].includes(o.trade_outcome_status)
   )
@@ -86,7 +106,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
   const actualTotalR = actualTriggered.reduce((sum, t) => sum + (t.result_r ?? 0), 0)
   const actualTriggerRate = actualTrades.length > 0 ? actualTriggered.length / actualTrades.length : null
 
-  // Per-market shadow summary
+  // Per-market (all time)
   const byMarket = new Map<string, {
     symbol: string; assetClass: string; total: number; triggered: number;
     wins: number; totalR: number; avgRr: number; rrCount: number
@@ -112,7 +132,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
   const marketRows = [...byMarket.values()].sort((a, b) => b.totalR - a.totalR)
 
   // Filtered outcomes for table
-  const filtered = shadowOutcomes.filter(o => {
+  const filtered = dateFilteredOutcomes.filter(o => {
     const st = o.shadow_trade
     const opp = st?.opportunity
     if (sessionFilter !== 'ALL' && st?.session !== sessionFilter) return false
@@ -123,7 +143,6 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
 
   return (
     <div className="space-y-6">
-      {/* Warning banner */}
       <div className="rounded-lg border border-amber-200 bg-amber-50/50 px-4 py-3">
         <p className="text-xs text-amber-800 font-medium">
           Shadow benchmark data is restricted to management. Analysts do not have visibility of these metrics.
@@ -131,7 +150,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
         </p>
       </div>
 
-      {/* Summary comparison */}
+      {/* Summary */}
       <section className="space-y-3">
         <h2 className="text-sm font-medium">Shadow vs Actual — Since Platform Launch</h2>
         <div className="grid grid-cols-3 gap-3">
@@ -197,7 +216,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
       {/* Per-market */}
       {marketRows.length > 0 && (
         <section className="space-y-3">
-          <h2 className="text-sm font-medium">By Market</h2>
+          <h2 className="text-sm font-medium">By Market (All Time)</h2>
           <div className="rounded-lg border border-border overflow-hidden">
             <table className="w-full text-sm">
               <thead className="bg-muted/50">
@@ -233,11 +252,28 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
         </section>
       )}
 
-      {/* Recent outcomes */}
+      {/* Outcomes table */}
       <section className="space-y-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-medium">Shadow Outcomes ({filtered.length})</h2>
-          <div className="flex items-center gap-2">
+          <h2 className="text-sm font-medium">
+            Shadow Outcomes ({filtered.length}
+            {dateRangeDays > 0 ? ` — last ${dateRangeDays === 1 ? '24 hours' : `${dateRangeDays} days`}` : ' — all time'})
+          </h2>
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            {/* Date range buttons */}
+            <div className="flex items-center gap-1">
+              {DATE_RANGES.map(r => (
+                <button key={r.days}
+                  onClick={() => setDateRangeDays(r.days)}
+                  className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
+                    dateRangeDays === r.days
+                      ? 'bg-foreground text-background border-foreground'
+                      : 'border-border text-muted-foreground hover:text-foreground'
+                  }`}>
+                  {r.label}
+                </button>
+              ))}
+            </div>
             <select value={outcomeFilter} onChange={e => setOutcomeFilter(e.target.value)}
               className="text-xs px-2 py-1.5 rounded-md border border-border bg-background">
               <option value="ALL">All outcomes</option>
@@ -274,7 +310,13 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {filtered.slice(0, 100).map(outcome => {
+              {filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={10} className="px-4 py-6 text-center text-xs text-muted-foreground">
+                    No shadow outcomes for the selected period.
+                  </td>
+                </tr>
+              ) : filtered.map(outcome => {
                 const st = outcome.shadow_trade
                 const opp = st?.opportunity
                 const precision = opp?.market?.display_precision ?? 4
