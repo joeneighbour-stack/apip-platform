@@ -16,6 +16,18 @@
 //      defaults to ZONE_1 (notebook: 'Zone 1') rather than propagating null.
 // These need a V1.2 architecture amendment; flagged here so the code is
 // correct now rather than waiting for the document to catch up.
+//
+// ZONE/DIRECTION ALIGNMENT (V1.3 amendment):
+//   BUY  entries must be in low zones  (ZONE_1, ZONE_2, TOO_DEEP).
+//   SELL entries must be in high zones (ZONE_3, ZONE_4, TOO_HIGH).
+//   This enforces the ATR band principle: buy cheap in the lower band,
+//   sell expensive in the upper band. The template selector filters to
+//   aligned templates first; if no aligned templates meet MIN_TEMPLATE_TRADES,
+//   it falls back to the unfiltered subset (preserving existing fallback
+//   behaviour rather than producing a hard error). This is a product decision,
+//   not a notebook deviation -- the notebook never considers countertrend zone
+//   setups because its backtest data was already zone-filtered at source.
+// ============================================================================
 
 import type { AtrZone, Direction } from '../types/domain.js';
 
@@ -51,6 +63,16 @@ export interface SelectBestTemplateOutput {
 const HIGH_CONFIDENCE_MIN_TRADES = 50;
 const MEDIUM_CONFIDENCE_MIN_TRADES = 20;
 const MIN_TEMPLATE_TRADES = 10;
+
+// Zone/direction alignment sets -- BUY entries in low zones, SELL in high zones
+const BUY_ZONES  = new Set<AtrZone | null>(['ZONE_1', 'ZONE_2', 'TOO_DEEP'])
+const SELL_ZONES = new Set<AtrZone | null>(['ZONE_3', 'ZONE_4', 'TOO_HIGH'])
+
+function isZoneAligned(direction: Direction, entryZone: AtrZone | null): boolean {
+  if (direction === 'BUY')  return BUY_ZONES.has(entryZone)
+  if (direction === 'SELL') return SELL_ZONES.has(entryZone)
+  return true
+}
 
 function groupKey(market: string, direction: Direction, entryZone: AtrZone | null): string {
   return `${market}\u0000${direction}\u0000${entryZone ?? '\u0000NULL\u0000'}`;
@@ -88,7 +110,6 @@ export function buildTemplateProfiles(trades: HistoricalTradeForProfiling[]): Te
     // winRate, unlike avgR, is always a real number, never NaN.
     const wins = groupTrades.filter((t) => (t.resultR ?? NaN) > 0).length;
     const winRate = wins / tradesCount;
-
     const triggerRate = groupTrades.filter((t) => t.triggered).length / tradesCount;
 
     const templateQuality: 'HIGH' | 'MEDIUM' | 'LOW' =
@@ -115,6 +136,12 @@ export function selectBestTemplate(market: string, templates: TemplateProfile[])
     };
   }
 
+  // Zone/direction alignment filter: BUY→low zones, SELL→high zones.
+  // Falls back to unfiltered subset if no aligned templates meet the trade count
+  // threshold -- preserves existing fallback behaviour rather than hard erroring.
+  const aligned = subset.filter((t) => isZoneAligned(t.direction, t.entryZone))
+  const candidates = aligned.length > 0 ? aligned : subset
+
   // Exact notebook sort: avg_r desc, trades desc, win_rate desc.
   // pandas sort_values places NaN LAST regardless of ascending/descending
   // direction (na_position='last' default) -- a naive `b.avgR - a.avgR`
@@ -129,14 +156,14 @@ export function selectBestTemplate(market: string, templates: TemplateProfile[])
     return b - a;
   }
 
-  const sorted = [...subset].sort((a, b) => {
+  const sorted = [...candidates].sort((a, b) => {
     const avgRCmp = compareDesc(a.avgR, b.avgR);
     if (avgRCmp !== 0) return avgRCmp;
     if (b.trades !== a.trades) return b.trades - a.trades;
     return compareDesc(a.winRate, b.winRate);
   });
-  const best = sorted[0]!;
 
+  const best = sorted[0]!;
   return {
     templateSource: 'historical_template',
     direction: best.direction,
