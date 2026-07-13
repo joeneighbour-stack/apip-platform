@@ -55,7 +55,6 @@ on:
           - condition-awareness
           - import-actual-trades
           - generate-post-trade-reviews
-
 jobs:
 
   populate-daily:
