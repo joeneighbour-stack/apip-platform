@@ -525,7 +525,7 @@ async function main() {
         if (oppErr || !oppRow) { console.error(`  ${market.symbol} opp error: ${oppErr?.message}`); continue }
         opportunitiesCreated++
 
-        const { data: rvRow, error: rvErr } = await db.from('recommendation_versions').insert({
+        const { data: rvRow, error: rvErr } = await db.from('recommendation_versions').upsert({
           recommendation_version_id: item.rvId,
           opportunity_id: oppRow.opportunity_id,
           version_number: 1, generated_at: generatedAt, shown_at: generatedAt,
@@ -539,7 +539,7 @@ async function main() {
           risk_range: rv.riskRange, target_range: rv.targetRange,
           volatility_warning: rv.volatilityWarning ?? '',
           atr_move_since_generation: rv.atrMoveSinceGeneration,
-        }).select('recommendation_version_id').single()
+        }, { onConflict: 'recommendation_version_id' }).select('recommendation_version_id').single()
 
         if (rvErr || !rvRow) { console.error(`  ${market.symbol} rv error: ${rvErr?.message}`); continue }
 
