@@ -1,5 +1,4 @@
 'use server'
-
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { revalidatePath } from 'next/cache'
@@ -68,24 +67,21 @@ export async function resolveDispute(
       .from('actual_trades')
       .update(overrideValues as any)
       .eq('trade_id', dispute.trade_id)
-
     if (tradeError) return { error: `Failed to update trade: ${tradeError.message}` }
   }
 
-  // 2. Write to audit_log
+  // 2. Write to audit_events (correct table and column names)
   const { error: auditError } = await serviceClient
-    .from('audit_log')
+    .from('audit_events')
     .insert({
+      actor_type: 'USER',
+      actor_id: appUser.app_user_id,
+      action: 'DISPUTE_RESOLVED',
       table_name: 'actual_trades',
       record_id: dispute.trade_id,
-      changed_by_id: appUser.app_user_id,
-      change_type: 'UPDATE',
-      before_values: dispute.original_values,
-      after_values: overrideValues,
-      reason: adminNote,
-      related_dispute_id: disputeId,
+      before_value: dispute.original_values,
+      after_value: overrideValues,
     })
-
   if (auditError) return { error: `Failed to write audit log: ${auditError.message}` }
 
   // 3. Update the dispute status
@@ -126,6 +122,20 @@ export async function rejectDispute(
   }
 
   const serviceClient = createServiceClient()
+
+  // Write rejection to audit_events
+  const { error: auditError } = await serviceClient
+    .from('audit_events')
+    .insert({
+      actor_type: 'USER',
+      actor_id: appUser.app_user_id,
+      action: 'DISPUTE_REJECTED',
+      table_name: 'trade_disputes',
+      record_id: disputeId,
+      before_value: { status: 'OPEN' },
+      after_value: { status: 'REJECTED', admin_note: adminNote },
+    })
+  if (auditError) console.error('Failed to write audit log:', auditError.message)
 
   const { error } = await serviceClient
     .from('trade_disputes')
