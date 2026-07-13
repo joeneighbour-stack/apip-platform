@@ -508,7 +508,7 @@ async function main() {
 
         const intraday = intradayByMarket.get(market.market_id)
 
-        const { data: oppRow, error: oppErr } = await db.from('opportunities').insert({
+        const { data: oppRow, error: oppErr } = await db.from('opportunities').upsert({
           date: today, market_id: market.market_id, session,
           publication_window_start_uk: `${String(windowStartHour).padStart(2,'0')}:00`,
           publication_window_end_uk: `${String(windowEndHour).padStart(2,'0')}:00`,
@@ -520,7 +520,7 @@ async function main() {
           opportunity_lifecycle_status: 'ASSIGNED',
           analyst_action: opp.analystAction,
           assigned_analyst_id: allocation.assignedAnalystId,
-        }).select('opportunity_id').single()
+        }, { onConflict: 'date,market_id,session' }).select('opportunity_id').single()
 
         if (oppErr || !oppRow) { console.error(`  ${market.symbol} opp error: ${oppErr?.message}`); continue }
         opportunitiesCreated++
