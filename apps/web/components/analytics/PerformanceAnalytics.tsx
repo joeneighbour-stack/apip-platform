@@ -271,13 +271,7 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
             ]}
             selected={selectedSessions} onChange={setSelectedSessions} placeholder="All sessions" />
         </div>
-        <div className="flex items-center gap-2">
-          <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
-            <input type="checkbox" checked={activeOnly} onChange={e => { setActiveOnly(e.target.checked); setSelectedAnalysts([]) }}
-              className="rounded" />
-            Active analysts only
-          </label>
-        </div>
+
       </div>
 
       {/* KPI tiles */}
@@ -412,7 +406,17 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
       {/* Analyst table */}
       {analystBreakdown.length > 1 && (
         <div className="space-y-2">
+          <div className="flex items-center justify-between">
           <p className="text-xs font-medium text-muted-foreground">By analyst</p>
+          <button onClick={() => { setActiveOnly(!activeOnly); setSelectedAnalysts([]) }}
+            className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
+              activeOnly
+                ? 'bg-foreground text-background border-foreground'
+                : 'border-border text-muted-foreground hover:text-foreground'
+            }`}>
+            {activeOnly ? 'Active only' : 'All analysts'}
+          </button>
+        </div>
           <div className="rounded-lg border border-border overflow-hidden">
             <table className="w-full text-sm">
               <thead className="bg-muted/50">
@@ -423,7 +427,7 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {analystBreakdown.map((row, i) => (
+                {analystBreakdown.filter(row => !activeOnly || analysts.find(a => a.analyst_id === row.id && a.active !== false)).map((row, i) => (
                   <tr key={row.id} className="hover:bg-muted/30 transition-colors">
                     <td className="px-4 py-2.5 font-medium flex items-center gap-2">
                       <span className="w-2 h-2 rounded-full shrink-0"
