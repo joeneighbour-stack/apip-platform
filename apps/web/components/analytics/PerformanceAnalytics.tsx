@@ -138,6 +138,8 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
   const [selectedSessions, setSelectedSessions] = useState<string[]>([])
   const [fromMonth, setFromMonth] = useState(earliestMonth)
   const [toMonth, setToMonth] = useState(latestMonth)
+  const [showAllMonths, setShowAllMonths] = useState(false)
+  const [activeOnly, setActiveOnly] = useState(true)
 
   const assetClasses = useMemo(() =>
     [...new Set(markets.map(m => m.asset_class))].sort(), [markets])
@@ -247,7 +249,7 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
             </select>
           </div>
           <MultiSelect label="Analysts"
-            options={analysts.map(a => ({ value: a.analyst_id, label: a.display_name }))}
+            options={(activeOnly ? analysts.filter((a: any) => a.active !== false) : analysts).map(a => ({ value: a.analyst_id, label: a.display_name }))}
             selected={selectedAnalysts} onChange={setSelectedAnalysts} placeholder="All analysts" />
           <MultiSelect label="Asset class"
             options={assetClasses.map(c => ({ value: c, label: c }))}
@@ -268,6 +270,13 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
               { value: 'OTHER', label: 'Other' },
             ]}
             selected={selectedSessions} onChange={setSelectedSessions} placeholder="All sessions" />
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+            <input type="checkbox" checked={activeOnly} onChange={e => { setActiveOnly(e.target.checked); setSelectedAnalysts([]) }}
+              className="rounded" />
+            Active analysts only
+          </label>
         </div>
       </div>
 
@@ -356,7 +365,7 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {[...monthlyBreakdown].reverse().map(row => (
+                {([...monthlyBreakdown].reverse().slice(0, showAllMonths ? undefined : 12)).map(row => (
                   <tr key={row.key} className="hover:bg-muted/30 transition-colors">
                     <td className="px-4 py-2.5 font-medium">{row.label}</td>
                     <td className="px-4 py-2.5 tabular-nums text-muted-foreground">{row.count}</td>
@@ -391,6 +400,12 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
               </tfoot>
             </table>
           </div>
+          {monthlyBreakdown.length > 12 && (
+            <button onClick={() => setShowAllMonths(!showAllMonths)}
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors mt-2">
+              {showAllMonths ? `Show less ▲` : `Show all ${monthlyBreakdown.length} months ▼`}
+            </button>
+          )}
         </div>
       )}
 
