@@ -2,9 +2,27 @@
 // APIP Trading Intelligence & Performance Platform
 // Intraday Market State Snapshot Script
 // ============================================================================
-// Captures current price and today's developing high/low from Finnhub.
+// Captures current price and session-specific developing high/low.
 // Computes current zone against full daily bar history.
 // Writes to market_state_intraday.
+//
+// SESSION H/L TRACKING:
+// Finnhub quote.h / quote.l are CALENDAR DAY values (midnight UTC reset),
+// not session-specific. To build accurate session h/l, we track developing
+// range ourselves by comparing each snapshot against the previous snapshot
+// for the same market + session:
+//
+//   First snapshot of session:  session_high = session_low = current_price
+//   Subsequent snapshots:       session_high = max(prev_high, current_price)
+//                               session_low  = min(prev_low, current_price)
+//
+// This gives us a monotonically expanding range from session start,
+// independent of Finnhub's calendar day reset.
+//
+// Session windows (UK time):
+//   EUROPEAN: 22:00 prev day → 06:00 (snapshot at 04:45 UTC)
+//   US:       22:00 prev day → 12:00 (snapshot at 10:45 UTC)
+//   APAC:     10:00 → 16:00          (snapshot at 14:45 UTC)
 //
 // Run:
 //   npx tsx src/scripts/captureIntradaySnapshot.ts --session=EUROPEAN
@@ -12,6 +30,10 @@
 //   npx tsx src/scripts/captureIntradaySnapshot.ts --session=APAC
 //
 // Required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, FINNHUB_API_KEY
+//
+// REVERT NOTE: to revert this change:
+//   git log --oneline -10
+//   git checkout <commit-before-this-change> -- intelligence-engine/src/scripts/captureIntradaySnapshot.ts
 // ============================================================================
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { fileURLToPath } from 'node:url'
@@ -90,7 +112,33 @@ async function main() {
     (marketRows ?? []).map(m => [m.symbol, m])
   )
 
-  // Load FULL bar history for each market -- needed for ATR convergence
+  // ── Load previous session snapshots for session h/l continuity ────────────
+  // For each market, find the most recent snapshot for THIS session today.
+  // If found, we extend its h/l with the current price.
+  // If not found, this is the first snapshot of the session -- seed with current price.
+  const sessionStart = new Date(capturedAt)
+  // Look back up to 24h to find previous snapshots for this session
+  const lookbackStart = new Date(sessionStart.getTime() - 24 * 60 * 60 * 1000).toISOString()
+
+  const { data: prevSnapshots } = await db
+    .from('market_state_intraday')
+    .select('market_id, session_high, session_low, captured_at')
+    .eq('session', session)
+    .gte('captured_at', lookbackStart)
+    .order('captured_at', { ascending: false })
+
+  // Index: market_id → most recent snapshot for this session
+  const prevByMarket = new Map<string, { session_high: number; session_low: number }>()
+  for (const snap of (prevSnapshots ?? [])) {
+    if (!prevByMarket.has(snap.market_id)) {
+      prevByMarket.set(snap.market_id, {
+        session_high: Number(snap.session_high),
+        session_low: Number(snap.session_low),
+      })
+    }
+  }
+
+  // Load FULL bar history for ATR convergence
   const allBars: any[] = []
   let page = 0, hasMore = true
   while (hasMore) {
@@ -139,33 +187,45 @@ async function main() {
     try {
       const quote = await fetchQuote(market.price_data_symbol, FINNHUB_API_KEY)
       const currentPrice = quote.c
-      const sessionHigh = quote.h > 0 ? quote.h : null
-      const sessionLow = quote.l > 0 ? quote.l : null
 
+      // ── Session h/l: track ourselves, independent of Finnhub calendar day ──
+      // First snapshot of session: seed with current price
+      // Subsequent snapshots: extend previous session h/l with current price
+      const prev = prevByMarket.get(market.market_id)
+      const sessionHigh = prev
+        ? Math.max(prev.session_high, currentPrice)
+        : currentPrice
+      const sessionLow = prev
+        ? Math.min(prev.session_low, currentPrice)
+        : currentPrice
+
+      // Build market state using full bar history for accurate ATR
       const bars = barsByMarketId.get(market.market_id) ?? []
       let currentZone: string | null = null
 
       if (bars.length >= ATR_PERIOD) {
-        let barsForState = bars
-        if (sessionHigh && sessionLow) {
-          const lastBar = bars[bars.length - 1]!
-          if (lastBar.date < today) {
-            barsForState = [...bars, {
-              date: today,
-              open: currentPrice,
-              high: sessionHigh,
-              low: sessionLow,
-              close: currentPrice,
-            }]
-          } else {
-            barsForState = [...bars.slice(0, -1), {
-              ...lastBar,
-              high: Math.max(lastBar.high, sessionHigh),
-              low: Math.min(lastBar.low, sessionLow),
-              close: currentPrice,
-            }]
-          }
+        const lastBar = bars[bars.length - 1]!
+        let barsForState: OhlcBar[]
+
+        if (lastBar.date < today) {
+          // Previous day's bar is latest -- add today's developing bar
+          barsForState = [...bars, {
+            date: today,
+            open: currentPrice,
+            high: sessionHigh,
+            low: sessionLow,
+            close: currentPrice,
+          }]
+        } else {
+          // Today's bar exists -- update with session h/l
+          barsForState = [...bars.slice(0, -1), {
+            ...lastBar,
+            high: Math.max(lastBar.high, sessionHigh),
+            low: Math.min(lastBar.low, sessionLow),
+            close: currentPrice,
+          }]
         }
+
         const state = buildMarketState({
           marketId: market.market_id,
           ohlcSeries: barsForState,
@@ -181,6 +241,7 @@ async function main() {
         continue
       }
 
+      const isFirstSnapshot = !prev
       const row = {
         market_id: market.market_id,
         session,
@@ -200,7 +261,7 @@ async function main() {
         }
       }
 
-      console.log(`  ${symbol}: price=${currentPrice}, zone=${currentZone}, h=${sessionHigh}, l=${sessionLow}${isDryRun ? ' [DRY RUN]' : ''}`)
+      console.log(`  ${symbol}: price=${currentPrice}, zone=${currentZone}, h=${sessionHigh.toFixed(4)}, l=${sessionLow.toFixed(4)}${isFirstSnapshot ? ' [session start]' : ''}${isDryRun ? ' [DRY RUN]' : ''}`)
       summary.captured++
     } catch (err) {
       console.error(`  ${symbol}: ${(err as Error).message}`)
@@ -216,7 +277,6 @@ async function main() {
   console.log(`Errors: ${summary.errors}`)
   if (isDryRun) console.log('\nDRY RUN -- nothing written.')
 
-  // Exit 1 if all markets failed -- ensures CI/cron alerts fire on total failure
   if (!isDryRun && summary.errors > 0 && summary.captured === 0) {
     console.error('All markets failed to capture -- exiting with code 1')
     process.exit(1)
