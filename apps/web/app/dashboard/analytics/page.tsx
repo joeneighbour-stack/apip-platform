@@ -12,7 +12,6 @@ export default async function PerformanceAnalyticsPage() {
   const { data: analysts } = await supabase
     .from('analysts')
     .select('analyst_id, display_name')
-    .eq('active', true)
     .order('display_name')
 
   const { data: markets } = await supabase

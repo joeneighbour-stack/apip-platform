@@ -66,10 +66,12 @@ function generateMonthOptions(trades: Trade[]) {
 function computeStats(trades: Trade[]) {
   const totalR = trades.reduce((s, t) => s + (t.result_r ?? 0), 0)
   const count = trades.length
-  const platform = trades.filter(t => !t.historical_backfill && t.triggered)
-  const wins = platform.filter(t => (t.result_r ?? 0) > 0).length
-  const winRate = platform.length > 0 ? wins / platform.length : null
+  const withResult = trades.filter(t => t.result_r !== null)
+  const wins = withResult.filter(t => (t.result_r ?? 0) > 0).length
+  const winRate = withResult.length > 0 ? wins / withResult.length : null
   const avgR = count > 0 ? totalR / count : 0
+  const triggered = trades.filter(t => t.triggered).length
+  const triggerRate = trades.length > 0 ? triggered / trades.length : null
   return { totalR, count, winRate, avgR }
 }
 
@@ -432,6 +434,7 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
                   <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Total R</th>
                   <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Avg R</th>
                   <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Win Rate</th>
+                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Trigger Rate</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
