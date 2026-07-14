@@ -530,7 +530,7 @@ async function main() {
           publication_window_start_uk: `${String(windowStartHour).padStart(2,'0')}:00`,
           publication_window_end_uk: `${String(windowEndHour).padStart(2,'0')}:00`,
           current_zone: marketState.currentZone ?? intraday?.current_zone,
-          preferred_entry_zone: rv.zoneAtGeneration,
+          preferred_entry_zone: opp.preferredEntryZone,
           direction: item.opp.direction,
           expected_r: opp.expectedR,
           trigger_probability: cappedTriggerProbability,
