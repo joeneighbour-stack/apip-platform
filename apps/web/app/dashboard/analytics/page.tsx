@@ -19,44 +19,24 @@ export default async function PerformanceAnalyticsPage() {
     .select('market_id, symbol, asset_class')
     .order('asset_class, symbol')
 
-  const fiveYearsAgo = new Date('2017-01-01T00:00:00Z')
-
   const FIELDS = `trade_id, analyst_id, direction, result_r,
     triggered, published_at, historical_backfill,
     market:market_id ( market_id, symbol, asset_class )`
-  const BASE = fiveYearsAgo.toISOString()
-  const PAGE = 1000
-  const TOTAL = 20000
 
-  // First page to get initial data and check if more pages needed
-  const { data: firstPage } = await supabase
-    .from('actual_trades')
-    .select(FIELDS)
-    .gte('published_at', BASE)
-    .order('published_at', { ascending: false })
-    .range(0, PAGE - 1)
-
-  let allTrades = firstPage ?? []
-
-  if (allTrades.length === PAGE) {
-    // Fetch remaining pages concurrently
-    const totalPages = Math.ceil(TOTAL / PAGE)
-    const remaining = await Promise.all(
-      Array.from({ length: totalPages - 1 }, (_, i) =>
-        supabase
-          .from('actual_trades')
-          .select(FIELDS)
-          .gte('published_at', BASE)
-          .order('published_at', { ascending: false })
-          .range((i + 1) * PAGE, (i + 2) * PAGE - 1)
-          .then(r => r.data ?? [])
-      )
+  // Fetch all pages concurrently -- we know there are ~20k trades across ~20 pages
+  const pages = await Promise.all(
+    Array.from({ length: 25 }, (_, i) =>
+      supabase
+        .from('actual_trades')
+        .select(FIELDS)
+        .gte('published_at', '2017-01-01T00:00:00Z')
+        .order('published_at', { ascending: false })
+        .range(i * 1000, i * 1000 + 999)
+        .then(r => r.data ?? [])
     )
-    for (const page of remaining) {
-      allTrades = [...allTrades, ...page]
-      if (page.length < PAGE) break // last page
-    }
-  }
+  )
+
+  const allTrades = pages.flat()
 
   return (
     <div className="space-y-6">
