@@ -401,8 +401,7 @@ async function main() {
       const allTrades = tradesBySymbol.get(symbol) ?? []
       const rvId = randomUUID()
       const regime = regimeByMarketId.get(market.market_id)
-      const currentZone = marketStateWithZone.currentZone
-
+      const marketCurrentZone = marketStateWithZone.currentZone
       // Direction: regime first, then current zone for MIXED/absent
       let preferredDirection: 'BUY' | 'SELL' | null = null
       const trendState = regime?.trend_state
@@ -412,12 +411,12 @@ async function main() {
       } else if (trendState === 'TRENDING_DOWN') {
         preferredDirection = 'SELL'
         console.log(`    Regime(TRENDING_DOWN) → direction: SELL`)
-      } else if (currentZone && ['ZONE_1', 'ZONE_2', 'TOO_DEEP'].includes(currentZone)) {
+      } else if (marketCurrentZone && ['ZONE_1', 'ZONE_2', 'TOO_DEEP'].includes(marketCurrentZone)) {
         preferredDirection = 'BUY'
-        console.log(`    Zone(${currentZone}) → direction: BUY`)
-      } else if (currentZone && ['ZONE_3', 'ZONE_4', 'TOO_HIGH'].includes(currentZone)) {
+        console.log(`    Zone(${marketCurrentZone}) → direction: BUY`)
+      } else if (marketCurrentZone && ['ZONE_3', 'ZONE_4', 'TOO_HIGH'].includes(marketCurrentZone)) {
         preferredDirection = 'SELL'
-        console.log(`    Zone(${currentZone}) → direction: SELL`)
+        console.log(`    Zone(${marketCurrentZone}) → direction: SELL`)
       }
 
       const trades = allTrades
@@ -445,6 +444,7 @@ async function main() {
           parameterSnapshot,
           parameterSnapshotHash,
           marketDisplayPrecision: market.display_precision ?? null,
+          preferredDirection,
         })
 
         const { opportunity: opp, recommendationVersion: rv, hiddenExecutionLevels: hidden, diagnostics } = result
