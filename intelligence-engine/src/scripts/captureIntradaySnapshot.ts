@@ -118,7 +118,7 @@ async function main() {
   // If not found, this is the first snapshot of the session -- seed with current price.
   const sessionStart = new Date(capturedAt)
   // Look back up to 24h to find previous snapshots for this session
-  const lookbackStart = new Date(sessionStart.getTime() - 24 * 60 * 60 * 1000).toISOString()
+  const lookbackStart = new Date().toISOString().slice(0, 10) + 'T00:00:00Z'
 
   const { data: prevSnapshots } = await db
     .from('market_state_intraday')
