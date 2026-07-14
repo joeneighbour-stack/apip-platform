@@ -1,4 +1,3 @@
-// ============================================================================
 // RecommendationService
 // Maps to: APIP_RESEARCH_ENGINE_V1_0.ipynb cell 10 (build_recommendations)
 // Contract: APIP_INTELLIGENCE_ENGINE_ARCHITECTURE_V1.3.md Section 3.9,
@@ -26,6 +25,11 @@
 // in V1; a reader joins back to template_profiles/analyst_profiles instead.
 // They remain available in the `diagnostics` return value for debugging/
 // testing ONLY -- diagnostics is explicitly not a persisted shape.
+//
+// DIRECTION CONSTRAINT (V1.4 amendment):
+//   Caller may pass preferredDirection derived from market regime and/or
+//   current zone position. This constrains template selection to aligned
+//   direction only, preventing countertrend setups.
 import type { AtrZone, Direction, SessionType, ImplementedValidityState } from '../types/domain.js';
 import type { MarketStateOutput } from './marketStateService.js';
 import type { MarketRegimeOutput } from './marketRegimeService.js';
@@ -55,7 +59,8 @@ export interface BuildRecommendationInput {
   forceRecalcAtrThreshold: number;
   parameterSnapshot: Record<string, unknown>;
   parameterSnapshotHash: string;
-  marketDisplayPrecision: number | null; // from markets.display_precision -- see guidanceRangeFormatter.ts
+  marketDisplayPrecision: number | null;
+  preferredDirection?: Direction | null; // derived from regime/zone in runEngineSession
 }
 export type OpportunityLifecycleStatus = 'DRAFT' | 'GENERATED' | 'ASSIGNED' | 'SHOWN' | 'ACTIVE' | 'CLOSED' | 'CANCELLED';
 /** Maps to the `opportunities` table. */
@@ -63,7 +68,7 @@ export interface OpportunityOutput {
   opportunityId: string;
   market: string;
   session: SessionType;
-  date: string; // YYYY-MM-DD
+  date: string;
   direction: Direction;
   currentZone: AtrZone | null;
   preferredEntryZone: AtrZone;
@@ -80,8 +85,8 @@ export interface RecommendationVersionOutput {
   versionNumber: number;
   entryRangeLow: number;
   entryRangeHigh: number;
-  riskRange: string;   // deterministic guidance text, NOT an executable level -- see guidanceRangeFormatter
-  targetRange: string; // same
+  riskRange: string;
+  targetRange: string;
   recommendationValidityStatus: ImplementedValidityState;
   requiresRefresh: boolean;
   zoneAtGeneration: AtrZone | null;
@@ -93,17 +98,12 @@ export interface RecommendationVersionOutput {
   volatilityWarning: string;
   atrMoveSinceGeneration: number | null;
 }
-/**
- * Precise numeric levels for the HIDDEN shadow trade only (ShadowTradeService).
- * Never shown to an analyst, never persisted to recommendation_versions.
- */
 export interface HiddenExecutionLevels {
   entryMid: number;
   stop: number;
   target: number;
   rr: number;
 }
-/** NOT a persisted shape. Debugging/testing aid only -- see file header. */
 export interface RecommendationDiagnostics {
   templateSource: 'historical_template' | 'fallback';
   templateAvgR: number;
@@ -129,10 +129,11 @@ export function buildRecommendation(input: BuildRecommendationInput): BuildRecom
     recommendationVersionId, generatedAt, market, session, marketState, marketRegime, eventRisks,
     trades, activeAnalysts, minimumRr, minTriggerSample, fallbackTriggerProbability,
     staleAtrThreshold, forceRecalcAtrThreshold, parameterSnapshot, parameterSnapshotHash,
-    marketDisplayPrecision,
+    marketDisplayPrecision, preferredDirection,
   } = input;
   const templates: TemplateProfile[] = buildTemplateProfiles(trades);
-  const template = selectBestTemplate(market, templates);
+  // Pass preferredDirection constraint -- derived from regime/zone in caller
+  const template = selectBestTemplate(market, templates, preferredDirection);
   const direction = template.direction;
   const zone = template.preferredEntryZone;
   const analystProfiles: AnalystProfile[] = buildAnalystProfiles(trades);
@@ -161,10 +162,6 @@ export function buildRecommendation(input: BuildRecommendationInput): BuildRecom
     atr14: marketState.atr14,
     staleAtrThreshold, forceRecalcAtrThreshold,
   });
-
-  // ── Analyst-facing guidance ranges ──────────────────────────────────────
-  // Uses ATR-normalised distance distributions (q25–q75) from validated
-  // historical data. NOT arbitrary tolerance bands around shadow prices.
   const riskRange = formatGuidanceRange({
     entryMid: entryStopTarget.entryMid,
     distanceLow: entryStopTarget.riskRangeLow,
@@ -179,7 +176,6 @@ export function buildRecommendation(input: BuildRecommendationInput): BuildRecom
     direction, type: 'target',
     displayPrecision: marketDisplayPrecision,
   });
-
   const opportunity: OpportunityOutput = {
     opportunityId, market, session, date: dateOnly, direction,
     currentZone: marketState.currentZone, preferredEntryZone: zone, analystAction,

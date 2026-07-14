@@ -400,16 +400,27 @@ async function main() {
 
       const allTrades = tradesBySymbol.get(symbol) ?? []
       const rvId = randomUUID()
-
       const regime = regimeByMarketId.get(market.market_id)
-      const preferredDir = preferredDirectionByMarketId.get(market.market_id)
-      const regimeIsStrong = regime && ['HIGH', 'MEDIUM'].includes(regime.regime_confidence)
+      const currentZone = marketStateWithZone.currentZone
 
-      let trades = allTrades
-      if (preferredDir && regimeIsStrong && allTrades.filter(t => t.direction === preferredDir).length >= 10) {
-        trades = allTrades.filter(t => t.direction === preferredDir)
-        console.log(`    Regime(${regime?.trend_state}) → preferred direction: ${preferredDir} (${trades.length}/${allTrades.length} trades)`)
+      // Direction: regime first, then current zone for MIXED/absent
+      let preferredDirection: 'BUY' | 'SELL' | null = null
+      const trendState = regime?.trend_state
+      if (trendState === 'TRENDING_UP') {
+        preferredDirection = 'BUY'
+        console.log(`    Regime(TRENDING_UP) → direction: BUY`)
+      } else if (trendState === 'TRENDING_DOWN') {
+        preferredDirection = 'SELL'
+        console.log(`    Regime(TRENDING_DOWN) → direction: SELL`)
+      } else if (currentZone && ['ZONE_1', 'ZONE_2', 'TOO_DEEP'].includes(currentZone)) {
+        preferredDirection = 'BUY'
+        console.log(`    Zone(${currentZone}) → direction: BUY`)
+      } else if (currentZone && ['ZONE_3', 'ZONE_4', 'TOO_HIGH'].includes(currentZone)) {
+        preferredDirection = 'SELL'
+        console.log(`    Zone(${currentZone}) → direction: SELL`)
       }
+
+      const trades = allTrades
 
       // Profile-based trigger rate -- used as both fallback and cap
       // Backfill has triggered=true for all trades → 100% without cap
