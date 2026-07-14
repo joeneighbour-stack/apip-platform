@@ -168,9 +168,7 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
   const [selectedMarkets, setSelectedMarkets] = useState<string[]>([])
   const [selectedDirections, setSelectedDirections] = useState<string[]>([])
   const [selectedSessions, setSelectedSessions] = useState<string[]>([])
-  const [fromMonth, setFromMonth] = useState(
-    monthOptions.length > 12 ? monthOptions[monthOptions.length - 12] : earliestMonth
-  )
+  const [fromMonth, setFromMonth] = useState(earliestMonth)
   const [toMonth, setToMonth] = useState(latestMonth)
 
   // Asset classes in data
