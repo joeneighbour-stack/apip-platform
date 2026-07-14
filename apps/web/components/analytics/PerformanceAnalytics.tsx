@@ -6,8 +6,6 @@ import {
   Tooltip, ResponsiveContainer, ReferenceLine, Cell, Legend
 } from 'recharts'
 
-// ── Types ──────────────────────────────────────────────────────────────────
-
 interface Analyst { analyst_id: string; display_name: string }
 interface Market { market_id: string; symbol: string; asset_class: string }
 interface Trade {
@@ -27,25 +25,16 @@ interface Props {
   trades: Trade[]
 }
 
-// ── Session derivation from published_at (UK time) ─────────────────────────
-// European: 06:00–07:20 UK
-// US:       12:00–13:20 UK
-// APAC:     15:00–16:30 UK
-
 function deriveSession(publishedAt: string): 'EUROPEAN' | 'US' | 'APAC' | 'OTHER' {
   const date = new Date(publishedAt)
-  // Convert to UK time (UTC+1 BST or UTC+0 GMT -- approximate with UTC+1 for summer)
   const ukHour = (date.getUTCHours() + 1) % 24
   const ukMin = date.getUTCMinutes()
   const ukTime = ukHour * 60 + ukMin
-
   if (ukTime >= 6 * 60 && ukTime <= 7 * 60 + 20) return 'EUROPEAN'
   if (ukTime >= 12 * 60 && ukTime <= 13 * 60 + 20) return 'US'
   if (ukTime >= 15 * 60 && ukTime <= 16 * 60 + 30) return 'APAC'
   return 'OTHER'
 }
-
-// ── Date helpers ───────────────────────────────────────────────────────────
 
 function monthKey(dateStr: string) { return dateStr.slice(0, 7) }
 function monthLabel(key: string) {
@@ -54,14 +43,11 @@ function monthLabel(key: string) {
     .toLocaleDateString('en-GB', { month: 'short', year: '2-digit' })
 }
 
-// Generate month options from earliest trade to now
 function generateMonthOptions(trades: Trade[]) {
   if (trades.length === 0) return []
   const keys = new Set(trades.map(t => monthKey(t.published_at)))
   return [...keys].sort()
 }
-
-// ── Stats computation ──────────────────────────────────────────────────────
 
 function computeStats(trades: Trade[]) {
   const totalR = trades.reduce((s, t) => s + (t.result_r ?? 0), 0)
@@ -70,18 +56,16 @@ function computeStats(trades: Trade[]) {
   const wins = withResult.filter(t => (t.result_r ?? 0) > 0).length
   const winRate = withResult.length > 0 ? wins / withResult.length : null
   const avgR = count > 0 ? totalR / count : 0
-  const triggered = trades.filter(t => t.triggered).length
-  const triggerRate = trades.length > 0 ? triggered / trades.length : null
-  return { totalR, count, winRate, avgR }
+  const triggeredCount = trades.filter(t => t.triggered).length
+  const triggerRate = count > 0 ? triggeredCount / count : null
+  return { totalR, count, winRate, avgR, triggerRate }
 }
 
-// ── Colours for analyst lines ──────────────────────────────────────────────
 const ANALYST_COLOURS = [
   '#3b82f6', '#22c55e', '#f59e0b', '#8b5cf6', '#ef4444',
   '#06b6d4', '#f97316', '#ec4899', '#84cc16', '#14b8a6'
 ]
 
-// ── Multi-select component ─────────────────────────────────────────────────
 function MultiSelect({
   label, options, selected, onChange, placeholder
 }: {
@@ -94,7 +78,6 @@ function MultiSelect({
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const allSelected = selected.length === 0
-
   const filtered = search.trim()
     ? options.filter(o => o.label.toLowerCase().includes(search.toLowerCase()))
     : options
@@ -106,50 +89,35 @@ function MultiSelect({
         onClick={() => { setOpen(!open); setSearch('') }}
         className="w-full text-left text-xs px-2.5 py-2 rounded-md border border-border bg-background flex items-center justify-between gap-2"
       >
-        <span className="truncate">
-          {allSelected ? placeholder : `${selected.length} selected`}
-        </span>
+        <span className="truncate">{allSelected ? placeholder : `${selected.length} selected`}</span>
         <span className="text-muted-foreground shrink-0">{open ? '▲' : '▼'}</span>
       </button>
       {open && (
         <div className="absolute top-full left-0 mt-1 w-full bg-card border border-border rounded-md shadow-lg z-50 flex flex-col max-h-56">
           {options.length > 6 && (
             <div className="p-2 border-b border-border shrink-0">
-              <input
-                type="text"
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="Search..."
-                className="w-full text-xs px-2 py-1 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary/30"
-                onClick={e => e.stopPropagation()}
-                autoFocus
-              />
+              <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+                placeholder="Search..." onClick={e => e.stopPropagation()} autoFocus
+                className="w-full text-xs px-2 py-1 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary/30" />
             </div>
           )}
           <div className="overflow-y-auto">
-            <button
-              className="w-full text-left text-xs px-3 py-2 hover:bg-muted transition-colors font-medium"
-              onClick={() => { onChange([]); setOpen(false); setSearch('') }}
-            >
+            <button className="w-full text-left text-xs px-3 py-2 hover:bg-muted transition-colors font-medium"
+              onClick={() => { onChange([]); setOpen(false); setSearch('') }}>
               {allSelected ? '✓ ' : '  '}All
             </button>
             {filtered.map(opt => (
-              <button
-                key={opt.value}
-                className="w-full text-left text-xs px-3 py-2 hover:bg-muted transition-colors"
+              <button key={opt.value} className="w-full text-left text-xs px-3 py-2 hover:bg-muted transition-colors"
                 onClick={() => {
                   const next = selected.includes(opt.value)
                     ? selected.filter(v => v !== opt.value)
                     : [...selected, opt.value]
                   onChange(next)
-                }}
-              >
+                }}>
                 {selected.includes(opt.value) ? '✓ ' : '  '}{opt.label}
               </button>
             ))}
-            {filtered.length === 0 && (
-              <p className="text-xs text-muted-foreground px-3 py-2">No matches</p>
-            )}
+            {filtered.length === 0 && <p className="text-xs text-muted-foreground px-3 py-2">No matches</p>}
           </div>
         </div>
       )}
@@ -157,14 +125,11 @@ function MultiSelect({
   )
 }
 
-// ── Main component ─────────────────────────────────────────────────────────
-
 export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
   const monthOptions = useMemo(() => generateMonthOptions(trades), [trades])
   const earliestMonth = monthOptions[0] ?? ''
   const latestMonth = monthOptions[monthOptions.length - 1] ?? ''
 
-  // Filter state
   const [selectedAnalysts, setSelectedAnalysts] = useState<string[]>([])
   const [selectedAssetClasses, setSelectedAssetClasses] = useState<string[]>([])
   const [selectedMarkets, setSelectedMarkets] = useState<string[]>([])
@@ -173,21 +138,15 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
   const [fromMonth, setFromMonth] = useState(earliestMonth)
   const [toMonth, setToMonth] = useState(latestMonth)
 
-  // Asset classes in data
   const assetClasses = useMemo(() =>
-    [...new Set(markets.map(m => m.asset_class))].sort(),
-    [markets]
-  )
+    [...new Set(markets.map(m => m.asset_class))].sort(), [markets])
 
-  // Markets filtered by selected asset classes
   const filteredMarkets = useMemo(() =>
     selectedAssetClasses.length === 0
       ? markets
       : markets.filter(m => selectedAssetClasses.includes(m.asset_class)),
-    [markets, selectedAssetClasses]
-  )
+    [markets, selectedAssetClasses])
 
-  // Apply all filters
   const filtered = useMemo(() => {
     return trades.filter(t => {
       const key = monthKey(t.published_at)
@@ -203,7 +162,6 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
 
   const stats = useMemo(() => computeStats(filtered), [filtered])
 
-  // Monthly breakdown
   const monthlyBreakdown = useMemo(() => {
     const byMonth = new Map<string, Trade[]>()
     for (const t of filtered) {
@@ -219,7 +177,6 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
       })
   }, [filtered])
 
-  // Per-analyst breakdown (for comparison)
   const analystBreakdown = useMemo(() => {
     const byAnalyst = new Map<string, Trade[]>()
     for (const t of filtered) {
@@ -232,7 +189,6 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
     }).sort((a, b) => b.totalR - a.totalR)
   }, [filtered, analysts])
 
-  // Per-analyst monthly data for overlay chart
   const analystMonthlyData = useMemo(() => {
     if (selectedAnalysts.length <= 1) return []
     const allMonths = [...new Set(filtered.map(t => monthKey(t.published_at)))].sort()
@@ -257,100 +213,64 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
     setSelectedMarkets([])
     setSelectedDirections([])
     setSelectedSessions([])
-    setFromMonth(monthOptions.length > 12 ? monthOptions[monthOptions.length - 12] : earliestMonth)
+    setFromMonth(earliestMonth)
     setToMonth(latestMonth)
   }
 
   return (
     <div className="space-y-6">
 
-      {/* ── Filter panel ── */}
+      {/* Filter panel */}
       <div className="rounded-lg border border-border bg-card p-4 space-y-4">
         <div className="flex items-center justify-between">
           <p className="text-xs font-medium">Filters</p>
           {hasFilters && (
-            <button onClick={clearFilters}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+            <button onClick={clearFilters} className="text-xs text-muted-foreground hover:text-foreground transition-colors">
               Clear all
             </button>
           )}
         </div>
-
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
-
-          {/* Date range */}
           <div>
             <p className="text-xs text-muted-foreground mb-1">From month</p>
             <select value={fromMonth} onChange={e => setFromMonth(e.target.value)}
               className="w-full text-xs px-2 py-2 rounded-md border border-border bg-background">
-              {monthOptions.map(m => (
-                <option key={m} value={m}>{monthLabel(m)}</option>
-              ))}
+              {monthOptions.map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
             </select>
           </div>
           <div>
             <p className="text-xs text-muted-foreground mb-1">To month</p>
             <select value={toMonth} onChange={e => setToMonth(e.target.value)}
               className="w-full text-xs px-2 py-2 rounded-md border border-border bg-background">
-              {monthOptions.filter(m => m >= fromMonth).map(m => (
-                <option key={m} value={m}>{monthLabel(m)}</option>
-              ))}
+              {monthOptions.filter(m => m >= fromMonth).map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
             </select>
           </div>
-
-          {/* Analyst multi-select */}
-          <MultiSelect
-            label="Analysts"
+          <MultiSelect label="Analysts"
             options={analysts.map(a => ({ value: a.analyst_id, label: a.display_name }))}
-            selected={selectedAnalysts}
-            onChange={setSelectedAnalysts}
-            placeholder="All analysts"
-          />
-
-          {/* Asset class multi-select */}
-          <MultiSelect
-            label="Asset class"
+            selected={selectedAnalysts} onChange={setSelectedAnalysts} placeholder="All analysts" />
+          <MultiSelect label="Asset class"
             options={assetClasses.map(c => ({ value: c, label: c }))}
             selected={selectedAssetClasses}
             onChange={vals => { setSelectedAssetClasses(vals); setSelectedMarkets([]) }}
-            placeholder="All classes"
-          />
-
-          {/* Market multi-select */}
-          <MultiSelect
-            label="Markets"
+            placeholder="All classes" />
+          <MultiSelect label="Markets"
             options={filteredMarkets.map(m => ({ value: m.market_id, label: m.symbol }))}
-            selected={selectedMarkets}
-            onChange={setSelectedMarkets}
-            placeholder="All markets"
-          />
-
-          {/* Direction */}
-          <MultiSelect
-            label="Direction"
+            selected={selectedMarkets} onChange={setSelectedMarkets} placeholder="All markets" />
+          <MultiSelect label="Direction"
             options={[{ value: 'BUY', label: 'BUY' }, { value: 'SELL', label: 'SELL' }]}
-            selected={selectedDirections}
-            onChange={setSelectedDirections}
-            placeholder="Both"
-          />
-
-          {/* Session */}
-          <MultiSelect
-            label="Session"
+            selected={selectedDirections} onChange={setSelectedDirections} placeholder="Both" />
+          <MultiSelect label="Session"
             options={[
               { value: 'EUROPEAN', label: 'European' },
               { value: 'US', label: 'US' },
               { value: 'APAC', label: 'APAC' },
               { value: 'OTHER', label: 'Other' },
             ]}
-            selected={selectedSessions}
-            onChange={setSelectedSessions}
-            placeholder="All sessions"
-          />
+            selected={selectedSessions} onChange={setSelectedSessions} placeholder="All sessions" />
         </div>
       </div>
 
-      {/* ── Summary KPI tiles ── */}
+      {/* KPI tiles */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <div className="rounded-lg border border-border bg-card p-4">
           <p className="text-xs text-muted-foreground">Total Return</p>
@@ -370,16 +290,16 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
           <p className="text-2xl font-semibold tabular-nums mt-1">
             {stats.winRate !== null ? `${Math.round(stats.winRate * 100)}%` : '—'}
           </p>
-          <p className="text-xs text-muted-foreground mt-1">Platform trades only</p>
         </div>
         <div className="rounded-lg border border-border bg-card p-4">
-          <p className="text-xs text-muted-foreground">Shadow vs Actual</p>
-          <p className="text-2xl font-semibold text-muted-foreground mt-1">—</p>
-          <p className="text-xs text-muted-foreground mt-1">Pending outcome service</p>
+          <p className="text-xs text-muted-foreground">Trigger Rate</p>
+          <p className="text-2xl font-semibold tabular-nums mt-1">
+            {stats.triggerRate !== null ? `${Math.round(stats.triggerRate * 100)}%` : '—'}
+          </p>
         </div>
       </div>
 
-      {/* ── Monthly trend chart ── */}
+      {/* Monthly chart */}
       {monthlyBreakdown.length > 0 && (
         <div className="rounded-lg border border-border bg-card p-4 space-y-3">
           <p className="text-xs font-medium text-muted-foreground">
@@ -421,7 +341,7 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
         </div>
       )}
 
-      {/* ── Monthly breakdown table ── */}
+      {/* Monthly table */}
       {monthlyBreakdown.length > 0 && (
         <div className="space-y-2">
           <p className="text-xs font-medium text-muted-foreground">Month-by-month breakdown</p>
@@ -429,12 +349,9 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
             <table className="w-full text-sm">
               <thead className="bg-muted/50">
                 <tr>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Month</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Trades</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Total R</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Avg R</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Win Rate</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Trigger Rate</th>
+                  {['Month', 'Trades', 'Total R', 'Avg R', 'Win Rate', 'Trigger Rate'].map(h => (
+                    <th key={h} className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">{h}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -445,11 +362,12 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
                     <td className={`px-4 py-2.5 tabular-nums font-medium ${row.totalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                       {row.totalR > 0 ? '+' : ''}{row.totalR.toFixed(2)}R
                     </td>
-                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground">
-                      {row.avgR.toFixed(2)}R
-                    </td>
+                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground">{row.avgR.toFixed(2)}R</td>
                     <td className="px-4 py-2.5 tabular-nums">
                       {row.winRate !== null ? `${Math.round(row.winRate * 100)}%` : <span className="text-muted-foreground">—</span>}
+                    </td>
+                    <td className="px-4 py-2.5 tabular-nums">
+                      {row.triggerRate !== null ? `${Math.round(row.triggerRate * 100)}%` : <span className="text-muted-foreground">—</span>}
                     </td>
                   </tr>
                 ))}
@@ -461,11 +379,12 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
                   <td className={`px-4 py-2.5 tabular-nums text-xs font-bold ${stats.totalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                     {stats.totalR > 0 ? '+' : ''}{stats.totalR.toFixed(2)}R
                   </td>
-                  <td className="px-4 py-2.5 tabular-nums text-xs font-medium text-muted-foreground">
-                    {stats.avgR.toFixed(2)}R
-                  </td>
+                  <td className="px-4 py-2.5 tabular-nums text-xs text-muted-foreground">{stats.avgR.toFixed(2)}R</td>
                   <td className="px-4 py-2.5 tabular-nums text-xs">
                     {stats.winRate !== null ? `${Math.round(stats.winRate * 100)}%` : '—'}
+                  </td>
+                  <td className="px-4 py-2.5 tabular-nums text-xs">
+                    {stats.triggerRate !== null ? `${Math.round(stats.triggerRate * 100)}%` : '—'}
                   </td>
                 </tr>
               </tfoot>
@@ -474,7 +393,7 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
         </div>
       )}
 
-      {/* ── Analyst comparison table ── */}
+      {/* Analyst table */}
       {analystBreakdown.length > 1 && (
         <div className="space-y-2">
           <p className="text-xs font-medium text-muted-foreground">By analyst</p>
@@ -482,11 +401,9 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
             <table className="w-full text-sm">
               <thead className="bg-muted/50">
                 <tr>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Analyst</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Trades</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Total R</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Avg R</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Win Rate</th>
+                  {['Analyst', 'Trades', 'Total R', 'Avg R', 'Win Rate', 'Trigger Rate'].map(h => (
+                    <th key={h} className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">{h}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -505,6 +422,9 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
                     <td className="px-4 py-2.5 tabular-nums">
                       {row.winRate !== null ? `${Math.round(row.winRate * 100)}%` : <span className="text-muted-foreground">—</span>}
                     </td>
+                    <td className="px-4 py-2.5 tabular-nums">
+                      {row.triggerRate !== null ? `${Math.round(row.triggerRate * 100)}%` : <span className="text-muted-foreground">—</span>}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -513,7 +433,6 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
         </div>
       )}
 
-      {/* ── Empty state ── */}
       {filtered.length === 0 && (
         <div className="rounded-lg border border-border p-8 text-center">
           <p className="text-sm text-muted-foreground">No trades match the current filters.</p>
@@ -521,7 +440,7 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
       )}
 
       <p className="text-xs text-muted-foreground">
-        Win rate reflects platform-tracked trades only (non-backfill, triggered).
+        Win rate based on result_r. Trigger rate based on triggered flag.
         Return figures include all historical data.
         Session derived from publication time (UK).
       </p>

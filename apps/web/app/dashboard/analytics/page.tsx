@@ -19,8 +19,7 @@ export default async function PerformanceAnalyticsPage() {
     .select('market_id, symbol, asset_class')
     .order('asset_class, symbol')
 
-  const fiveYearsAgo = new Date()
-  fiveYearsAgo.setFullYear(fiveYearsAgo.getFullYear() - 5)
+  const fiveYearsAgo = new Date('2017-01-01T00:00:00Z')
 
   const FIELDS = `trade_id, analyst_id, direction, result_r,
     triggered, published_at, historical_backfill,
