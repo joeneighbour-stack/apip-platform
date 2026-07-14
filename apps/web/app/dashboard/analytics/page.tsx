@@ -19,24 +19,25 @@ export default async function PerformanceAnalyticsPage() {
     .select('market_id, symbol, asset_class')
     .order('asset_class, symbol')
 
-  const FIELDS = `trade_id, analyst_id, direction, result_r,
-    triggered, published_at, historical_backfill,
-    market:market_id ( market_id, symbol, asset_class )`
+  // Single RPC call returns all trades -- avoids pagination timeout issues
+  const { data: rawTrades } = await supabase
+    .rpc('get_all_trades_for_analytics')
 
-  // Fetch all pages concurrently -- we know there are ~20k trades across ~20 pages
-  const pages = await Promise.all(
-    Array.from({ length: 25 }, (_, i) =>
-      supabase
-        .from('actual_trades')
-        .select(FIELDS)
-        .gte('published_at', '2017-01-01T00:00:00Z')
-        .order('published_at', { ascending: false })
-        .range(i * 1000, i * 1000 + 999)
-        .then(r => r.data ?? [])
-    )
-  )
-
-  const allTrades = pages.flat()
+  // Reshape to match component's expected Trade shape
+  const allTrades = (rawTrades ?? []).map((t: any) => ({
+    trade_id: t.trade_id,
+    analyst_id: t.analyst_id,
+    direction: t.direction,
+    result_r: t.result_r,
+    triggered: t.triggered,
+    published_at: t.published_at,
+    historical_backfill: t.historical_backfill,
+    market: {
+      market_id: t.market_id,
+      symbol: t.symbol,
+      asset_class: t.asset_class,
+    },
+  }))
 
   return (
     <div className="space-y-6">

@@ -56,8 +56,9 @@ function computeStats(trades: Trade[]) {
   const wins = withResult.filter(t => (t.result_r ?? 0) > 0).length
   const winRate = withResult.length > 0 ? wins / withResult.length : null
   const avgR = count > 0 ? totalR / count : 0
-  const triggeredCount = trades.filter(t => t.triggered).length
-  const triggerRate = count > 0 ? triggeredCount / count : null
+  const apiTrades = trades.filter(t => !t.historical_backfill)
+  const triggeredCount = apiTrades.filter(t => t.triggered).length
+  const triggerRate = apiTrades.length > 0 ? triggeredCount / apiTrades.length : null
   return { totalR, count, winRate, avgR, triggerRate }
 }
 
