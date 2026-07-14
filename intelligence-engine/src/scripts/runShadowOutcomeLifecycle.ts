@@ -2,34 +2,29 @@
 // APIP Trading Intelligence & Performance Platform
 // Shadow Outcome Lifecycle Service
 // ============================================================================
-// Monitors shadow trades and updates outcomes when:
-//   - Session low/high reaches entry range → TRIGGERED
-//   - Session high/low hits target → TARGET_HIT
-//   - Session low/high hits stop → STOP_HIT
-//   - Expiry time passed without trigger/resolution → EXPIRY
+// Monitors shadow trades and updates outcomes based on CURRENT PRICE only.
 //
-// Uses market_state_intraday session_high/session_low for all price checks.
-// Snapshots are matched by BOTH market_id AND session -- a US shadow trade
-// only uses US session snapshot data, never European. This ensures band
-// calculations are reset correctly at each session open.
+// Logic:
+//   Every 30 minutes, fetch current price from Finnhub for each active trade.
+//   BUY:  triggered when current_price <= entry (price dropped to buy zone)
+//         stop_hit when current_price <= stop
+//         target_hit when current_price >= target
+//   SELL: triggered when current_price >= entry (price rallied to sell zone)
+//         stop_hit when current_price >= stop
+//         target_hit when current_price <= target
 //
-// BUY  entries are limit orders BELOW current price -- triggered when low falls to entry
-// SELL entries are limit orders ABOVE current price -- triggered when high rises to entry
+//   Stop is checked BEFORE target -- if both breached, stop wins (conservative).
+//   Expiry: NOT_TRIGGERED or TRIGGERED trades expire at session close.
 //
 // Session expiry windows (UTC):
 //   European: 20:00 UTC same day
 //   US:       20:00 UTC same day
 //   APAC:     15:00 UTC following day
-//   CRYPTO:   11:00 UTC following day (12:00 UK BST)
+//   CRYPTO:   11:00 UTC following day
 //
-// Expiry applies to both NOT_TRIGGERED and TRIGGERED trades.
-// Stop is checked before target -- if both hit in same session, stop wins.
-//
-// Run via cron every 30 mins Mon-Fri 05:00-20:00 UTC:
+// Run:
 //   npx tsx src/scripts/runShadowOutcomeLifecycle.ts
 //   npx tsx src/scripts/runShadowOutcomeLifecycle.ts --dry-run
-//
-// Required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 // ============================================================================
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { fileURLToPath } from 'node:url'
@@ -37,19 +32,30 @@ import path from 'node:path'
 
 function getExpiryUtc(opportunityDate: string, session: string, assetClass: string | null): Date {
   const date = new Date(opportunityDate + 'T00:00:00Z')
-  if (assetClass === 'CRYPTO') {
-    return new Date(date.getTime() + 35 * 60 * 60 * 1000) // next day 11:00 UTC
+  if (assetClass === 'CRYPTO') return new Date(date.getTime() + 35 * 60 * 60 * 1000)
+  if (session === 'APAC') return new Date(date.getTime() + 39 * 60 * 60 * 1000)
+  return new Date(date.getTime() + 20 * 60 * 60 * 1000)
+}
+
+interface FinnhubQuote { c: number }
+
+async function fetchCurrentPrice(symbol: string, apiKey: string): Promise<number | null> {
+  try {
+    const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${apiKey}`
+    const res = await fetch(url)
+    if (!res.ok) return null
+    const q: FinnhubQuote = await res.json()
+    return q.c > 0 ? q.c : null
+  } catch {
+    return null
   }
-  if (session === 'APAC') {
-    return new Date(date.getTime() + 39 * 60 * 60 * 1000) // next day 15:00 UTC
-  }
-  return new Date(date.getTime() + 20 * 60 * 60 * 1000) // same day 20:00 UTC
 }
 
 async function main() {
   const SUPABASE_URL = process.env.SUPABASE_URL
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !FINNHUB_API_KEY) {
     console.error('Missing required env vars')
     process.exit(1)
   }
@@ -75,9 +81,10 @@ async function main() {
       shadow_trade:shadow_trade_id (
         entry, stop, target, rr, direction, session,
         opportunity:opportunity_id (
-          opportunity_id, date, session,
+          date, session,
           market:market_id (
-            market_id, symbol, display_precision, asset_class
+            market_id, symbol, asset_class, display_precision,
+            price_data_symbol, price_data_provider
           )
         )
       )
@@ -89,23 +96,7 @@ async function main() {
     return
   }
 
-  console.log(`Active trades to evaluate: ${activeTrades.length} (NOT_TRIGGERED + TRIGGERED)`)
-
-  // Load intraday snapshots -- index by market_id + session (most recent per combination)
-  const { data: snapshots } = await db
-    .from('market_state_intraday')
-    .select('market_id, session, session_high, session_low, current_price, captured_at')
-    .gte('captured_at', new Date().toISOString().slice(0, 10) + 'T00:00:00Z')
-    .order('captured_at', { ascending: false })
-
-  // Index: `${market_id}::${session}` → most recent snapshot
-  const snapshotByMarketSession = new Map<string, any>()
-  for (const snap of (snapshots ?? [])) {
-    const key = `${snap.market_id}::${snap.session}`
-    if (!snapshotByMarketSession.has(key)) {
-      snapshotByMarketSession.set(key, snap)
-    }
-  }
+  console.log(`Active trades to evaluate: ${activeTrades.length}`)
 
   const summary = { triggered: 0, targetHit: 0, stopHit: 0, expired: 0, unchanged: 0, errors: 0 }
 
@@ -120,12 +111,11 @@ async function main() {
     const assetClass = market.asset_class ?? null
     const expiryUtc = getExpiryUtc(opp.date, session, assetClass)
 
-    // ── Expiry check -- applies to BOTH NOT_TRIGGERED and TRIGGERED ─────────
+    // ── Expiry check ────────────────────────────────────────────────────────
     if (now > expiryUtc) {
       const resultR = outcome.trade_outcome_status === 'TRIGGERED'
-        ? (Number(outcome.result_r) ?? 0)
-        : 0
-      console.log(`  ${market.symbol} (${session}): ${outcome.trade_outcome_status} → EXPIRY (expired ${expiryUtc.toISOString()})`)
+        ? (Number(outcome.result_r) ?? 0) : 0
+      console.log(`  ${market.symbol} (${session}): ${outcome.trade_outcome_status} → EXPIRY`)
       if (!isDryRun) {
         await db.from('shadow_trade_outcomes').update({
           trade_outcome_status: 'EXPIRY',
@@ -137,15 +127,17 @@ async function main() {
       continue
     }
 
-    // ── Get session-matched snapshot ────────────────────────────────────────
-    // Critical: only use snapshot data from the SAME session as the trade.
-    // A US trade must not use European session high/low data.
-    const snapKey = `${market.market_id}::${session}`
-    const snap = snapshotByMarketSession.get(snapKey)
-
-    if (!snap?.session_high || !snap?.session_low) {
-      // No snapshot for this session yet -- session may not have started
+    // Skip markets without Finnhub price data
+    if (!market.price_data_symbol || market.price_data_provider === 'IC_MARKETS') {
       summary.unchanged++
+      continue
+    }
+
+    // ── Fetch current price from Finnhub ────────────────────────────────────
+    const currentPrice = await fetchCurrentPrice(market.price_data_symbol, FINNHUB_API_KEY)
+    if (!currentPrice) {
+      console.log(`  ${market.symbol}: could not fetch price`)
+      summary.errors++
       continue
     }
 
@@ -153,19 +145,16 @@ async function main() {
     const stop   = Number(st.stop)
     const target = Number(st.target)
     const rr     = Number(st.rr)
-
     const direction = st.direction ?? (target > entry ? 'BUY' : 'SELL')
     const isBuy = direction === 'BUY'
-
-    const sessionHigh = Number(snap.session_high)
-    const sessionLow  = Number(snap.session_low)
+    const precision = market.display_precision ?? 4
 
     // ── Trigger check ───────────────────────────────────────────────────────
-    // BUY:  triggered when session_low <= entry (price dropped to buy zone)
-    // SELL: triggered when session_high >= entry (price rallied to sell zone)
+    // BUY:  triggered when current price drops TO OR BELOW entry
+    // SELL: triggered when current price rises TO OR ABOVE entry
     const priceReachedEntry = isBuy
-      ? sessionLow <= entry
-      : sessionHigh >= entry
+      ? currentPrice <= entry
+      : currentPrice >= entry
 
     if (!priceReachedEntry && outcome.trade_outcome_status === 'NOT_TRIGGERED') {
       summary.unchanged++
@@ -173,41 +162,38 @@ async function main() {
     }
 
     // ── Outcome determination ───────────────────────────────────────────────
-    // Stop checked BEFORE target -- if both breached in same session, stop wins.
+    // Stop checked BEFORE target -- conservative/worst-case
     let newStatus: string
     let resultR: number
 
     if (isBuy) {
-      if (sessionLow <= stop) {
+      if (currentPrice <= stop) {
         newStatus = 'STOP_HIT'; resultR = -1
-      } else if (sessionHigh >= target) {
+      } else if (currentPrice >= target) {
         newStatus = 'TARGET_HIT'; resultR = rr
       } else {
-        const currentPrice = Number(snap.current_price)
         newStatus = 'TRIGGERED'
         resultR = (currentPrice - entry) / Math.abs(entry - stop)
       }
     } else {
-      if (sessionHigh >= stop) {
+      if (currentPrice >= stop) {
         newStatus = 'STOP_HIT'; resultR = -1
-      } else if (sessionLow <= target) {
+      } else if (currentPrice <= target) {
         newStatus = 'TARGET_HIT'; resultR = rr
       } else {
-        const currentPrice = Number(snap.current_price)
         newStatus = 'TRIGGERED'
         resultR = (entry - currentPrice) / Math.abs(entry - stop)
       }
     }
 
-    // Skip if already TRIGGERED and still TRIGGERED (no meaningful update)
+    // Skip if TRIGGERED and still TRIGGERED with no meaningful change
     if (newStatus === 'TRIGGERED' && outcome.trade_outcome_status === 'TRIGGERED') {
       summary.unchanged++
       continue
     }
 
-    const precision = market.display_precision ?? 4
     console.log(`  ${market.symbol} ${direction} (${session}): ${outcome.trade_outcome_status} → ${newStatus}`)
-    console.log(`    entry=${entry.toFixed(precision)}, low=${sessionLow.toFixed(precision)}, high=${sessionHigh.toFixed(precision)}, stop=${stop.toFixed(precision)}, target=${target.toFixed(precision)}, R=${resultR.toFixed(2)}`)
+    console.log(`    price=${currentPrice.toFixed(precision)}, entry=${entry.toFixed(precision)}, stop=${stop.toFixed(precision)}, target=${target.toFixed(precision)}, R=${resultR.toFixed(2)}`)
 
     if (!isDryRun) {
       await db.from('shadow_trade_outcomes').update({
@@ -221,7 +207,7 @@ async function main() {
     else if (newStatus === 'TARGET_HIT') summary.targetHit++
     else if (newStatus === 'STOP_HIT') summary.stopHit++
 
-    await new Promise(r => setTimeout(r, 50))
+    await new Promise(r => setTimeout(r, 200))
   }
 
   console.log('\n=== SUMMARY ===')
