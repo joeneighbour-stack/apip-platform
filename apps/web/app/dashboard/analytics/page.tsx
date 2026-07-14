@@ -23,16 +23,29 @@ export default async function PerformanceAnalyticsPage() {
   const fiveYearsAgo = new Date()
   fiveYearsAgo.setFullYear(fiveYearsAgo.getFullYear() - 5)
 
-  const { data: trades } = await supabase
-    .from('actual_trades')
-    .select(`
-      trade_id, analyst_id, direction, result_r,
-      triggered, published_at, historical_backfill,
-      market:market_id ( market_id, symbol, asset_class )
-    `)
-    .gte('published_at', fiveYearsAgo.toISOString())
-    .order('published_at', { ascending: false })
-    .limit(50000)
+  // Paginate trades -- Supabase caps at 1000 rows per request regardless of .limit()
+  const allTrades: any[] = []
+  let page = 0
+  let hasMore = true
+  while (hasMore) {
+    const { data } = await supabase
+      .from('actual_trades')
+      .select(`
+        trade_id, analyst_id, direction, result_r,
+        triggered, published_at, historical_backfill,
+        market:market_id ( market_id, symbol, asset_class )
+      `)
+      .gte('published_at', fiveYearsAgo.toISOString())
+      .order('published_at', { ascending: false })
+      .range(page * 1000, page * 1000 + 999)
+    if (!data?.length) { hasMore = false } else {
+      allTrades.push(...data)
+      hasMore = data.length === 1000
+      page++
+    }
+    // Safety cap at 50k
+    if (allTrades.length >= 50000) break
+  }
 
   return (
     <div className="space-y-6">
@@ -45,7 +58,7 @@ export default async function PerformanceAnalyticsPage() {
       <PerformanceAnalytics
         analysts={analysts ?? []}
         markets={markets ?? []}
-        trades={(trades ?? []) as any}
+        trades={allTrades as any}
       />
     </div>
   )

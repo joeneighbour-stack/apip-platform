@@ -95,7 +95,7 @@ async function main() {
   const { data: snapshots } = await db
     .from('market_state_intraday')
     .select('market_id, session, session_high, session_low, current_price, captured_at')
-    .gte('captured_at', new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString())
+    .gte('captured_at', new Date().toISOString().slice(0, 10) + 'T00:00:00Z')
     .order('captured_at', { ascending: false })
 
   // Index: `${market_id}::${session}` → most recent snapshot
