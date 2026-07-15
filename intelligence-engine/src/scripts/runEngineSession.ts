@@ -15,7 +15,7 @@ import { buildCoachingRecommendation } from '../services/coachingService.js'
 import { allocateCoverage, type OpportunityForAllocation } from '../services/allocationService.js'
 import { createShadowTrade } from '../services/shadowTradeService.js'
 import type { ActiveAnalyst } from '../services/analystProfileService.js'
-import type { SessionType } from '../services/marketStateService.js'
+import type { SessionType } from '../types/domain.js'
 
 const SYSTEM_ENGINE_ID = 'ab9359b6-0e78-49fc-8a0a-1cf589552280'
 const ATR_PERIOD = 14
@@ -711,3 +711,5 @@ const invokedDirectly = process.argv[1] !== undefined &&
 if (invokedDirectly) {
   main().catch(err => { console.error('Fatal:', err); process.exit(1) })
 }
+
+

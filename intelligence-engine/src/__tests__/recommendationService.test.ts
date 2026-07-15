@@ -9,6 +9,7 @@ function marketState(overrides: Partial<MarketStateOutput> = {}): MarketStateOut
     lowerBand: 1.08, zone1Top: 1.085, zone2Top: 1.09, zone3Top: 1.095, upperBand: 1.10,
     currentZone: 'ZONE_2', currentPrice: 1.0875, stateGeneratedAt: '2026-01-01T00:00:00Z',
     ...overrides,
+    atr20: overrides.atr20 !== undefined ? overrides.atr20 : (overrides.atr14 ?? null),
   };
 }
 
@@ -136,3 +137,6 @@ describe('buildRecommendation', () => {
     expect(opportunity.preferredEntryZone).toBe('ZONE_1');
   });
 });
+
+
+

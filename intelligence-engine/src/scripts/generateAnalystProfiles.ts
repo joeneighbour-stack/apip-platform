@@ -204,7 +204,7 @@ async function main() {
 
     for (const t of analystTrades) {
       // Only group into regime-specific profiles if we have actual regime data
-      if (t.regime && t.regime !== 'UNKNOWN') {
+      if (t.regime) {
         const regimeKey = `${t.market_id}::${t.direction}::${t.regime}`
         if (!regimeGroups.has(regimeKey)) regimeGroups.set(regimeKey, [])
         regimeGroups.get(regimeKey)!.push(t)
@@ -332,3 +332,5 @@ const invokedDirectly = process.argv[1] !== undefined &&
 if (invokedDirectly) {
   main().catch(err => { console.error('Fatal:', err); process.exit(1) })
 }
+
+

@@ -7,6 +7,7 @@ function baseInput(overrides: Partial<CreateShadowTradeInput> = {}): CreateShado
     recommendationVersionId: 'rv-1', opportunityId: '2026-01-15_EURUSD_EUROPEAN_v1',
     entry: 1.0875, stop: 1.0825, target: 1.0975, rr: 2.0,
     templateSource: 'historical_template',
+    direction: 'BUY', session: 'EUROPEAN',
     ...overrides,
   };
 }
@@ -79,3 +80,6 @@ describe('createShadowTrade', () => {
     expect(resultA).toEqual(resultB);
   });
 });
+
+
+

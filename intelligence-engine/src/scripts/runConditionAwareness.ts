@@ -184,7 +184,6 @@ async function main() {
 
     switch (newStatus) {
       case 'VALID': summary.valid++; break
-      case 'CAUTION_VOLATILITY': summary.caution++; break
       case 'STALE_PRICE': summary.stale++; break
       case 'ZONE_CHANGED': summary.zoneChanged++; break
       case 'DO_NOT_USE_RECALCULATE': summary.doNotUse++; break
@@ -210,3 +209,5 @@ const invokedDirectly = process.argv[1] !== undefined &&
 if (invokedDirectly) {
   main().catch(err => { console.error('Fatal:', err); process.exit(1) })
 }
+
+

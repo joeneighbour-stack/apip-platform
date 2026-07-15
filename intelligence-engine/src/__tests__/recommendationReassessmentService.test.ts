@@ -4,10 +4,12 @@ import type { MarketStateOutput } from '../services/marketStateService.js';
 
 function freshState(overrides: Partial<MarketStateOutput> = {}): MarketStateOutput {
   return {
-    marketId: 'EURUSD', atr14: 0.02, lowerBand: 1.08, zone1Top: 1.085, zone2Top: 1.09,
+    marketId: 'EURUSD', atr14: 0.02,
+    lowerBand: 1.08, zone1Top: 1.085, zone2Top: 1.09,
     zone3Top: 1.095, upperBand: 1.10, currentZone: 'ZONE_2', currentPrice: 1.0875,
     stateGeneratedAt: '2026-01-16T08:00:00Z',
     ...overrides,
+    atr20: overrides.atr20 !== undefined ? overrides.atr20 : (overrides.atr14 ?? null),
   };
 }
 
@@ -98,3 +100,6 @@ describe('reassessRecommendationBatch', () => {
     expect(result.requiresRegeneration).toBe(false);
   });
 });
+
+
+
