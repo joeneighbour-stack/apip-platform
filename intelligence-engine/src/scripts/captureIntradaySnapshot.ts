@@ -2,27 +2,25 @@
 // APIP Trading Intelligence & Performance Platform
 // Intraday Market State Snapshot Script
 // ============================================================================
-// Captures current price and session-specific developing high/low.
+// Captures current price and today's developing high/low from Finnhub.
 // Computes current zone against full daily bar history.
 // Writes to market_state_intraday.
 //
-// SESSION H/L TRACKING:
-// Finnhub quote.h / quote.l are CALENDAR DAY values (midnight UTC reset),
-// not session-specific. To build accurate session h/l, we track developing
-// range ourselves by comparing each snapshot against the previous snapshot
-// for the same market + session:
+// SESSION H/L:
+//   Uses Finnhub quote.h / quote.l directly -- these are calendar day values
+//   (reset at midnight UTC = 01:00 UK) which covers the full overnight session
+//   by the time European snapshot runs at 04:45 UTC. This correctly reflects
+//   the developing session range for ATR band calculation.
 //
-//   First snapshot of session:  session_high = session_low = current_price
-//   Subsequent snapshots:       session_high = max(prev_high, current_price)
-//                               session_low  = min(prev_low, current_price)
+//   The lifecycle service uses current_price (fetched live from Finnhub) for
+//   trigger detection -- NOT session_high/session_low. So there is no risk of
+//   pre-session contamination affecting trade triggers.
 //
-// This gives us a monotonically expanding range from session start,
-// independent of Finnhub's calendar day reset.
-//
-// Session windows (UK time):
-//   EUROPEAN: 22:00 prev day → 06:00 (snapshot at 04:45 UTC)
-//   US:       22:00 prev day → 12:00 (snapshot at 10:45 UTC)
-//   APAC:     10:00 → 16:00          (snapshot at 14:45 UTC)
+// ATR BAND FORMULA (Pine Script, definitive):
+//   upper_band = daily_low  + ATR(14)   [today's low + ATR]
+//   lower_band = daily_high - ATR(14)   [today's high - ATR]
+//   ATR(14) is taken from yesterday's completed daily bar.
+//   Today's developing h/l (from Finnhub quote) updates the band intraday.
 //
 // Run:
 //   npx tsx src/scripts/captureIntradaySnapshot.ts --session=EUROPEAN
@@ -30,10 +28,6 @@
 //   npx tsx src/scripts/captureIntradaySnapshot.ts --session=APAC
 //
 // Required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, FINNHUB_API_KEY
-//
-// REVERT NOTE: to revert this change:
-//   git log --oneline -10
-//   git checkout <commit-before-this-change> -- intelligence-engine/src/scripts/captureIntradaySnapshot.ts
 // ============================================================================
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { fileURLToPath } from 'node:url'
@@ -67,7 +61,7 @@ interface FinnhubQuote { c: number; h: number; l: number; o: number; t: number }
 async function fetchQuote(finnhubSymbol: string, apiKey: string): Promise<FinnhubQuote> {
   const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(finnhubSymbol)}&token=${apiKey}`
   const response = await fetch(url)
-  if (!response.ok) throw new Error(`Finnhub HTTP ${response.status}`)
+  if (!response.ok) throw new Error(`Finnhub HTTP ${response.status} for ${finnhubSymbol}`)
   const quote: FinnhubQuote = await response.json()
   if (!quote.c || quote.c === 0) throw new Error(`No current price for ${finnhubSymbol}`)
   return quote
@@ -78,7 +72,7 @@ async function main() {
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
   const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !FINNHUB_API_KEY) {
-    console.error('Missing required env vars')
+    console.error('SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and FINNHUB_API_KEY must all be set.')
     process.exit(1)
   }
 
@@ -112,33 +106,7 @@ async function main() {
     (marketRows ?? []).map(m => [m.symbol, m])
   )
 
-  // ── Load previous session snapshots for session h/l continuity ────────────
-  // For each market, find the most recent snapshot for THIS session today.
-  // If found, we extend its h/l with the current price.
-  // If not found, this is the first snapshot of the session -- seed with current price.
-  const sessionStart = new Date(capturedAt)
-  // Look back up to 24h to find previous snapshots for this session
-  const lookbackStart = new Date().toISOString().slice(0, 10) + 'T00:00:00Z'
-
-  const { data: prevSnapshots } = await db
-    .from('market_state_intraday')
-    .select('market_id, session_high, session_low, captured_at')
-    .eq('session', session)
-    .gte('captured_at', lookbackStart)
-    .order('captured_at', { ascending: false })
-
-  // Index: market_id → most recent snapshot for this session
-  const prevByMarket = new Map<string, { session_high: number; session_low: number }>()
-  for (const snap of (prevSnapshots ?? [])) {
-    if (!prevByMarket.has(snap.market_id)) {
-      prevByMarket.set(snap.market_id, {
-        session_high: Number(snap.session_high),
-        session_low: Number(snap.session_low),
-      })
-    }
-  }
-
-  // Load FULL bar history for ATR convergence
+  // Load FULL bar history for each market -- needed for ATR convergence
   const allBars: any[] = []
   let page = 0, hasMore = true
   while (hasMore) {
@@ -187,19 +155,12 @@ async function main() {
     try {
       const quote = await fetchQuote(market.price_data_symbol, FINNHUB_API_KEY)
       const currentPrice = quote.c
+      // Use Finnhub calendar-day h/l for band calculation
+      // These reset at midnight UTC (01:00 UK) -- by 04:45 UTC they cover the
+      // full overnight European session range, matching TradingView's session data.
+      const sessionHigh = quote.h > 0 ? quote.h : currentPrice
+      const sessionLow  = quote.l > 0 ? quote.l  : currentPrice
 
-      // ── Session h/l: track ourselves, independent of Finnhub calendar day ──
-      // First snapshot of session: seed with current price
-      // Subsequent snapshots: extend previous session h/l with current price
-      const prev = prevByMarket.get(market.market_id)
-      const sessionHigh = prev
-        ? Math.max(prev.session_high, currentPrice)
-        : currentPrice
-      const sessionLow = prev
-        ? Math.min(prev.session_low, currentPrice)
-        : currentPrice
-
-      // Build market state using full bar history for accurate ATR
       const bars = barsByMarketId.get(market.market_id) ?? []
       let currentZone: string | null = null
 
@@ -217,7 +178,7 @@ async function main() {
             close: currentPrice,
           }]
         } else {
-          // Today's bar exists -- update with session h/l
+          // Today's bar exists -- update with latest h/l
           barsForState = [...bars.slice(0, -1), {
             ...lastBar,
             high: Math.max(lastBar.high, sessionHigh),
@@ -241,7 +202,6 @@ async function main() {
         continue
       }
 
-      const isFirstSnapshot = !prev
       const row = {
         market_id: market.market_id,
         session,
@@ -261,7 +221,7 @@ async function main() {
         }
       }
 
-      console.log(`  ${symbol}: price=${currentPrice}, zone=${currentZone}, h=${sessionHigh.toFixed(4)}, l=${sessionLow.toFixed(4)}${isFirstSnapshot ? ' [session start]' : ''}${isDryRun ? ' [DRY RUN]' : ''}`)
+      console.log(`  ${symbol}: price=${currentPrice}, zone=${currentZone}, h=${sessionHigh}, l=${sessionLow}`)
       summary.captured++
     } catch (err) {
       console.error(`  ${symbol}: ${(err as Error).message}`)
