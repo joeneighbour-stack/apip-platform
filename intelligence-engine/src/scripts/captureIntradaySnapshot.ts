@@ -310,6 +310,7 @@ async function main() {
         current_zone:  state.currentZone,
         session_high:  sess.sessionHigh,
         session_low:   sess.sessionLow,
+        previous_close: sess.previousClose,
       }
 
       if (!isDryRun) {
@@ -353,3 +354,4 @@ const invokedDirectly = process.argv[1] !== undefined &&
 if (invokedDirectly) {
   main().catch(err => { console.error('Fatal:', err); process.exit(1) })
 }
+

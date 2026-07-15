@@ -18,7 +18,7 @@ import type { ActiveAnalyst } from '../services/analystProfileService.js'
 import type { SessionType } from '../types/domain.js'
 
 const SYSTEM_ENGINE_ID = 'ab9359b6-0e78-49fc-8a0a-1cf589552280'
-const ATR_PERIOD = 14
+const ATR_PERIOD = 20
 const ZONE_COUNT = 4
 const MINIMUM_RR = 2.0
 const MIN_TRIGGER_SAMPLE = 20
@@ -160,7 +160,7 @@ async function main() {
     let barPage = 0, barHasMore = true
     while (barHasMore) {
       const { data: barBatch } = await db.from('market_state_daily')
-        .select('market_id, date, open, high, low, close')
+        .select('market_id, date, open, high, low, close, atr20, atr14')
         .gte('date', barWindowStart)
         .order('date', { ascending: true })
         .range(barPage * 1000, barPage * 1000 + 999)
@@ -182,7 +182,7 @@ async function main() {
     console.log(`  Daily bars loaded: ${allBars.length} rows across ${barsByMarketId.size} markets (${barPage} pages)`)
 
     const { data: intradayRows } = await db.from('market_state_intraday')
-      .select('market_id, current_price, current_zone, captured_at')
+      .select('market_id, current_price, current_zone, captured_at, session_high, session_low, previous_close')
       .eq('session', session).gte('captured_at', `${today}T00:00:00Z`)
       .order('captured_at', { ascending: false })
 
@@ -367,29 +367,27 @@ async function main() {
       const bars = barsByMarketId.get(market.market_id) ?? []
       if (bars.length < ATR_PERIOD) { console.log(`  ${symbol}: insufficient bars`); continue }
 
-      const weekdayBars = bars.filter(b => {
-        const day = new Date(b.date + 'T12:00:00Z').getUTCDay()
-        return day >= 1 && day <= 5
-      })
-      const anchorBar = weekdayBars.length >= 1
-        ? weekdayBars[weekdayBars.length - 1]!
-        : bars[bars.length - 1]!
-
-      const barsForBands = bars.map((b, i) => {
-        if (i < bars.length - 1) return b
-        return { ...b, high: anchorBar.close, low: anchorBar.close }
-      })
-
+      // Pine-style band construction using session anchors from intraday snapshot.
+      // previous_close: final 5-min OANDA bar before APIP session open (22:00 UTC)
+      // session_high/low: max/min of 5-min bar highs/lows since session open
+      // atr20: from market_state_daily Wilder RMA period 20
+      const prevClose = intraday.previous_close != null ? Number(intraday.previous_close) : null
+      const atr20FromDaily = bars.length > 0 ? Number(bars[bars.length - 1]!.atr20 ?? bars[bars.length - 1]!.atr14 ?? null) : null
       const marketState = buildMarketState({
         marketId: market.market_id,
-        ohlcSeries: barsForBands,
+        ohlcSeries: bars,
         currentPrice: { price: Number(intraday.current_price), capturedAt: intraday.captured_at },
         parameters: { atrPeriod: ATR_PERIOD, zoneCount: ZONE_COUNT },
+        sessionAnchors: prevClose != null && intraday.session_high != null && intraday.session_low != null && atr20FromDaily != null ? {
+          previousClose:    prevClose,
+          todayHighSoFar:   Number(intraday.session_high),
+          todayLowSoFar:    Number(intraday.session_low),
+          precomputedAtr20: atr20FromDaily,
+        } : undefined,
       })
-
       const currentZone = intraday.current_zone ?? marketState.currentZone
       const marketStateWithZone = { ...marketState, currentZone }
-
+      if (!currentZone) { console.log(`  : no zone, anchors=`); continue }
       if (!currentZone) { console.log(`  ${symbol}: no zone`); continue }
 
             const opportunityAssessment = assessOpportunity({ marketState: marketStateWithZone })
@@ -464,10 +462,10 @@ async function main() {
 
         const ENTRY_DISTANCE_THRESHOLD_ATR = 1.5
         let validityOverride: string | null = null
-        if (rv.entryRangeLow !== undefined && rv.entryRangeHigh !== undefined && marketStateWithZone.atr14) {
+        if (rv.entryRangeLow !== undefined && rv.entryRangeHigh !== undefined && marketStateWithZone.atr20) {
           const entryMid = (rv.entryRangeLow + rv.entryRangeHigh) / 2
           const currentPrice = Number(intraday.current_price)
-          const distanceInAtrs = Math.abs(entryMid - currentPrice) / marketStateWithZone.atr14
+          const distanceInAtrs = Math.abs(entryMid - currentPrice) / marketStateWithZone.atr20
           if (distanceInAtrs > ENTRY_DISTANCE_THRESHOLD_ATR) {
             validityOverride = 'ENTRY_ALREADY_PASSED'
             console.log(`    ⚠ Entry range ${distanceInAtrs.toFixed(2)} ATRs from current price -- flagging ENTRY_ALREADY_PASSED`)
@@ -711,5 +709,9 @@ const invokedDirectly = process.argv[1] !== undefined &&
 if (invokedDirectly) {
   main().catch(err => { console.error('Fatal:', err); process.exit(1) })
 }
+
+
+
+
 
 
