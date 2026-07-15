@@ -139,15 +139,18 @@ export function selectBestTemplate(
     ? subset.filter(t => t.direction === preferredDirection)
     : subset
 
-  // Zone/direction alignment filter: BUY→low zones, SELL→high zones
-  const aligned = (directionFiltered.length > 0 ? directionFiltered : subset)
-    .filter(t => isZoneAligned(t.direction, t.entryZone))
-
-  // Fallback hierarchy: aligned+direction → aligned → direction filtered → all
-  const candidates =
-    aligned.length > 0 ? aligned :
-    directionFiltered.length > 0 ? directionFiltered :
-    subset
+  // Zone alignment filter only applies when a direction constraint is active.
+  // Without preferredDirection, avgR is the sole selection criterion --
+  // the alignment insight belongs in coaching, not as a hard template discard.
+  const candidates = preferredDirection
+    ? (directionFiltered.length > 0
+        ? directionFiltered.filter(t => isZoneAligned(t.direction, t.entryZone)).length > 0
+          ? directionFiltered.filter(t => isZoneAligned(t.direction, t.entryZone))
+          : directionFiltered
+        : subset)
+    : directionFiltered.length > 0
+      ? directionFiltered
+      : subset
 
   function compareDesc(a: number, b: number): number {
     const aIsNaN = Number.isNaN(a), bIsNaN = Number.isNaN(b);
