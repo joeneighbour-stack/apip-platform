@@ -177,6 +177,8 @@ async function main() {
       barsByMarketId.get(bar.market_id)!.push({
         date: bar.date, open: Number(bar.open), high: Number(bar.high),
         low: Number(bar.low), close: Number(bar.close),
+        atr20: bar.atr20 != null ? Number(bar.atr20) : undefined,
+        atr14: bar.atr14 != null ? Number(bar.atr14) : undefined,
       })
     }
     console.log(`  Daily bars loaded: ${allBars.length} rows across ${barsByMarketId.size} markets (${barPage} pages)`)
@@ -372,7 +374,8 @@ async function main() {
       // session_high/low: max/min of 5-min bar highs/lows since session open
       // atr20: from market_state_daily Wilder RMA period 20
       const prevClose = intraday.previous_close != null ? Number(intraday.previous_close) : null
-      const atr20FromDaily = bars.length > 0 ? Number(bars[bars.length - 1]!.atr20 ?? bars[bars.length - 1]!.atr14 ?? null) : null
+      const lastBar = bars.length > 0 ? bars[bars.length - 1] : null
+      const atr20FromDaily = lastBar?.atr20 != null ? Number(lastBar.atr20) : lastBar?.atr14 != null ? Number(lastBar.atr14) : null
       const marketState = buildMarketState({
         marketId: market.market_id,
         ohlcSeries: bars,
@@ -709,6 +712,8 @@ const invokedDirectly = process.argv[1] !== undefined &&
 if (invokedDirectly) {
   main().catch(err => { console.error('Fatal:', err); process.exit(1) })
 }
+
+
 
 
 
