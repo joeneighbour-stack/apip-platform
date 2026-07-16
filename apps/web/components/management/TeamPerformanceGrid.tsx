@@ -1,36 +1,33 @@
 'use client'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Cell, LineChart, Line } from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Cell } from 'recharts'
 
 interface Analyst {
   analyst_id: string
   display_name: string
   active: boolean
 }
-
 interface KpiRow {
   analyst_id: string
   kpi_name: string
   kpi_value: any
   period_start: string
 }
-
 interface ShadowOutcome {
   trade_outcome_status: string
   result_r: number | null
   shadow_trade: { rr: number } | null
 }
-
 interface ActualTrade {
   result_r: number | null
   triggered: boolean
 }
-
 interface TeamPerformanceGridProps {
   analysts: Analyst[]
   kpiData: KpiRow[]
   currentMonthStart: string
   shadowOutcomes: ShadowOutcome[]
   actualTrades: ActualTrade[]
+  shadowKpiData: { kpi_name: string; kpi_value: any; period_start: string }[]
 }
 
 const TARGETS: Record<string, number> = {
@@ -58,7 +55,7 @@ function isOnTarget(name: string, value: number): boolean {
 }
 
 function formatKpi(name: string, value: number | null, kpiValue?: any): string {
-  if (value === null) return '—'
+  if (value === null) return '\u2014'
   if (name === 'total_return_r') return `${value > 0 ? '+' : ''}${value.toFixed(2)}R`
   if (name === 'win_rate' || name === 'triggered_rate') return `${Math.round(value * 100)}%`
   if (name === 'alignment_rate') return `${Math.round(value * 100)}%`
@@ -82,8 +79,9 @@ function shadowResultR(outcome: ShadowOutcome): number | null {
 }
 
 export function TeamPerformanceGrid({
-  analysts, kpiData, currentMonthStart, shadowOutcomes, actualTrades
+  analysts, kpiData, currentMonthStart, shadowOutcomes, actualTrades, shadowKpiData
 }: TeamPerformanceGridProps) {
+
   const index = new Map<string, Map<string, KpiRow[]>>()
   for (const row of kpiData) {
     if (!index.has(row.analyst_id)) index.set(row.analyst_id, new Map())
@@ -108,7 +106,7 @@ export function TeamPerformanceGrid({
     }
   }
 
-  // Shadow summary
+  // Shadow summary (live from raw outcomes)
   const shadowTriggered = shadowOutcomes.filter(o =>
     ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED'].includes(o.trade_outcome_status)
   )
@@ -116,6 +114,9 @@ export function TeamPerformanceGrid({
   const shadowWinRate = shadowTriggered.length > 0 ? shadowWins.length / shadowTriggered.length : null
   const shadowTriggerRate = shadowOutcomes.length > 0 ? shadowTriggered.length / shadowOutcomes.length : null
   const shadowTotalR = shadowTriggered.reduce((s, o) => s + (shadowResultR(o) ?? 0), 0)
+
+  // Shadow monthly trend from KPI data
+  const shadowReturnTrend = shadowKpiData.length > 0 ? shadowKpiData.filter(k => k.kpi_name === 'total_return_r').map(k => ({ month: monthLabel(k.period_start), value: k.kpi_value?.value ?? 0 })) : [{ month: 'Jul 26', value: 0 }]
 
   // Actual summary
   const actualTriggered = actualTrades.filter(t => t.triggered && t.result_r !== null)
@@ -129,7 +130,6 @@ export function TeamPerformanceGrid({
     .filter(k => k.kpi_name === 'total_return_r')
     .map(k => k.period_start)
   )].sort()
-
   const teamReturnTrend = allMonths.map(month => {
     const total = analysts.reduce((sum, analyst) => {
       const rows = index.get(analyst.analyst_id)?.get('total_return_r') ?? []
@@ -152,7 +152,7 @@ export function TeamPerformanceGrid({
 
       {/* Team summary row */}
       <section className="space-y-3">
-        <h2 className="text-sm font-medium">Team Summary — This Month</h2>
+        <h2 className="text-sm font-medium">Team Summary &mdash; This Month</h2>
         <div className="grid grid-cols-5 gap-3">
           {KPI_COLS.map(col => {
             const vals = teamAgg[col.name] ?? []
@@ -169,9 +169,7 @@ export function TeamPerformanceGrid({
                 'border-border bg-card'
               }`}>
                 <p className="text-xs text-muted-foreground">{col.label}</p>
-                <p className="text-xl font-semibold mt-1 tabular-nums">
-                  {formatKpi(col.name, agg)}
-                </p>
+                <p className="text-xl font-semibold mt-1 tabular-nums">{formatKpi(col.name, agg)}</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   {col.name === 'total_return_r' ? 'Team total' : 'Team avg'}
                 </p>
@@ -276,7 +274,7 @@ export function TeamPerformanceGrid({
       {/* Team long-term R trend */}
       {teamReturnTrend.length > 0 && (
         <section className="space-y-3">
-          <h2 className="text-sm font-medium">Team Total Return — Long Term</h2>
+          <h2 className="text-sm font-medium">Team Total Return &mdash; Long Term</h2>
           <div className="rounded-lg border border-border bg-card p-4">
             <div className="h-40">
               <ResponsiveContainer width="100%" height="100%">
@@ -300,7 +298,7 @@ export function TeamPerformanceGrid({
         </section>
       )}
 
-      {/* Shadow vs Actual summary */}
+      {/* Shadow vs Actual comparison */}
       <section className="space-y-3">
         <h2 className="text-sm font-medium">Shadow vs Actual Comparison</h2>
         <div className="grid grid-cols-3 gap-3">
@@ -308,8 +306,8 @@ export function TeamPerformanceGrid({
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Shadow Benchmark</p>
             <div className="space-y-1.5">
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Total setups</span><span className="font-medium">{shadowOutcomes.length}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger rate</span><span className="font-medium">{shadowTriggerRate !== null ? `${Math.round(shadowTriggerRate * 100)}%` : '—'}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate</span><span className="font-medium">{shadowWinRate !== null ? `${Math.round(shadowWinRate * 100)}%` : '—'}</span></div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger rate</span><span className="font-medium">{shadowTriggerRate !== null ? `${Math.round(shadowTriggerRate * 100)}%` : '\u2014'}</span></div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate</span><span className="font-medium">{shadowWinRate !== null ? `${Math.round(shadowWinRate * 100)}%` : '\u2014'}</span></div>
               <div className="flex justify-between text-xs">
                 <span className="text-muted-foreground">Total R</span>
                 <span className={`font-medium ${shadowTotalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
@@ -322,8 +320,8 @@ export function TeamPerformanceGrid({
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Analyst Actual (30 days)</p>
             <div className="space-y-1.5">
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Total setups</span><span className="font-medium">{actualTrades.length}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger rate</span><span className="font-medium">{actualTriggerRate !== null ? `${Math.round(actualTriggerRate * 100)}%` : '—'}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate</span><span className="font-medium">{actualWinRate !== null ? `${Math.round(actualWinRate * 100)}%` : '—'}</span></div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger rate</span><span className="font-medium">{actualTriggerRate !== null ? `${Math.round(actualTriggerRate * 100)}%` : '\u2014'}</span></div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate</span><span className="font-medium">{actualWinRate !== null ? `${Math.round(actualWinRate * 100)}%` : '\u2014'}</span></div>
               <div className="flex justify-between text-xs">
                 <span className="text-muted-foreground">Total R</span>
                 <span className={`font-medium ${actualTotalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
@@ -333,18 +331,18 @@ export function TeamPerformanceGrid({
             </div>
           </div>
           <div className="rounded-lg border border-border bg-card p-4 space-y-2">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Delta (Shadow − Actual)</p>
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Delta (Shadow &minus; Actual)</p>
             <div className="space-y-1.5">
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate delta</span>
                 <span className="font-medium">
                   {shadowWinRate !== null && actualWinRate !== null
-                    ? `${((shadowWinRate - actualWinRate) * 100).toFixed(1)}pp` : '—'}
+                    ? `${((shadowWinRate - actualWinRate) * 100).toFixed(1)}pp` : '\u2014'}
                 </span>
               </div>
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger delta</span>
                 <span className="font-medium">
                   {shadowTriggerRate !== null && actualTriggerRate !== null
-                    ? `${((shadowTriggerRate - actualTriggerRate) * 100).toFixed(1)}pp` : '—'}
+                    ? `${((shadowTriggerRate - actualTriggerRate) * 100).toFixed(1)}pp` : '\u2014'}
                 </span>
               </div>
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Status</span>
@@ -357,6 +355,60 @@ export function TeamPerformanceGrid({
         </div>
       </section>
 
+      {/* Shadow System Monthly Performance */}
+      {shadowReturnTrend.length > 0 && (
+        <section className="space-y-3">
+          <div>
+            <h2 className="text-sm font-medium">Shadow System Performance</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">Internal benchmark &mdash; not visible to analysts</p>
+          </div>
+          <div className="grid grid-cols-4 gap-3">
+            {(['total_return_r', 'win_rate', 'triggered_rate', 'max_drawdown'] as const).map(kpiName => {
+              const latestKpi = shadowKpiData.filter(k => k.kpi_name === kpiName).at(-1)
+              const value = latestKpi ? (latestKpi.kpi_value?.value ?? null) : null
+              return (
+                <div key={kpiName} className="rounded-lg border border-border bg-card p-3 space-y-1">
+                  <p className="text-xs text-muted-foreground">
+                    {KPI_COLS.find(c => c.name === kpiName)?.label ?? kpiName}
+                    <span className="ml-1 text-[10px] opacity-60">shadow</span>
+                  </p>
+                  <p className={`text-sm font-semibold tabular-nums ${
+                    value === null ? 'text-muted-foreground' :
+                    kpiName === 'total_return_r' ? (value >= 0 ? 'text-green-700' : 'text-red-700') :
+                    kpiName === 'max_drawdown' ? (value >= -5 ? 'text-green-700' : 'text-red-700') :
+                    'text-foreground'
+                  }`}>{formatKpi(kpiName, value)}</p>
+                </div>
+              )
+            })}
+          </div>
+          <div className="rounded-lg border border-border bg-card p-4">
+            <p className="text-xs text-muted-foreground mb-3">Monthly Return (R) &mdash; Shadow System</p>
+            <div className="h-32">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={shadowReturnTrend} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <XAxis dataKey="month" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false}
+                    tickFormatter={v => `${v > 0 ? '+' : ''}${Number(v).toFixed(0)}R`} />
+                  <Tooltip
+                    formatter={(v: any) => [`${Number(v).toFixed(2)}R`, 'Shadow Return']}
+                    contentStyle={{ fontSize: 11 }} />
+                  <ReferenceLine y={0} stroke="hsl(var(--border))" />
+                  <Bar dataKey="value" radius={[2, 2, 0, 0]}>
+                    {shadowReturnTrend.map((entry, i) => (
+                      <Cell key={i} fill={entry.value >= 0 ? '#22c55e' : '#ef4444'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </section>
+      )}
+
     </div>
   )
 }
+
+
+

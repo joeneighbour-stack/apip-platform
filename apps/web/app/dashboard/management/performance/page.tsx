@@ -8,30 +8,27 @@ export default async function ManagementPerformancePage() {
   if (!['MANAGER', 'ADMIN'].includes(user.role)) redirect('/login')
 
   const supabase = await createClient()
+
   const now = new Date()
   const year = now.getUTCFullYear()
   const month = now.getUTCMonth()
   const monthStart = `${year}-${String(month + 1).padStart(2, '0')}-01`
 
-  // 36 months for long-term trend
   const d36 = new Date(Date.UTC(year, month - 35, 1))
   const thirtyySixMonthsAgo = d36.toISOString().slice(0, 10)
 
-  // Active analysts
   const { data: analysts } = await supabase
     .from('analysts')
     .select('analyst_id, display_name, active')
     .eq('active', true)
     .order('display_name')
 
-  // KPI data for last 36 months
   const { data: kpiData } = await supabase
     .from('executive_kpis')
     .select('analyst_id, kpi_name, kpi_value, period_start')
     .gte('period_start', thirtyySixMonthsAgo)
     .order('period_start', { ascending: true })
 
-  // Shadow summary for comparison
   const { data: shadowOutcomes } = await supabase
     .from('shadow_trade_outcomes')
     .select(`
@@ -40,7 +37,6 @@ export default async function ManagementPerformancePage() {
       shadow_trade:shadow_trade_id ( rr )
     `)
 
-  // Actual trades last 30 days for comparison
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
   const { data: actualTrades } = await supabase
     .from('actual_trades')
@@ -48,8 +44,18 @@ export default async function ManagementPerformancePage() {
     .eq('source_system', 'ACUITY_PERFORMANCE_API')
     .gte('published_at', thirtyDaysAgo)
 
-  const analystIdsWithData = new Set((kpiData ?? []).map(k => k.analyst_id))
-  const analystsWithData = (analysts ?? []).filter(a => analystIdsWithData.has(a.analyst_id))
+  const { data: rawShadowKpis } = await supabase
+    .from('executive_kpis')
+    .select('analyst_id, kpi_name, kpi_value, period_start')
+    .eq('kpi_visibility', 'INTERNAL_ONLY')
+    .gte('period_start', thirtyySixMonthsAgo)
+    .order('period_start', { ascending: true })
+
+  const shadowKpiData: { kpi_name: string; kpi_value: any; period_start: string }[] =
+    ((rawShadowKpis as any[]) ?? []).filter((k: any) => !k.analyst_id)
+
+  const analystIdsWithData = new Set(((kpiData as any[]) ?? []).map((k: any) => k.analyst_id))
+  const analystsWithData = ((analysts as any[]) ?? []).filter((a: any) => analystIdsWithData.has(a.analyst_id))
 
   return (
     <div className="space-y-8">
@@ -62,16 +68,18 @@ export default async function ManagementPerformancePage() {
         </div>
         <a href="/dashboard/management"
           className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-          ← Back to Management
+          &larr; Back
         </a>
       </div>
       <TeamPerformanceGrid
         analysts={analystsWithData}
-        kpiData={kpiData ?? []}
+        kpiData={(kpiData as any[]) ?? []}
         currentMonthStart={monthStart}
-        shadowOutcomes={shadowOutcomes ?? []}
-        actualTrades={actualTrades ?? []}
+        shadowOutcomes={(shadowOutcomes as any[]) ?? []}
+        actualTrades={(actualTrades as any[]) ?? []}
+        shadowKpiData={shadowKpiData}
       />
     </div>
   )
 }
+
