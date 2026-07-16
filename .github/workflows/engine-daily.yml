@@ -7,124 +7,8 @@
 # Schedule:
 #   05:30 UK (04:30 UTC) -- populateMarketStateDaily
 #   05:35 UK (04:35 UTC) -- derive market regime
-#   05:45 UK (04:45 UTC) -- captureIntradaySnapshot EUROPEAN
-#   05:50 UK (04:50 UTC) -- runEngineSession EUROPEAN
-#   11:45 UK (10:45 UTC) -- captureIntradaySnapshot US
-#   11:50 UK (10:50 UTC) -- runEngineSession US
-#   15:45 UK (14:45 UTC) -- captureIntradaySnapshot APAC
-#   15:50 UK (14:50 UTC) -- runEngineSession APAC
-# ============================================================================
-
-name: APIP Engine
-
-on:
-  schedule:
-    - cron: '*/30 5-20 * * 1-5'  # every 30 mins Mon-Fri 05:00-20:00 UTC -- shadow outcomes
-    - cron: '*/15 5-20 * * 1-5'  # every 15 mins Mon-Fri 05:00-20:00 UTC -- condition awareness
-    - cron: '30 4 * * 1-5'   # 04:30 UTC Mon-Fri -- populate daily market state
-    - cron: '35 4 * * 1-5'   # 04:35 UTC Mon-Fri -- derive market regime
-    - cron: '45 4 * * 1-5'   # 04:45 UTC Mon-Fri -- European snapshot
-    - cron: '50 4 * * 1-5'   # 04:50 UTC Mon-Fri -- European engine
-    - cron: '45 10 * * 1-5'  # 10:45 UTC Mon-Fri -- US snapshot
-    - cron: '50 10 * * 1-5'  # 10:50 UTC Mon-Fri -- US engine
-    - cron: '45 14 * * 1-5'  # 14:45 UTC Mon-Fri -- APAC snapshot
-    - cron: '50 14 * * 1-5'  # 14:50 UTC Mon-Fri -- APAC engine
-    - cron: '0 5 * * 1'      # 05:00 UTC Monday -- weekly profile regeneration
-    - cron: '15 5 * * 1'     # 05:15 UTC Monday -- weekly regime derivation
-    - cron: '30 5 * * 1'     # 05:30 UTC Monday -- weekly KPI calculation
-    - cron: '0 22 * * 1-5'   # 22:00 UTC Mon-Fri -- import actual trades (end of day)
-    - cron: '30 22 * * 1-5'  # 22:30 UTC Mon-Fri -- post-trade reviews (after import)
-  workflow_dispatch:
-    inputs:
-      job:
-        description: 'Job to run manually'
-        required: true
-        type: choice
-        options:
-          - populate-daily
-          - derive-regime
-          - snapshot-european
-          - engine-european
-          - snapshot-us
-          - engine-us
-          - snapshot-apac
-          - engine-apac
-          - generate-profiles
-          - calculate-kpis
-          - shadow-lifecycle
-          - condition-awareness
-          - import-actual-trades
-          - generate-post-trade-reviews
-jobs:
-
-  populate-daily:
-    name: Populate Market State Daily
-    runs-on: ubuntu-latest
-    if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'populate-daily' ||
-      github.event_name == 'schedule' && startsWith(github.event.schedule, '30 4')
-    defaults:
-      run:
-        working-directory: intelligence-engine
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: intelligence-engine/package-lock.json
-      - run: npm ci
-      - run: npx tsx src/scripts/populateMarketStateDaily.ts
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
-
-  derive-regime:
-    name: Derive Market Regime
-    runs-on: ubuntu-latest
-    if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'derive-regime' ||
-      github.event_name == 'schedule' && startsWith(github.event.schedule, '35 4') ||
-      github.event_name == 'schedule' && startsWith(github.event.schedule, '15 5') && endsWith(github.event.schedule, '* * 1')
-    defaults:
-      run:
-        working-directory: intelligence-engine
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: intelligence-engine/package-lock.json
-      - run: npm ci
-      - run: npx tsx src/scripts/deriveMarketRegime.ts
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-
-  snapshot-european:
-    name: Intraday Snapshot -- European
-    runs-on: ubuntu-latest
-    if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'snapshot-european' ||
-      github.event_name == 'schedule' && startsWith(github.event.schedule, '45 4')
-    defaults:
-      run:
-        working-directory: intelligence-engine
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: intelligence-engine/package-lock.json
-      - run: npm ci
-      - run: npx tsx src/scripts/captureIntradaySnapshot.ts --session=EUROPEAN
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+#   05:45 UK (04:45 UTC) -- 
+          FINNHUB_CANDLE_API_KEY: ${{ secrets.FINNHUB_CANDLE_API_KEY }}
 
   engine-european:
     name: Engine Session -- European
@@ -165,11 +49,8 @@ jobs:
           cache: 'npm'
           cache-dependency-path: intelligence-engine/package-lock.json
       - run: npm ci
-      - run: npx tsx src/scripts/captureIntradaySnapshot.ts --session=US
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+      - run: npx tsx src/scripts/
+          FINNHUB_CANDLE_API_KEY: ${{ secrets.FINNHUB_CANDLE_API_KEY }}
 
   engine-us:
     name: Engine Session -- US
@@ -210,11 +91,8 @@ jobs:
           cache: 'npm'
           cache-dependency-path: intelligence-engine/package-lock.json
       - run: npm ci
-      - run: npx tsx src/scripts/captureIntradaySnapshot.ts --session=APAC
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+      - run: npx tsx src/scripts/
+          FINNHUB_CANDLE_API_KEY: ${{ secrets.FINNHUB_CANDLE_API_KEY }}
 
   engine-apac:
     name: Engine Session -- APAC
@@ -282,28 +160,8 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
-  shadow-lifecycle:
-    name: Shadow Outcome Lifecycle
-    runs-on: ubuntu-latest
-    if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'shadow-lifecycle' ||
-      github.event_name == 'schedule' && startsWith(github.event.schedule, '*/30')
-    defaults:
-      run:
-        working-directory: intelligence-engine
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: intelligence-engine/package-lock.json
-      - run: npm ci
-      - run: npx tsx src/scripts/runShadowOutcomeLifecycle.ts
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+  
+          FINNHUB_CANDLE_API_KEY: ${{ secrets.FINNHUB_CANDLE_API_KEY }}
 
   condition-awareness:
     name: Condition Awareness Check
@@ -373,3 +231,4 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
