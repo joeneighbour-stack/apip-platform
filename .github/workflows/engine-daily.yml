@@ -20,7 +20,7 @@ name: APIP Engine
 on:
   schedule:
     - cron: '*/5 5-21 * * 1-5  # every 5 mins Mon-Fri 05:00-21:00 UTC -- shadow outcomes
-    - cron: '*/15 5-20 * * 1-5'  # every 15 mins Mon-Fri 05:00-20:00 UTC -- condition awareness
+    - cron: '*/5 5-21 * * 1-5'  # every 5 mins Mon-Fri 05:00-21:00 UTC -- shadow outcomes
     - cron: '30 4 * * 1-5'   # 04:30 UTC Mon-Fri -- populate daily market state
     - cron: '35 4 * * 1-5'   # 04:35 UTC Mon-Fri -- derive market regime
     - cron: '45 4 * * 1-5'   # 04:45 UTC Mon-Fri -- European snapshot
