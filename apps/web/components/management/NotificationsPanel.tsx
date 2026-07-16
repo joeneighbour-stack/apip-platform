@@ -150,7 +150,7 @@ export function NotificationsPanel({ notifications, showAll = false }: Notificat
                         </span>
                         <span className="text-xs text-muted-foreground">{n.severity}</span>
                         {sla.label && (
-                          <span className={`text-xs ${sla.overdue ? 'text-red-700 font-medium' : 'text-muted-foreground'}`}>
+                          <span suppressHydrationWarning className={`text-xs ${sla.overdue ? 'text-red-700 font-medium' : 'text-muted-foreground'}`}>
                             {sla.label}
                           </span>
                         )}
@@ -213,3 +213,4 @@ export function NotificationsPanel({ notifications, showAll = false }: Notificat
     </section>
   )
 }
+

@@ -32,6 +32,25 @@ const SESSION_WINDOWS: Record<string, { windowStartHour: number; windowEndHour: 
   APAC:     { windowStartHour: 15, windowEndHour: 16 },
 }
 
+function computeExpiresAt(sessionType: string, assetClass: string | null, generatedAt: Date): Date {
+  const isCrypto = assetClass === 'CRYPTO'
+  const isApac   = sessionType === 'APAC'
+  const base     = new Date(generatedAt)
+  if (isApac || isCrypto) base.setUTCDate(base.getUTCDate() + 1)
+  const targetHour = isCrypto ? 12 : isApac ? 16 : 21
+  const dateStr = base.toISOString().slice(0, 10)
+  for (let utcH = 0; utcH < 24; utcH++) {
+    const candidate = new Date(`${dateStr}T${String(utcH).padStart(2,'0')}:00:00Z`)
+    const londonHour = parseInt(candidate.toLocaleString('en-GB', {
+      timeZone: 'Europe/London', hour: '2-digit', hour12: false,
+    }), 10)
+    if (londonHour === targetHour) return candidate
+  }
+  const isDST = new Date(`${dateStr}T12:00:00Z`).toLocaleString('en-GB', {
+    timeZone: 'Europe/London', timeZoneName: 'short',
+  }).includes('BST')
+  return new Date(`${dateStr}T${String(targetHour - (isDST ? 1 : 0)).padStart(2,'0')}:00:00Z`)
+}
 const SESSION_MARKETS: Record<string, string[]> = {
   EUROPEAN: [
     'EURNZD', 'EURGBP', 'Natural Gas', 'AUDCAD',
@@ -655,13 +674,21 @@ async function main() {
             direction: shadowTrade.direction,
             session: shadowTrade.session,
             generated_at: generatedAt,
+            entry_mode: item.opp.analystAction === 'ENTER_NOW' ? 'ENTER_NOW' : 'WAIT_FOR_PREFERRED_ZONE',
+            generated_price: Number(intraday.current_price),
+            expires_at: computeExpiresAt(session, market.asset_class ?? null, new Date(generatedAt)).toISOString(),
+            price_provider: 'FINNHUB_OANDA',
+            price_resolution: '5MIN',
           }).select('shadow_trade_id').single()
 
           if (!shadowError && shadowRow) {
             await db.from('shadow_trade_outcomes').insert({
               shadow_outcome_id: shadowTradeOutcome.shadowOutcomeId,
               shadow_trade_id: shadowRow.shadow_trade_id,
-              trade_outcome_status: 'NOT_TRIGGERED',
+              trade_outcome_status: item.opp.analystAction === 'ENTER_NOW' ? 'TRIGGERED' : 'NOT_TRIGGERED',
+              triggered_at:    item.opp.analystAction === 'ENTER_NOW' ? generatedAt : null,
+              triggered_price: item.opp.analystAction === 'ENTER_NOW' ? Number(intraday.current_price) : null,
+              trigger_source:  item.opp.analystAction === 'ENTER_NOW' ? 'ENTER_NOW_AT_GENERATION' : null,
             })
             shadowTradesCreated++
           } else if (shadowError) {
@@ -712,6 +739,7 @@ const invokedDirectly = process.argv[1] !== undefined &&
 if (invokedDirectly) {
   main().catch(err => { console.error('Fatal:', err); process.exit(1) })
 }
+
 
 
 
