@@ -292,7 +292,7 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'shadow-lifecycle' ||
-      github.event_name == 'schedule' && startsWith(github.event.schedule, '*/30')
+      github.event_name == 'schedule' && startsWith(github.event.schedule, '*/5')
     defaults:
       run:
         working-directory: intelligence-engine
@@ -402,6 +402,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
 
 
 
