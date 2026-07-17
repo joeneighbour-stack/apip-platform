@@ -9,13 +9,13 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { href: '/dashboard/analyst',                label: 'My Workspace',       roles: ['ANALYST'] },
-  { href: '/dashboard/analyst/performance',    label: 'My Performance',     roles: ['ANALYST'] },
+  { href: '/dashboard/analyst/performance', label: 'My Performance', roles: ['ANALYST'] },
+  { href: '/dashboard/analyst/monitor', label: 'My Monitor', roles: ['ANALYST'] },
   { href: '/dashboard/analyst/availability',   label: 'My Availability',    roles: ['ANALYST'] },
   { href: '/dashboard/management',             label: 'Management',         roles: ['MANAGER', 'ADMIN'] },
   { href: '/dashboard/management/performance', label: 'Team Performance',   roles: ['MANAGER', 'ADMIN', 'EXECUTIVE'] },
   { href: '/dashboard/management/shadow',      label: 'Shadow Monitoring',  roles: ['MANAGER', 'ADMIN', 'RESEARCH'] },
   { href: '/dashboard/analytics',              label: 'Analytics',          roles: ['MANAGER', 'ADMIN', 'EXECUTIVE', 'RESEARCH'] },
-  { href: '/dashboard/opportunities',          label: 'Opportunities',      roles: ['ANALYST', 'MANAGER', 'ADMIN'] },
   { href: '/dashboard/admin',                  label: 'Admin Centre',       roles: ['ADMIN', 'MANAGER'] },
 ]
 
@@ -51,3 +51,5 @@ export function DashboardNav({ role, displayName }: NavProps) {
     </nav>
   )
 }
+
+
