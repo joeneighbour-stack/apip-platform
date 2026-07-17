@@ -134,7 +134,6 @@ export default async function AnalystMonitorPage() {
 
       {/* 30-day trade log */}
       <section className="space-y-3">
-        <h2 className="text-sm font-medium">Trade Log &mdash; Last 30 Days</h2>
         <TradeHistoryTable
           trades={tradesWithDetails}
           analystId={user.analystId!}
@@ -144,3 +143,4 @@ export default async function AnalystMonitorPage() {
     </div>
   )
 }
+

@@ -43,7 +43,7 @@ export function TradeHistoryTable({ trades, disputesByTradeId, analystId }: Trad
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-4">
-        <h2 className="text-sm font-medium">Trade History (last 90 days)</h2>
+        <h2 className="text-sm font-medium">Trade History</h2>
         <div className="flex items-center gap-2">
           <select
             value={filterMarket}
