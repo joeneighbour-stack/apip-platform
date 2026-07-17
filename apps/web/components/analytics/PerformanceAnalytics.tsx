@@ -1,31 +1,41 @@
 'use client'
-
 import { useState, useMemo } from 'react'
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis,
   Tooltip, ResponsiveContainer, ReferenceLine, Cell, Legend
 } from 'recharts'
 
-interface Analyst { analyst_id: string; display_name: string }
+interface Analyst { analyst_id: string; display_name: string; active: boolean }
 interface Market { market_id: string; symbol: string; asset_class: string }
+interface KpiRow { analyst_id: string; kpi_name: string; kpi_value: any; period_start: string }
 interface Trade {
-  trade_id: string
-  analyst_id: string
-  direction: string
-  result_r: number | null
-  triggered: boolean
-  published_at: string
-  historical_backfill: boolean
+  trade_id: string; analyst_id: string; direction: string; result_r: number | null
+  triggered: boolean; published_at: string; historical_backfill: boolean
   market: { market_id: string; symbol: string; asset_class: string } | null
 }
-
 interface Props {
   analysts: Analyst[]
   markets: Market[]
+  kpis: KpiRow[]
   trades: Trade[]
+  tradesLoading: boolean
+  tradesLoaded: boolean
+  onLoadTrades: () => void
 }
 
-function deriveSession(publishedAt: string): 'EUROPEAN' | 'US' | 'APAC' | 'OTHER' {
+const ANALYST_COLOURS = [
+  '#3b82f6', '#22c55e', '#f59e0b', '#8b5cf6', '#ef4444',
+  '#06b6d4', '#f97316', '#ec4899', '#84cc16', '#14b8a6'
+]
+
+function monthKey(dateStr: string) { return dateStr.slice(0, 7) }
+function monthLabel(key: string) {
+  const [y, m] = key.split('-')
+  return new Date(Number(y), Number(m) - 1, 1)
+    .toLocaleDateString('en-GB', { month: 'short', year: '2-digit' })
+}
+
+function deriveSession(publishedAt: string): string {
   const date = new Date(publishedAt)
   const ukHour = (date.getUTCHours() + 1) % 24
   const ukMin = date.getUTCMinutes()
@@ -36,45 +46,48 @@ function deriveSession(publishedAt: string): 'EUROPEAN' | 'US' | 'APAC' | 'OTHER
   return 'OTHER'
 }
 
-function monthKey(dateStr: string) { return dateStr.slice(0, 7) }
-function monthLabel(key: string) {
-  const [y, m] = key.split('-')
-  return new Date(Number(y), Number(m) - 1, 1)
-    .toLocaleDateString('en-GB', { month: 'short', year: '2-digit' })
+// Aggregate KPI rows into summary stats
+interface KpiStats {
+  totalR: number; tradeCount: number; wins: number; triggered: number
+  totalSetups: number; winRate: number | null; triggerRate: number | null
 }
 
-function generateMonthOptions(trades: Trade[]) {
-  if (trades.length === 0) return []
-  const keys = new Set(trades.map(t => monthKey(t.published_at)))
-  return [...keys].sort()
+function aggregateKpis(rows: KpiRow[]): KpiStats {
+  let totalR = 0, tradeCount = 0, wins = 0, triggered = 0, totalSetups = 0
+  for (const row of rows) {
+    const v = row.kpi_value
+    if (row.kpi_name === 'total_return_r') {
+      totalR += v?.value ?? 0
+      tradeCount += v?.trade_count ?? 0
+    } else if (row.kpi_name === 'win_rate') {
+      wins += v?.wins ?? 0
+      triggered += v?.triggered ?? 0
+    } else if (row.kpi_name === 'triggered_rate') {
+      totalSetups += v?.total_setups ?? 0
+    }
+  }
+  return {
+    totalR, tradeCount, wins, triggered, totalSetups,
+    winRate: triggered > 0 ? wins / triggered : null,
+    triggerRate: totalSetups > 0 ? triggered / totalSetups : null,
+  }
 }
 
-function computeStats(trades: Trade[]) {
+// Compute stats from raw trades (used when advanced filters active)
+function computeTradeStats(trades: Trade[]) {
   const totalR = trades.reduce((s, t) => s + (t.result_r ?? 0), 0)
-  const count = trades.length
   const withResult = trades.filter(t => t.result_r !== null)
   const wins = withResult.filter(t => (t.result_r ?? 0) > 0).length
   const winRate = withResult.length > 0 ? wins / withResult.length : null
-  const avgR = count > 0 ? totalR / count : 0
   const apiTrades = trades.filter(t => !t.historical_backfill)
   const triggeredCount = apiTrades.filter(t => t.triggered).length
   const triggerRate = apiTrades.length > 0 ? triggeredCount / apiTrades.length : null
-  return { totalR, count, winRate, avgR, triggerRate }
+  return { totalR, tradeCount: trades.length, winRate, triggerRate }
 }
 
-const ANALYST_COLOURS = [
-  '#3b82f6', '#22c55e', '#f59e0b', '#8b5cf6', '#ef4444',
-  '#06b6d4', '#f97316', '#ec4899', '#84cc16', '#14b8a6'
-]
-
-function MultiSelect({
-  label, options, selected, onChange, placeholder
-}: {
-  label: string
-  options: { value: string; label: string }[]
-  selected: string[]
-  onChange: (vals: string[]) => void
-  placeholder: string
+function MultiSelect({ label, options, selected, onChange, placeholder }: {
+  label: string; options: { value: string; label: string }[]
+  selected: string[]; onChange: (vals: string[]) => void; placeholder: string
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -82,16 +95,13 @@ function MultiSelect({
   const filtered = search.trim()
     ? options.filter(o => o.label.toLowerCase().includes(search.toLowerCase()))
     : options
-
   return (
     <div className="relative">
       <p className="text-xs text-muted-foreground mb-1">{label}</p>
-      <button
-        onClick={() => { setOpen(!open); setSearch('') }}
-        className="w-full text-left text-xs px-2.5 py-2 rounded-md border border-border bg-background flex items-center justify-between gap-2"
-      >
+      <button onClick={() => { setOpen(!open); setSearch('') }}
+        className="w-full text-left text-xs px-2.5 py-2 rounded-md border border-border bg-background flex items-center justify-between gap-2">
         <span className="truncate">{allSelected ? placeholder : `${selected.length} selected`}</span>
-        <span className="text-muted-foreground shrink-0">{open ? '▲' : '▼'}</span>
+        <span className="text-muted-foreground shrink-0">{open ? '\u25b2' : '\u25bc'}</span>
       </button>
       {open && (
         <div className="absolute top-full left-0 mt-1 w-full bg-card border border-border rounded-md shadow-lg z-50 flex flex-col max-h-56">
@@ -105,7 +115,7 @@ function MultiSelect({
           <div className="overflow-y-auto">
             <button className="w-full text-left text-xs px-3 py-2 hover:bg-muted transition-colors font-medium"
               onClick={() => { onChange([]); setOpen(false); setSearch('') }}>
-              {allSelected ? '✓ ' : '  '}All
+              {allSelected ? '\u2714 ' : '  '}All
             </button>
             {filtered.map(opt => (
               <button key={opt.value} className="w-full text-left text-xs px-3 py-2 hover:bg-muted transition-colors"
@@ -115,7 +125,7 @@ function MultiSelect({
                     : [...selected, opt.value]
                   onChange(next)
                 }}>
-                {selected.includes(opt.value) ? '✓ ' : '  '}{opt.label}
+                {selected.includes(opt.value) ? '\u2714 ' : '  '}{opt.label}
               </button>
             ))}
             {filtered.length === 0 && <p className="text-xs text-muted-foreground px-3 py-2">No matches</p>}
@@ -126,8 +136,14 @@ function MultiSelect({
   )
 }
 
-export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
-  const monthOptions = useMemo(() => generateMonthOptions(trades), [trades])
+export function PerformanceAnalytics({ analysts, markets, kpis, trades, tradesLoading, tradesLoaded, onLoadTrades }: Props) {
+
+  // Month options from KPI data
+  const monthOptions = useMemo(() => {
+    const keys = new Set(kpis.map(k => monthKey(k.period_start)))
+    return [...keys].sort()
+  }, [kpis])
+
   const earliestMonth = monthOptions[0] ?? ''
   const latestMonth = monthOptions[monthOptions.length - 1] ?? ''
 
@@ -141,16 +157,35 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
   const [showAllMonths, setShowAllMonths] = useState(false)
   const [activeOnly, setActiveOnly] = useState(true)
 
-  const assetClasses = useMemo(() =>
-    [...new Set(markets.map(m => m.asset_class))].sort(), [markets])
+  // Advanced filters require raw trades
+  const hasAdvancedFilters = selectedAssetClasses.length > 0 || selectedMarkets.length > 0 ||
+    selectedDirections.length > 0 || selectedSessions.length > 0
 
+  const hasFilters = selectedAnalysts.length > 0 || hasAdvancedFilters ||
+    fromMonth !== earliestMonth || toMonth !== latestMonth
+
+  function clearFilters() {
+    setSelectedAnalysts([]); setSelectedAssetClasses([]); setSelectedMarkets([])
+    setSelectedDirections([]); setSelectedSessions([])
+    setFromMonth(earliestMonth); setToMonth(latestMonth)
+  }
+
+  const assetClasses = useMemo(() => [...new Set(markets.map(m => m.asset_class))].sort(), [markets])
   const filteredMarkets = useMemo(() =>
-    selectedAssetClasses.length === 0
-      ? markets
-      : markets.filter(m => selectedAssetClasses.includes(m.asset_class)),
+    selectedAssetClasses.length === 0 ? markets : markets.filter(m => selectedAssetClasses.includes(m.asset_class)),
     [markets, selectedAssetClasses])
 
-  const filtered = useMemo(() => {
+  // Filter KPIs by analyst and month range
+  const filteredKpis = useMemo(() => kpis.filter(k => {
+    const key = monthKey(k.period_start)
+    if (key < fromMonth || key > toMonth) return false
+    if (selectedAnalysts.length > 0 && !selectedAnalysts.includes(k.analyst_id)) return false
+    return true
+  }), [kpis, fromMonth, toMonth, selectedAnalysts])
+
+  // Filter raw trades for advanced filters
+  const filteredTrades = useMemo(() => {
+    if (!hasAdvancedFilters || !tradesLoaded) return []
     return trades.filter(t => {
       const key = monthKey(t.published_at)
       if (key < fromMonth || key > toMonth) return false
@@ -161,68 +196,77 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
       if (selectedSessions.length > 0 && !selectedSessions.includes(deriveSession(t.published_at))) return false
       return true
     })
-  }, [trades, fromMonth, toMonth, selectedAnalysts, selectedAssetClasses, selectedMarkets, selectedDirections, selectedSessions])
+  }, [trades, fromMonth, toMonth, selectedAnalysts, selectedAssetClasses, selectedMarkets, selectedDirections, selectedSessions, tradesLoaded, hasAdvancedFilters])
 
-  const stats = useMemo(() => computeStats(filtered), [filtered])
+  // Summary stats — KPIs when no advanced filters, trades when advanced filters active
+  const stats = useMemo(() => {
+    if (hasAdvancedFilters && tradesLoaded) {
+      const s = computeTradeStats(filteredTrades)
+      return { totalR: s.totalR, tradeCount: s.tradeCount, winRate: s.winRate, triggerRate: s.triggerRate }
+    }
+    const agg = aggregateKpis(filteredKpis)
+    return { totalR: agg.totalR, tradeCount: agg.tradeCount, winRate: agg.winRate, triggerRate: agg.triggerRate }
+  }, [filteredKpis, filteredTrades, hasAdvancedFilters, tradesLoaded])
 
+  // Monthly breakdown from KPIs
   const monthlyBreakdown = useMemo(() => {
-    const byMonth = new Map<string, Trade[]>()
-    for (const t of filtered) {
-      const key = monthKey(t.published_at)
-      if (!byMonth.has(key)) byMonth.set(key, [])
-      byMonth.get(key)!.push(t)
-    }
-    return [...byMonth.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, ts]) => {
-        const s = computeStats(ts)
-        return { key, label: monthLabel(key), ...s }
+    if (hasAdvancedFilters && tradesLoaded) {
+      const byMonth = new Map<string, Trade[]>()
+      for (const t of filteredTrades) {
+        const key = monthKey(t.published_at)
+        if (!byMonth.has(key)) byMonth.set(key, [])
+        byMonth.get(key)!.push(t)
+      }
+      return [...byMonth.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, ts]) => {
+        const s = computeTradeStats(ts)
+        return { key, label: monthLabel(key), totalR: s.totalR, tradeCount: s.tradeCount, winRate: s.winRate, triggerRate: s.triggerRate }
       })
-  }, [filtered])
-
-  const analystBreakdown = useMemo(() => {
-    const byAnalyst = new Map<string, Trade[]>()
-    for (const t of filtered) {
-      if (!byAnalyst.has(t.analyst_id)) byAnalyst.set(t.analyst_id, [])
-      byAnalyst.get(t.analyst_id)!.push(t)
     }
-    return [...byAnalyst.entries()].map(([id, ts]) => {
-      const analyst = analysts.find(a => a.analyst_id === id)
-      return { id, name: analyst?.display_name ?? 'Unknown', ...computeStats(ts) }
-    }).sort((a, b) => b.totalR - a.totalR)
-  }, [filtered, analysts])
+    const byMonth = new Map<string, KpiRow[]>()
+    for (const k of filteredKpis) {
+      const key = monthKey(k.period_start)
+      if (!byMonth.has(key)) byMonth.set(key, [])
+      byMonth.get(key)!.push(k)
+    }
+    return [...byMonth.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, rows]) => {
+      const agg = aggregateKpis(rows)
+      return { key, label: monthLabel(key), totalR: agg.totalR, tradeCount: agg.tradeCount, winRate: agg.winRate, triggerRate: agg.triggerRate }
+    })
+  }, [filteredKpis, filteredTrades, hasAdvancedFilters, tradesLoaded])
 
+  // Analyst breakdown from KPIs
+  const analystBreakdown = useMemo(() => {
+    const byAnalyst = new Map<string, KpiRow[]>()
+    for (const k of filteredKpis) {
+      if (!byAnalyst.has(k.analyst_id)) byAnalyst.set(k.analyst_id, [])
+      byAnalyst.get(k.analyst_id)!.push(k)
+    }
+    return [...byAnalyst.entries()].map(([id, rows]) => {
+      const analyst = analysts.find(a => a.analyst_id === id)
+      const agg = aggregateKpis(rows)
+      return { id, name: analyst?.display_name ?? 'Unknown', active: analyst?.active ?? true, ...agg }
+    }).sort((a, b) => b.totalR - a.totalR)
+  }, [filteredKpis, analysts])
+
+  // Multi-analyst monthly chart data
   const analystMonthlyData = useMemo(() => {
     if (selectedAnalysts.length <= 1) return []
-    const allMonths = [...new Set(filtered.map(t => monthKey(t.published_at)))].sort()
+    const allMonths = [...new Set(filteredKpis.map(k => monthKey(k.period_start)))].sort()
     return allMonths.map(key => {
       const row: Record<string, any> = { label: monthLabel(key) }
       for (const id of selectedAnalysts) {
         const analyst = analysts.find(a => a.analyst_id === id)
         const name = analyst?.display_name.split(' ')[0] ?? id.slice(0, 6)
-        const ts = filtered.filter(t => t.analyst_id === id && monthKey(t.published_at) === key)
-        row[name] = ts.reduce((s, t) => s + (t.result_r ?? 0), 0)
+        const monthKpis = filteredKpis.filter(k => k.analyst_id === id && monthKey(k.period_start) === key)
+        const agg = aggregateKpis(monthKpis)
+        row[name] = agg.totalR
       }
       return row
     })
-  }, [filtered, selectedAnalysts, analysts])
-
-  const hasFilters = selectedAnalysts.length > 0 || selectedAssetClasses.length > 0 ||
-    selectedMarkets.length > 0 || selectedDirections.length > 0 || selectedSessions.length > 0
-
-  function clearFilters() {
-    setSelectedAnalysts([])
-    setSelectedAssetClasses([])
-    setSelectedMarkets([])
-    setSelectedDirections([])
-    setSelectedSessions([])
-    setFromMonth(earliestMonth)
-    setToMonth(latestMonth)
-  }
+  }, [filteredKpis, selectedAnalysts, analysts])
 
   return (
     <div className="space-y-6">
-
       {/* Filter panel */}
       <div className="rounded-lg border border-border bg-card p-4 space-y-4">
         <div className="flex items-center justify-between">
@@ -249,7 +293,7 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
             </select>
           </div>
           <MultiSelect label="Analysts"
-            options={(activeOnly ? analysts.filter((a: any) => a.active !== false) : analysts).map(a => ({ value: a.analyst_id, label: a.display_name }))}
+            options={(activeOnly ? analysts.filter(a => a.active !== false) : analysts).map(a => ({ value: a.analyst_id, label: a.display_name }))}
             selected={selectedAnalysts} onChange={setSelectedAnalysts} placeholder="All analysts" />
           <MultiSelect label="Asset class"
             options={assetClasses.map(c => ({ value: c, label: c }))}
@@ -264,14 +308,22 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
             selected={selectedDirections} onChange={setSelectedDirections} placeholder="Both" />
           <MultiSelect label="Session"
             options={[
-              { value: 'EUROPEAN', label: 'European' },
-              { value: 'US', label: 'US' },
-              { value: 'APAC', label: 'APAC' },
-              { value: 'OTHER', label: 'Other' },
+              { value: 'EUROPEAN', label: 'European' }, { value: 'US', label: 'US' },
+              { value: 'APAC', label: 'APAC' }, { value: 'OTHER', label: 'Other' },
             ]}
             selected={selectedSessions} onChange={setSelectedSessions} placeholder="All sessions" />
         </div>
 
+        {/* Load trades prompt for advanced filters */}
+        {hasAdvancedFilters && !tradesLoaded && (
+          <div className="flex items-center gap-3 pt-1 border-t border-border">
+            <p className="text-xs text-muted-foreground">Market, direction and session filters require trade data.</p>
+            <button onClick={onLoadTrades} disabled={tradesLoading}
+              className="text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors">
+              {tradesLoading ? 'Loading...' : 'Load trade data'}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* KPI tiles */}
@@ -281,24 +333,24 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
           <p className={`text-2xl font-semibold tabular-nums mt-1 ${stats.totalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
             {stats.totalR > 0 ? '+' : ''}{stats.totalR.toFixed(2)}R
           </p>
-          <p className="text-xs text-muted-foreground mt-1">{stats.count} trades</p>
+          <p className="text-xs text-muted-foreground mt-1">{stats.tradeCount.toLocaleString()} trades</p>
         </div>
         <div className="rounded-lg border border-border bg-card p-4">
           <p className="text-xs text-muted-foreground">Avg R per trade</p>
-          <p className={`text-2xl font-semibold tabular-nums mt-1 ${stats.avgR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-            {stats.avgR.toFixed(2)}R
+          <p className={`text-2xl font-semibold tabular-nums mt-1 ${stats.tradeCount > 0 && stats.totalR / stats.tradeCount >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+            {stats.tradeCount > 0 ? (stats.totalR / stats.tradeCount).toFixed(2) : '0.00'}R
           </p>
         </div>
         <div className="rounded-lg border border-border bg-card p-4">
           <p className="text-xs text-muted-foreground">Win Rate</p>
           <p className="text-2xl font-semibold tabular-nums mt-1">
-            {stats.winRate !== null ? `${Math.round(stats.winRate * 100)}%` : '—'}
+            {stats.winRate !== null ? `${Math.round(stats.winRate * 100)}%` : '\u2014'}
           </p>
         </div>
         <div className="rounded-lg border border-border bg-card p-4">
           <p className="text-xs text-muted-foreground">Trigger Rate</p>
           <p className="text-2xl font-semibold tabular-nums mt-1">
-            {stats.triggerRate !== null ? `${Math.round(stats.triggerRate * 100)}%` : '—'}
+            {stats.triggerRate !== null ? `${Math.round(stats.triggerRate * 100)}%` : '\u2014'}
           </p>
         </div>
       </div>
@@ -307,7 +359,7 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
       {monthlyBreakdown.length > 0 && (
         <div className="rounded-lg border border-border bg-card p-4 space-y-3">
           <p className="text-xs font-medium text-muted-foreground">
-            Monthly return — {monthLabel(fromMonth)} to {monthLabel(toMonth)}
+            Monthly return &mdash; {monthLabel(fromMonth)} to {monthLabel(toMonth)}
             <span className="ml-2 text-muted-foreground/60">({monthlyBreakdown.length} months)</span>
           </p>
           <div className="h-48">
@@ -359,19 +411,21 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {([...monthlyBreakdown].reverse().slice(0, showAllMonths ? undefined : 12)).map(row => (
+                {[...monthlyBreakdown].reverse().slice(0, showAllMonths ? undefined : 12).map(row => (
                   <tr key={row.key} className="hover:bg-muted/30 transition-colors">
                     <td className="px-4 py-2.5 font-medium">{row.label}</td>
-                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground">{row.count}</td>
+                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground">{row.tradeCount.toLocaleString()}</td>
                     <td className={`px-4 py-2.5 tabular-nums font-medium ${row.totalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                       {row.totalR > 0 ? '+' : ''}{row.totalR.toFixed(2)}R
                     </td>
-                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground">{row.avgR.toFixed(2)}R</td>
-                    <td className="px-4 py-2.5 tabular-nums">
-                      {row.winRate !== null ? `${Math.round(row.winRate * 100)}%` : <span className="text-muted-foreground">—</span>}
+                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground">
+                      {row.tradeCount > 0 ? (row.totalR / row.tradeCount).toFixed(2) : '0.00'}R
                     </td>
                     <td className="px-4 py-2.5 tabular-nums">
-                      {row.triggerRate !== null ? `${Math.round(row.triggerRate * 100)}%` : <span className="text-muted-foreground">—</span>}
+                      {row.winRate !== null ? `${Math.round(row.winRate * 100)}%` : <span className="text-muted-foreground">&mdash;</span>}
+                    </td>
+                    <td className="px-4 py-2.5 tabular-nums">
+                      {row.triggerRate !== null ? `${Math.round(row.triggerRate * 100)}%` : <span className="text-muted-foreground">&mdash;</span>}
                     </td>
                   </tr>
                 ))}
@@ -379,16 +433,18 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
               <tfoot className="bg-muted/50 border-t border-border">
                 <tr>
                   <td className="px-4 py-2.5 font-medium text-xs">Total</td>
-                  <td className="px-4 py-2.5 tabular-nums text-xs font-medium">{stats.count}</td>
+                  <td className="px-4 py-2.5 tabular-nums text-xs font-medium">{stats.tradeCount.toLocaleString()}</td>
                   <td className={`px-4 py-2.5 tabular-nums text-xs font-bold ${stats.totalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                     {stats.totalR > 0 ? '+' : ''}{stats.totalR.toFixed(2)}R
                   </td>
-                  <td className="px-4 py-2.5 tabular-nums text-xs text-muted-foreground">{stats.avgR.toFixed(2)}R</td>
-                  <td className="px-4 py-2.5 tabular-nums text-xs">
-                    {stats.winRate !== null ? `${Math.round(stats.winRate * 100)}%` : '—'}
+                  <td className="px-4 py-2.5 tabular-nums text-xs text-muted-foreground">
+                    {stats.tradeCount > 0 ? (stats.totalR / stats.tradeCount).toFixed(2) : '0.00'}R
                   </td>
                   <td className="px-4 py-2.5 tabular-nums text-xs">
-                    {stats.triggerRate !== null ? `${Math.round(stats.triggerRate * 100)}%` : '—'}
+                    {stats.winRate !== null ? `${Math.round(stats.winRate * 100)}%` : '\u2014'}
+                  </td>
+                  <td className="px-4 py-2.5 tabular-nums text-xs">
+                    {stats.triggerRate !== null ? `${Math.round(stats.triggerRate * 100)}%` : '\u2014'}
                   </td>
                 </tr>
               </tfoot>
@@ -397,26 +453,24 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
           {monthlyBreakdown.length > 12 && (
             <button onClick={() => setShowAllMonths(!showAllMonths)}
               className="text-xs text-muted-foreground hover:text-foreground transition-colors mt-2">
-              {showAllMonths ? `Show less ▲` : `Show all ${monthlyBreakdown.length} months ▼`}
+              {showAllMonths ? 'Show less \u25b2' : `Show all ${monthlyBreakdown.length} months \u25bc`}
             </button>
           )}
         </div>
       )}
 
-      {/* Analyst table */}
+      {/* Analyst breakdown */}
       {analystBreakdown.length > 1 && (
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-          <p className="text-xs font-medium text-muted-foreground">By analyst</p>
-          <button onClick={() => { setActiveOnly(!activeOnly); setSelectedAnalysts([]) }}
-            className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
-              activeOnly
-                ? 'bg-foreground text-background border-foreground'
-                : 'border-border text-muted-foreground hover:text-foreground'
-            }`}>
-            {activeOnly ? 'Active only' : 'All analysts'}
-          </button>
-        </div>
+            <p className="text-xs font-medium text-muted-foreground">By analyst</p>
+            <button onClick={() => { setActiveOnly(!activeOnly); setSelectedAnalysts([]) }}
+              className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
+                activeOnly ? 'bg-foreground text-background border-foreground' : 'border-border text-muted-foreground hover:text-foreground'
+              }`}>
+              {activeOnly ? 'Active only' : 'All analysts'}
+            </button>
+          </div>
           <div className="rounded-lg border border-border overflow-hidden">
             <table className="w-full text-sm">
               <thead className="bg-muted/50">
@@ -427,23 +481,27 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {analystBreakdown.filter(row => !activeOnly || analysts.find(a => a.analyst_id === row.id && a.active !== false)).map((row, i) => (
+                {analystBreakdown.filter(row => !activeOnly || row.active !== false).map((row, i) => (
                   <tr key={row.id} className="hover:bg-muted/30 transition-colors">
-                    <td className="px-4 py-2.5 font-medium flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full shrink-0"
-                        style={{ backgroundColor: ANALYST_COLOURS[i % ANALYST_COLOURS.length] }} />
-                      {row.name}
+                    <td className="px-4 py-2.5 font-medium">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full shrink-0"
+                          style={{ backgroundColor: ANALYST_COLOURS[i % ANALYST_COLOURS.length] }} />
+                        {row.name}
+                      </div>
                     </td>
-                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground">{row.count}</td>
+                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground">{row.tradeCount.toLocaleString()}</td>
                     <td className={`px-4 py-2.5 tabular-nums font-medium ${row.totalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                       {row.totalR > 0 ? '+' : ''}{row.totalR.toFixed(2)}R
                     </td>
-                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground">{row.avgR.toFixed(2)}R</td>
-                    <td className="px-4 py-2.5 tabular-nums">
-                      {row.winRate !== null ? `${Math.round(row.winRate * 100)}%` : <span className="text-muted-foreground">—</span>}
+                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground">
+                      {row.tradeCount > 0 ? (row.totalR / row.tradeCount).toFixed(2) : '0.00'}R
                     </td>
                     <td className="px-4 py-2.5 tabular-nums">
-                      {row.triggerRate !== null ? `${Math.round(row.triggerRate * 100)}%` : <span className="text-muted-foreground">—</span>}
+                      {row.winRate !== null ? `${Math.round(row.winRate * 100)}%` : <span className="text-muted-foreground">&mdash;</span>}
+                    </td>
+                    <td className="px-4 py-2.5 tabular-nums">
+                      {row.triggerRate !== null ? `${Math.round(row.triggerRate * 100)}%` : <span className="text-muted-foreground">&mdash;</span>}
                     </td>
                   </tr>
                 ))}
@@ -453,16 +511,15 @@ export function PerformanceAnalytics({ analysts, markets, trades }: Props) {
         </div>
       )}
 
-      {filtered.length === 0 && (
+      {monthlyBreakdown.length === 0 && (
         <div className="rounded-lg border border-border p-8 text-center">
-          <p className="text-sm text-muted-foreground">No trades match the current filters.</p>
+          <p className="text-sm text-muted-foreground">No data matches the current filters.</p>
         </div>
       )}
 
       <p className="text-xs text-muted-foreground">
-        Win rate based on result_r. Trigger rate based on triggered flag.
-        Return figures include all historical data.
-        Session derived from publication time (UK).
+        Stats sourced from pre-calculated weekly KPIs. Win rate and trigger rate use weighted averages across analysts.
+        Market, direction and session filters use raw trade data (last 12 months).
       </p>
     </div>
   )
