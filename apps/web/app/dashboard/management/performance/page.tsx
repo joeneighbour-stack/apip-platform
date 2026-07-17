@@ -1,5 +1,5 @@
 import { getCurrentUser } from '@/lib/auth'
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { TeamPerformanceGrid } from '@/components/management/TeamPerformanceGrid'
 
@@ -8,6 +8,7 @@ export default async function ManagementPerformancePage() {
   if (!['MANAGER', 'ADMIN'].includes(user.role)) redirect('/login')
 
   const supabase = await createClient()
+  const adminDb = createAdminClient()
 
   const now = new Date()
   const year = now.getUTCFullYear()
@@ -44,17 +45,18 @@ export default async function ManagementPerformancePage() {
     .eq('source_system', 'ACUITY_PERFORMANCE_API')
     .gte('published_at', thirtyDaysAgo)
 
-  const { data: rawShadowKpis } = await supabase
+  // Admin client bypasses RLS to read INTERNAL_ONLY shadow KPIs
+  const { data: shadowKpiRows } = await adminDb
     .from('executive_kpis')
-    .select('analyst_id, kpi_name, kpi_value, period_start')
+    .select('kpi_name, kpi_value, period_start')
     .eq('kpi_visibility', 'INTERNAL_ONLY')
     .gte('period_start', thirtyySixMonthsAgo)
     .order('period_start', { ascending: true })
 
-  const shadowKpiData: { kpi_name: string; kpi_value: any; period_start: string }[] =
-    ((rawShadowKpis as any[]) ?? []).filter((k: any) => !k.analyst_id)
+  const shadowKpiData = (shadowKpiRows ?? []) as { kpi_name: string; kpi_value: any; period_start: string }[]
 
-  const analystIdsWithData = new Set(((kpiData as any[]) ?? []).map((k: any) => k.analyst_id))
+  const analystKpis = (kpiData as any[]) ?? []
+  const analystIdsWithData = new Set(analystKpis.map((k: any) => k.analyst_id).filter(Boolean))
   const analystsWithData = ((analysts as any[]) ?? []).filter((a: any) => analystIdsWithData.has(a.analyst_id))
 
   return (
@@ -73,7 +75,7 @@ export default async function ManagementPerformancePage() {
       </div>
       <TeamPerformanceGrid
         analysts={analystsWithData}
-        kpiData={(kpiData as any[]) ?? []}
+        kpiData={analystKpis}
         currentMonthStart={monthStart}
         shadowOutcomes={(shadowOutcomes as any[]) ?? []}
         actualTrades={(actualTrades as any[]) ?? []}
@@ -82,4 +84,3 @@ export default async function ManagementPerformancePage() {
     </div>
   )
 }
-

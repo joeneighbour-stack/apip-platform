@@ -75,7 +75,7 @@ export function StaleExceptions({ recommendations }: StaleExceptionsProps) {
                     <td className="px-4 py-2.5 text-xs text-muted-foreground max-w-xs truncate">
                       {rec.volatility_warning ?? 'None'}
                     </td>
-                    <td className="px-4 py-2.5 text-xs text-muted-foreground">{age}</td>
+                    <td className="px-4 py-2.5 text-xs text-muted-foreground" suppressHydrationWarning>{age}</td>
                   </tr>
                 )
               })}
