@@ -28,7 +28,7 @@ export default async function AnalystAvailabilityPage() {
         </div>
         <a href="/dashboard/analyst"
           className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-          ← Back to Workspace
+          &larr; Back to Workspace
         </a>
       </div>
 

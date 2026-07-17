@@ -1,7 +1,6 @@
 import { getCurrentUser } from '@/lib/auth'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { RecommendationStats } from '@/components/analyst/RecommendationStats'
 import { MarketNews } from '@/components/analyst/MarketNews'
 
 function SessionStatus() {
@@ -281,33 +280,31 @@ export default async function AnalystWorkspacePage() {
                   </div>
                   <div className="flex flex-col items-end gap-1">
                     {isDoNotUse && <span className="text-xs font-medium text-red-700">Levels outdated</span>}
-                    {isEntryPassed && <span className="text-xs font-medium text-red-700">Price beyond entry range</span>}
+                    {isEntryPassed && <span className="text-xs font-medium text-amber-700">Price beyond entry range</span>}
                     {isStale && <span className="text-xs font-medium text-amber-600">High volatility</span>}
                   </div>
                 </div>
 
                 {/* 2. TODAY'S CONTEXT */}
-                {(events.length > 0 || regime || true) && (
-                  <div className="mb-4 pb-4 border-b border-border/60 space-y-2">
-                    {regime && (vol.label || trend) && (
-                      <p className="text-xs text-muted-foreground">
-                        {trend && <span className="text-foreground font-medium">{trend}</span>}
-                        {trend && vol.label && ' · '}
-                        {vol.label && <span className={`font-medium ${vol.color}`}>{vol.label}</span>}
-                      </p>
-                    )}
-                    {eventsByTime.size > 0 && (
-                      <div className="flex flex-wrap gap-1.5">
-                        {[...eventsByTime.entries()].map(([time, names], i) => (
-                          <span key={i} className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-800">
-                            &#9888; {time} UK &mdash; {names.join(', ')}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    <MarketNews symbols={[symbol]} />
-                  </div>
-                )}
+                <div className="mb-4 pb-4 border-b border-border/60 space-y-2">
+                  {regime && (vol.label || trend) && (
+                    <p className="text-xs text-muted-foreground">
+                      {trend && <span className="text-foreground font-medium">{trend}</span>}
+                      {trend && vol.label && ' · '}
+                      {vol.label && <span className={`font-medium ${vol.color}`}>{vol.label}</span>}
+                    </p>
+                  )}
+                  {eventsByTime.size > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {[...eventsByTime.entries()].map(([time, names], i) => (
+                        <span key={i} className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-800">
+                          &#9888; {time} UK &mdash; {names.join(', ')}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <MarketNews symbols={[symbol]} />
+                </div>
 
                 {/* 3. TRADING LEVELS */}
                 {!isDoNotUse && (

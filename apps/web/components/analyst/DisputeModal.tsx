@@ -49,8 +49,7 @@ export function DisputeModal({ trade, analystId, onClose }: DisputeModalProps) {
       published_at: trade.published_at,
     }
 
-    const { error: insertError } = await supabase
-      .from('trade_disputes')
+    const { error: insertError } = await (supabase.from('trade_disputes') as any)
       .insert({
         trade_id: trade.trade_id,
         raised_by_analyst_id: analystId,
