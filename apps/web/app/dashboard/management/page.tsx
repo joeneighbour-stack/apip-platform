@@ -1,13 +1,11 @@
 import { getCurrentUser } from '@/lib/auth'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { AllocationTable } from '@/components/management/AllocationTable'
 import { WorkloadPanel } from '@/components/management/WorkloadPanel'
 import { DisputeQueue } from '@/components/management/DisputeQueue'
-import { StaleExceptions } from '@/components/management/StaleExceptions'
 import { AbsenceQueue } from '@/components/management/AbsenceQueue'
 import { EmergencyAbsence } from '@/components/management/EmergencyAbsence'
-import { NotificationsPanel } from '@/components/management/NotificationsPanel'
+import { LiveTradesPanel } from '@/components/management/LiveTradesPanel'
 
 export default async function ManagementWorkspacePage() {
   const user = await getCurrentUser()
@@ -16,7 +14,7 @@ export default async function ManagementWorkspacePage() {
   const supabase = await createClient()
   const today = new Date().toISOString().split('T')[0]
 
-  // Most recent allocations -- deduplicated by market (latest per market)
+  // Today's allocations
   const { data: allocations } = await supabase
     .from('coverage_allocation')
     .select(`
@@ -33,7 +31,6 @@ export default async function ManagementWorkspacePage() {
     .order('assigned_at', { ascending: false })
     .limit(200)
 
-  // Deduplicate: keep only the most recent allocation per market symbol
   const seenMarkets = new Set<string>()
   const todayAllocations = (allocations ?? []).filter(a => {
     const symbol = (a.opportunity as any)?.market?.symbol
@@ -48,47 +45,17 @@ export default async function ManagementWorkspacePage() {
     .select(`
       dispute_id, dispute_type, analyst_note, status,
       original_values, created_at,
+      trade:trade_id (
+        direction, entry, result_r, triggered,
+        market:market_id ( symbol ),
+        analyst:analyst_id ( display_name )
+      ),
       analyst:raised_by_analyst_id ( display_name )
     `)
     .in('status', ['OPEN', 'UNDER_REVIEW'])
     .order('created_at', { ascending: false })
 
-  // Stale/invalid active recommendations
-  const { data: staleRecs } = await supabase
-    .from('recommendation_versions')
-    .select(`
-      recommendation_version_id, recommendation_validity_status,
-      volatility_warning, atr_move_since_generation, generated_at,
-      opportunity_id
-    `)
-    .in('recommendation_validity_status', ['STALE_PRICE', 'ZONE_CHANGED', 'DO_NOT_USE_RECALCULATE'])
-    .eq('is_active', true)
-    .order('generated_at', { ascending: true })
-    .limit(20)
-
-  const staleRecsWithMarkets = await Promise.all(
-    (staleRecs ?? []).map(async (rec) => {
-      const { data: opp } = await supabase
-        .from('opportunities')
-        .select('direction, analyst_action, market_id')
-        .eq('opportunity_id', rec.opportunity_id)
-        .single()
-
-      let market = null
-      if (opp?.market_id) {
-        const { data: m } = await supabase
-          .from('markets')
-          .select('symbol')
-          .eq('market_id', opp.market_id)
-          .single()
-        market = m
-      }
-
-      return { ...rec, opportunity: opp ? { ...opp, market } : null }
-    })
-  )
-
-  // Analyst availability today
+  // Analyst availability
   const { data: availability } = await supabase
     .from('analyst_availability')
     .select('analyst_id, available, workload_cap, session')
@@ -107,21 +74,44 @@ export default async function ManagementWorkspacePage() {
     .lte('date', nextThirtyDays)
     .order('date', { ascending: true })
 
-  // Active analysts for emergency absence
+  // Active analysts
   const { data: activeAnalysts } = await supabase
     .from('analysts')
     .select('analyst_id, display_name')
     .eq('active', true)
     .order('display_name')
 
-  // Notifications -- WARNING and CRITICAL for managers
-  const { data: notifications } = await supabase
-    .from('notifications')
-    .select('notification_id, severity, notification_type, notification_status, title, message, related_table, related_id, sla_due_at, escalated_at, created_at')
-    .in('notification_status', ['OPEN', 'ACKNOWLEDGED'])
-    .in('severity', ['WARNING', 'CRITICAL', 'SYSTEM_FAILURE'])
-    .order('created_at', { ascending: false })
-    .limit(50)
+  // Today's actual trades with analyst and market
+  const { data: todayTrades } = await supabase
+    .from('actual_trades')
+    .select(`
+      trade_id, direction, entry, stop, target,
+      triggered, result_r, published_at,
+      analyst:analyst_id ( display_name ),
+      market:market_id ( symbol )
+    `)
+    .gte('published_at', `${today}T00:00:00Z`)
+    .order('published_at', { ascending: false })
+
+  // Today's recommendations for direction alignment
+  const { data: todayOpps } = await supabase
+    .from('opportunities')
+    .select('direction, market:market_id ( symbol )')
+    .eq('date', today)
+
+  const recDirBySymbol = new Map(
+    (todayOpps ?? []).map((o: any) => [o.market?.symbol, o.direction])
+  )
+
+  // Merge recommended direction into trades
+  const tradesWithAlignment = (todayTrades ?? []).map((t: any) => ({
+    ...t,
+    recommended_dir: recDirBySymbol.get(t.market?.symbol) ?? null,
+  }))
+
+  // Alert counts for header strip
+  const openDisputes = (disputes ?? []).length
+  const pendingAbsences = (absenceRequests ?? []).filter((a: any) => a.status === 'PENDING').length
 
   return (
     <div className="space-y-8">
@@ -129,18 +119,41 @@ export default async function ManagementWorkspacePage() {
         <div>
           <h1 className="text-xl font-semibold">Management</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Allocation, team workload, disputes, and recommendation exceptions
+            {new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}
           </p>
         </div>
-        <EmergencyAbsence analysts={activeAnalysts ?? []} />
+        <div className="flex items-center gap-3">
+          {openDisputes > 0 && (
+            <a href="#disputes" className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 transition-colors">
+              <span className="w-4 h-4 rounded-full bg-red-600 text-white text-[10px] flex items-center justify-center font-bold">{openDisputes}</span>
+              Open dispute{openDisputes > 1 ? 's' : ''}
+            </a>
+          )}
+          {pendingAbsences > 0 && (
+            <a href="#absences" className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition-colors">
+              <span className="w-4 h-4 rounded-full bg-amber-500 text-white text-[10px] flex items-center justify-center font-bold">{pendingAbsences}</span>
+              Absence{pendingAbsences > 1 ? 's' : ''} pending
+            </a>
+          )}
+          <EmergencyAbsence analysts={activeAnalysts ?? []} />
+        </div>
       </div>
 
-      <NotificationsPanel notifications={notifications ?? []} />
+      {/* Workload summary */}
       <WorkloadPanel allocations={todayAllocations} availability={availability ?? []} />
-      <AllocationTable allocations={todayAllocations} />
-      <AbsenceQueue requests={(absenceRequests ?? []) as any} />
-      <StaleExceptions recommendations={staleRecsWithMarkets ?? []} />
-      <DisputeQueue disputes={disputes ?? []} isAdmin={user.role === 'ADMIN'} />
+
+      {/* Today's live trades */}
+      <LiveTradesPanel trades={tradesWithAlignment} />
+      {/* Absences */}
+      <div id="absences">
+        <AbsenceQueue requests={(absenceRequests ?? []) as any} />
+      </div>
+
+      {/* Disputes */}
+      <div id="disputes">
+        <DisputeQueue disputes={disputes ?? []} isAdmin={user.role === 'ADMIN'} />
+      </div>
     </div>
   )
 }
+
