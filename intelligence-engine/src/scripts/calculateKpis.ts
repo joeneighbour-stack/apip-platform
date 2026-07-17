@@ -74,7 +74,7 @@ async function main() {
   const generatedAt = new Date().toISOString()
 
   const { data: analysts } = await db
-    .from('analysts').select('analyst_id, display_name').eq('active', true)
+    .from('analysts').select('analyst_id, display_name, active')
   if (!analysts?.length) { console.error('No active analysts'); process.exit(1) }
 
   const { data: teamRow } = await db.from('teams').select('team_id').eq('active', true).single()
@@ -317,3 +317,4 @@ const invokedDirectly = process.argv[1] !== undefined &&
 if (invokedDirectly) {
   main().catch(err => { console.error('Fatal:', err); process.exit(1) })
 }
+
