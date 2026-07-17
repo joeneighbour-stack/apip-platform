@@ -75,6 +75,7 @@ function shadowResultR(outcome: ShadowOutcome): number | null {
   if (outcome.result_r !== null) return outcome.result_r
   if (outcome.trade_outcome_status === 'TARGET_HIT') return outcome.shadow_trade?.rr ?? null
   if (outcome.trade_outcome_status === 'STOP_HIT') return -1
+  if (outcome.trade_outcome_status === 'CLOSED_PROFIT' || outcome.trade_outcome_status === 'CLOSED_LOSS') return outcome.result_r
   return null
 }
 
@@ -409,6 +410,7 @@ export function TeamPerformanceGrid({
     </div>
   )
 }
+
 
 
 

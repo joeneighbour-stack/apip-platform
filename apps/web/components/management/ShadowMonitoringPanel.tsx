@@ -44,6 +44,8 @@ const STATUS_STYLES: Record<string, string> = {
   EXPIRY:        'bg-muted text-muted-foreground',
   TRIGGERED:     'bg-blue-50 text-blue-700',
   NOT_TRIGGERED: 'bg-slate-100 text-slate-600',
+  CLOSED_PROFIT: 'bg-green-100 text-green-800',
+  CLOSED_LOSS: 'bg-red-100 text-red-800',
 }
 
 const DATE_RANGES = [
@@ -71,6 +73,7 @@ function shadowResultR(outcome: ShadowOutcome): number | null {
   if (!st) return null
   if (outcome.trade_outcome_status === 'TARGET_HIT') return st.rr
   if (outcome.trade_outcome_status === 'STOP_HIT') return -1
+  if (outcome.trade_outcome_status === 'CLOSED_PROFIT' || outcome.trade_outcome_status === 'CLOSED_LOSS') return outcome.result_r
   return null
 }
 
@@ -153,12 +156,12 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
 
   // ── Standard summary stats ───────────────────────────────────────────────
   const triggered = shadowOutcomes.filter(o =>
-    ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED'].includes(o.trade_outcome_status)
+    ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED', 'CLOSED_PROFIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)
   )
   const resolved = shadowOutcomes.filter(o =>
-    ['TARGET_HIT', 'STOP_HIT', 'EXPIRY'].includes(o.trade_outcome_status)
+    ['TARGET_HIT', 'STOP_HIT', 'EXPIRY', 'CLOSED_PROFIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)
   )
-  const wins = shadowOutcomes.filter(o => o.trade_outcome_status === 'TARGET_HIT')
+  const wins = shadowOutcomes.filter(o => o.trade_outcome_status === 'TARGET_HIT' || o.trade_outcome_status === 'CLOSED_PROFIT' || (o.result_r !== null && Number(o.result_r) > 0))
   const shadowWinRate = triggered.length > 0 ? wins.length / triggered.length : null
   const shadowTriggerRate = shadowOutcomes.length > 0 ? triggered.length / shadowOutcomes.length : null
   const shadowTotalR = triggered.reduce((s, o) => s + (shadowResultR(o) ?? 0), 0)
@@ -183,7 +186,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
     const assetClass = st?.opportunity?.market?.asset_class ?? ''
     if (!symbol) continue
     const existing = byMarket.get(symbol) ?? { symbol, assetClass, total: 0, triggered: 0, wins: 0, totalR: 0, avgRr: 0, rrCount: 0 }
-    const isTriggered = ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED'].includes(o.trade_outcome_status)
+    const isTriggered = ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED', 'CLOSED_PROFIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)
     const r = shadowResultR(o) ?? 0
     byMarket.set(symbol, {
       ...existing,
@@ -514,3 +517,5 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
     </div>
   )
 }
+
+
