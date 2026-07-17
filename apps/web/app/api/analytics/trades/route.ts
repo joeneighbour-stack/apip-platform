@@ -1,7 +1,9 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 
-export async function GET() {
+export async function GET(req: Request) {
+  const url = new URL(req.url)
+  const from = url.searchParams.get('from') ?? new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
   const supabase = await createClient()
 
   const FIELDS = `trade_id, analyst_id, direction, result_r,
@@ -16,7 +18,7 @@ export async function GET() {
     const { data, error } = await supabase
       .from('actual_trades')
       .select(FIELDS)
-      .gte('published_at', '2017-01-01T00:00:00Z')
+      .gte('published_at', from + 'T00:00:00Z')
       .order('published_at', { ascending: false })
       .range(page * 1000, page * 1000 + 999)
 
@@ -33,3 +35,5 @@ export async function GET() {
 
   return NextResponse.json(allTrades)
 }
+
+
