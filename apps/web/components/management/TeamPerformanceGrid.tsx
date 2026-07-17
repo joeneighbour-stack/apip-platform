@@ -108,9 +108,9 @@ export function TeamPerformanceGrid({
 
   // Shadow summary (live from raw outcomes)
   const shadowTriggered = shadowOutcomes.filter(o =>
-    ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED'].includes(o.trade_outcome_status)
+    ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED', 'CLOSED_PROFIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)
   )
-  const shadowWins = shadowOutcomes.filter(o => o.trade_outcome_status === 'TARGET_HIT')
+  const shadowWins = shadowOutcomes.filter(o => o.trade_outcome_status === 'TARGET_HIT' || o.trade_outcome_status === 'CLOSED_PROFIT' || (o.result_r !== null && Number(o.result_r) > 0))
   const shadowWinRate = shadowTriggered.length > 0 ? shadowWins.length / shadowTriggered.length : null
   const shadowTriggerRate = shadowOutcomes.length > 0 ? shadowTriggered.length / shadowOutcomes.length : null
   const shadowTotalR = shadowTriggered.reduce((s, o) => s + (shadowResultR(o) ?? 0), 0)

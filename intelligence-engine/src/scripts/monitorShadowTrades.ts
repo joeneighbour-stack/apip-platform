@@ -354,7 +354,7 @@ async function main() {
             } else {
               const resultR = calcResultR(dir, triggeredPrice, exitPrice, stop)
               await db.from('shadow_trade_outcomes').update({
-                trade_outcome_status: 'EXPIRY',
+                trade_outcome_status: resultR >= 0 ? 'CLOSED_PROFIT' : 'CLOSED_LOSS',
                 closed_at: expiresAt.toISOString(),
                 exit_price: exitPrice,
                 exit_reason: 'EXPIRY_WITH_PRICE',

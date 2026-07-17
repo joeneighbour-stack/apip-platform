@@ -60,8 +60,8 @@ function generateMonths(n: number): { start: string; end: string }[] {
 }
 
 // Terminal statuses that have a result
-const CLOSED_STATUSES = ['TARGET_HIT', 'STOP_HIT', 'EXPIRY']
-const TRIGGERED_STATUSES = ['TRIGGERED', 'TARGET_HIT', 'STOP_HIT', 'EXPIRY', 'AMBIGUOUS']
+const CLOSED_STATUSES = ['TARGET_HIT', 'STOP_HIT', 'EXPIRY', 'CLOSED_PROFIT', 'CLOSED_LOSS']
+const TRIGGERED_STATUSES = ['TRIGGERED', 'TARGET_HIT', 'STOP_HIT', 'EXPIRY', 'AMBIGUOUS', 'CLOSED_PROFIT', 'CLOSED_LOSS']
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
@@ -163,7 +163,7 @@ async function main() {
     const closed      = monthTrades.filter(t => CLOSED_STATUSES.includes(t.status) && t.result_r !== null)
 
     const returnR     = closed.reduce((s, t) => s + t.result_r!, 0)
-    const wins        = closed.filter(t => t.result_r! > 0)
+    const wins = closed.filter(t => t.result_r! > 0 || t.status === 'TARGET_HIT' || t.status === 'CLOSED_PROFIT')
     const winRate     = closed.length > 0 ? wins.length / closed.length : null
     const triggerRate = total > 0 ? triggered.length / total : null
 
@@ -252,3 +252,5 @@ const invokedDirectly = process.argv[1] !== undefined &&
 if (invokedDirectly) {
   main().catch(err => { console.error('Fatal:', err); process.exit(1) })
 }
+
+
