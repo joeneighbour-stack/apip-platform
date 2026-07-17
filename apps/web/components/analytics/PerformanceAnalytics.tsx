@@ -333,7 +333,7 @@ export function PerformanceAnalytics({ analysts, markets, kpis, trades, tradesLo
           <p className={`text-2xl font-semibold tabular-nums mt-1 ${stats.totalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
             {stats.totalR > 0 ? '+' : ''}{stats.totalR.toFixed(2)}R
           </p>
-          <p className="text-xs text-muted-foreground mt-1">{stats.tradeCount.toLocaleString()} trades</p>
+          <p className="text-xs text-muted-foreground mt-1">{stats.tradeCount.toLocaleString()} closed trades</p>
         </div>
         <div className="rounded-lg border border-border bg-card p-4">
           <p className="text-xs text-muted-foreground">Avg R per trade</p>
@@ -524,3 +524,4 @@ export function PerformanceAnalytics({ analysts, markets, kpis, trades, tradesLo
     </div>
   )
 }
+
