@@ -33,6 +33,15 @@ export function LiveTradesPanel({ trades }: Props) {
   const misaligned = trades.filter(t => t.recommended_dir && t.direction !== t.recommended_dir).length
   const withResult = trades.filter(t => t.result_r !== null).length
 
+  if (trades.length === 0) return (
+    <section className="space-y-3">
+      <h2 className="text-sm font-medium">Today&apos;s Analyst Trades</h2>
+      <div className="rounded-lg border border-border p-6 text-center">
+        <p className="text-sm text-muted-foreground">No trades published yet today. Trades appear once analysts submit via the platform.</p>
+      </div>
+    </section>
+  )
+
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between">
@@ -126,3 +135,4 @@ export function LiveTradesPanel({ trades }: Props) {
     </section>
   )
 }
+
