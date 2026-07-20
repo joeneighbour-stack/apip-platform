@@ -153,12 +153,12 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
 
   // ── Standard summary stats ───────────────────────────────────────────────
   const triggered = shadowOutcomes.filter(o =>
-    ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED', 'CLOSED_PROFIT', 'CLOSED_LOSS', 'CLOSED_PROFIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)
+    ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED', 'CLOSED_PROFIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)
   )
   const resolved = shadowOutcomes.filter(o =>
     ['TARGET_HIT', 'STOP_HIT', 'EXPIRY'].includes(o.trade_outcome_status)
   )
-  const wins = shadowOutcomes.filter(o => o.trade_outcome_status === 'TARGET_HIT')
+  const wins = shadowOutcomes.filter(o => ['TARGET_HIT', 'CLOSED_PROFIT'].includes(o.trade_outcome_status))
   const shadowWinRate = triggered.length > 0 ? wins.length / triggered.length : null
   const shadowTriggerRate = shadowOutcomes.length > 0 ? triggered.length / shadowOutcomes.length : null
   const shadowTotalR = triggered.reduce((s, o) => s + (shadowResultR(o) ?? 0), 0)
@@ -183,13 +183,13 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
     const assetClass = st?.opportunity?.market?.asset_class ?? ''
     if (!symbol) continue
     const existing = byMarket.get(symbol) ?? { symbol, assetClass, total: 0, triggered: 0, wins: 0, totalR: 0, avgRr: 0, rrCount: 0 }
-    const isTriggered = ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED', 'CLOSED_PROFIT', 'CLOSED_LOSS', 'CLOSED_PROFIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)
+    const isTriggered = ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED', 'CLOSED_PROFIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)
     const r = shadowResultR(o) ?? 0
     byMarket.set(symbol, {
       ...existing,
       total: existing.total + 1,
       triggered: existing.triggered + (isTriggered ? 1 : 0),
-      wins: existing.wins + (o.trade_outcome_status === 'TARGET_HIT' ? 1 : 0),
+      wins: existing.wins + (['TARGET_HIT', 'CLOSED_PROFIT'].includes(o.trade_outcome_status) ? 1 : 0),
       totalR: existing.totalR + r,
       avgRr: existing.avgRr + (st?.rr ?? 0),
       rrCount: existing.rrCount + 1,
@@ -514,6 +514,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
     </div>
   )
 }
+
 
 
 
