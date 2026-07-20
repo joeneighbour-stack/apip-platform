@@ -525,3 +525,4 @@ export function PerformanceAnalytics({ analysts, markets, kpis, trades, tradesLo
   )
 }
 
+
