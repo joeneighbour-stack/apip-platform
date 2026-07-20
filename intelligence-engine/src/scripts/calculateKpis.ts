@@ -106,7 +106,7 @@ async function main() {
     const month = p.published_at.slice(0, 7) // YYYY-MM
     const key = `${p.analyst_id}::${month}`
     const existing = pubsByAnalystMonth.get(key) ?? { total: 0, triggered: 0 }
-    const isTriggered = ['WEBHOOK_TRUE', 'WEBHOOK_FALSE_OVERRIDDEN'].includes(p.reconciliation_status)
+    const isTriggered = p.reconciliation_status === 'WEBHOOK_TRUE'
     pubsByAnalystMonth.set(key, {
       total: existing.total + 1,
       triggered: existing.triggered + (isTriggered ? 1 : 0),
@@ -317,4 +317,5 @@ const invokedDirectly = process.argv[1] !== undefined &&
 if (invokedDirectly) {
   main().catch(err => { console.error('Fatal:', err); process.exit(1) })
 }
+
 
