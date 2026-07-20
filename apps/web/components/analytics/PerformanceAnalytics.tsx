@@ -53,7 +53,7 @@ interface KpiStats {
 }
 
 function aggregateKpis(rows: KpiRow[]): KpiStats {
-  let totalR = 0, tradeCount = 0, wins = 0, triggered = 0, totalSetups = 0
+  let totalR = 0, tradeCount = 0, wins = 0, winTriggered = 0, rateTriggered = 0, totalSetups = 0
   for (const row of rows) {
     const v = row.kpi_value
     if (row.kpi_name === 'total_return_r') {
@@ -61,18 +61,18 @@ function aggregateKpis(rows: KpiRow[]): KpiStats {
       tradeCount += v?.trade_count ?? 0
     } else if (row.kpi_name === 'win_rate') {
       wins += v?.wins ?? 0
-      triggered += v?.triggered ?? 0
+      winTriggered += v?.triggered ?? 0
     } else if (row.kpi_name === 'triggered_rate') {
+      rateTriggered += v?.triggered ?? 0
       totalSetups += v?.total_setups ?? 0
     }
   }
   return {
-    totalR, tradeCount, wins, triggered, totalSetups,
-    winRate: triggered > 0 ? wins / triggered : null,
-    triggerRate: totalSetups > 0 ? triggered / totalSetups : null,
+    totalR, tradeCount, wins, triggered: winTriggered, totalSetups,
+    winRate: winTriggered > 0 ? wins / winTriggered : null,
+    triggerRate: totalSetups > 0 ? rateTriggered / totalSetups : null,
   }
 }
-
 // Compute stats from raw trades (used when advanced filters active)
 function computeTradeStats(trades: Trade[]) {
   const totalR = trades.reduce((s, t) => s + (t.result_r ?? 0), 0)
