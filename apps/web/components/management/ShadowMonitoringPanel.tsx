@@ -153,7 +153,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
 
   // ── Standard summary stats ───────────────────────────────────────────────
   const triggered = shadowOutcomes.filter(o =>
-    ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED', 'CLOSED_PROFIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)
+    ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED', 'CLOSED_PROFIT', 'CLOSED_LOSS', 'CLOSED_PROFIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)
   )
   const resolved = shadowOutcomes.filter(o =>
     ['TARGET_HIT', 'STOP_HIT', 'EXPIRY'].includes(o.trade_outcome_status)
@@ -183,7 +183,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
     const assetClass = st?.opportunity?.market?.asset_class ?? ''
     if (!symbol) continue
     const existing = byMarket.get(symbol) ?? { symbol, assetClass, total: 0, triggered: 0, wins: 0, totalR: 0, avgRr: 0, rrCount: 0 }
-    const isTriggered = ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED', 'CLOSED_PROFIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)
+    const isTriggered = ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED', 'CLOSED_PROFIT', 'CLOSED_LOSS', 'CLOSED_PROFIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)
     const r = shadowResultR(o) ?? 0
     byMarket.set(symbol, {
       ...existing,
@@ -514,6 +514,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
     </div>
   )
 }
+
 
 
 
