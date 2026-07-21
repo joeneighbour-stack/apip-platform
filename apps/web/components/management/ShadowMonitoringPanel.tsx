@@ -1,5 +1,7 @@
 'use client'
 import { useState, useMemo } from 'react'
+import { useLivePrices } from '@/hooks/useLivePrices'
+import { UnrealisedR } from '@/components/shared/UnrealisedR'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Legend } from 'recharts'
 
 interface ShadowOutcome {
@@ -80,45 +82,43 @@ function monthLabel(dateStr: string) {
 }
 
 export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
+  // Live prices for TRIGGERED shadow trades
+  const triggeredSymbols = [...new Set(shadowOutcomes
+    .filter(o => o.trade_outcome_status === 'TRIGGERED')
+    .map(o => o.shadow_trade?.opportunity?.market?.symbol)
+    .filter(Boolean) as string[]
+  )]
+  const { prices: livePrices } = useLivePrices(triggeredSymbols)
+
   const [sessionFilter, setSessionFilter] = useState('ALL')
   const [assetFilter, setAssetFilter] = useState('ALL')
   const [outcomeFilter, setOutcomeFilter] = useState('ALL')
   const [dateRangeDays, setDateRangeDays] = useState(1)
   const [comparisonWindow, setComparisonWindow] = useState(30)
 
-  // ── Like-for-like comparison ─────────────────────────────────────────────
-  // For each shadow trade, find matching analyst trades (same market, same date)
-  // If no analyst traded that market that day → analyst R = 0 (missed opportunity)
   const likeForLike = useMemo(() => {
     const cutoff = new Date(Date.now() - comparisonWindow * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-
-    // Index actual trades by market_id + date
     const actualByMarketDate = new Map<string, number>()
     for (const at of actualTrades) {
       const marketId = (at.market as any)?.market_id
       const date = at.published_at.slice(0, 10)
       if (!marketId || date < cutoff) continue
       const key = `${marketId}::${date}`
-      // Sum all analyst R for this market+date (multiple analysts may have traded)
       const existing = actualByMarketDate.get(key) ?? 0
       const r = at.triggered && at.result_r !== null ? Number(at.result_r) : 0
       actualByMarketDate.set(key, existing + r)
     }
 
-    // Build daily comparison data
     const dailyData = new Map<string, { date: string; shadowR: number; analystR: number; count: number }>()
-
     for (const outcome of shadowOutcomes) {
       const st = outcome.shadow_trade
       const opp = st?.opportunity
       const market = opp?.market
       if (!opp?.date || opp.date < cutoff) continue
-
       const shadowR = shadowResultR(outcome) ?? 0
       const marketId = market?.market_id
       const key = `${marketId}::${opp.date}`
-      const analystR = actualByMarketDate.get(key) ?? 0 // 0 if analyst didn't trade
-
+      const analystR = actualByMarketDate.get(key) ?? 0
       const existing = dailyData.get(opp.date) ?? { date: opp.date, shadowR: 0, analystR: 0, count: 0 }
       dailyData.set(opp.date, {
         date: opp.date,
@@ -128,11 +128,9 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
       })
     }
 
-    // Sort by date and compute cumulative R
     const sorted = [...dailyData.values()].sort((a, b) => a.date.localeCompare(b.date))
     let cumulativeShadow = 0
     let cumulativeAnalyst = 0
-
     return sorted.map(d => {
       cumulativeShadow += d.shadowR
       cumulativeAnalyst += d.analystR
@@ -151,7 +149,6 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
   const totalAnalystR = likeForLike.length > 0 ? likeForLike[likeForLike.length - 1]!.cumulativeAnalystR : 0
   const deltaR = totalShadowR - totalAnalystR
 
-  // ── Standard summary stats ───────────────────────────────────────────────
   const triggered = shadowOutcomes.filter(o =>
     ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED', 'CLOSED_PROFIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)
   )
@@ -166,7 +163,6 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
     ? triggered.reduce((s, o) => s + (o.shadow_trade?.rr ?? 0), 0) / triggered.length
     : null
 
-  // Actual 30-day summary
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
   const recentActual = actualTrades.filter(t => t.published_at >= thirtyDaysAgo)
   const actualTriggered = recentActual.filter(t => t.triggered && t.result_r !== null)
@@ -175,7 +171,6 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
   const actualTotalR = actualTriggered.reduce((s, t) => s + (t.result_r ?? 0), 0)
   const actualTriggerRate = recentActual.length > 0 ? actualTriggered.length / recentActual.length : null
 
-  // Per-market
   const byMarket = new Map<string, { symbol: string; assetClass: string; total: number; triggered: number; wins: number; totalR: number; avgRr: number; rrCount: number }>()
   for (const o of shadowOutcomes) {
     const st = o.shadow_trade
@@ -197,7 +192,6 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
   }
   const marketRows = [...byMarket.values()].sort((a, b) => b.totalR - a.totalR)
 
-  // Date-filtered outcomes for table
   const dateFilteredOutcomes = useMemo(() => {
     if (dateRangeDays === 0) return shadowOutcomes
     const cutoff = new Date(Date.now() - dateRangeDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
@@ -224,7 +218,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
       {/* Like-for-like comparison chart */}
       <section className="space-y-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-medium">Shadow vs Analyst — Like-for-Like Comparison</h2>
+          <h2 className="text-sm font-medium">Shadow vs Analyst &mdash; Like-for-Like Comparison</h2>
           <div className="flex items-center gap-1">
             {COMPARISON_WINDOWS.map(w => (
               <button key={w.days}
@@ -244,7 +238,6 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
           Analyst R = 0 for any market the engine covered but analyst did not trade. Same markets, same dates.
         </p>
 
-        {/* Summary cards */}
         <div className="grid grid-cols-3 gap-3">
           <div className="rounded-lg border border-border bg-card p-4 space-y-2">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Shadow R ({comparisonWindow}d)</p>
@@ -269,10 +262,9 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
           </div>
         </div>
 
-        {/* Cumulative R chart */}
         {likeForLike.length > 0 ? (
           <div className="rounded-lg border border-border bg-card p-4">
-            <p className="text-xs text-muted-foreground mb-3">Cumulative R — Shadow vs Analyst (like-for-like)</p>
+            <p className="text-xs text-muted-foreground mb-3">Cumulative R &mdash; Shadow vs Analyst (like-for-like)</p>
             <div className="h-48">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={likeForLike} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
@@ -294,14 +286,13 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
         ) : (
           <div className="rounded-lg border border-border bg-card p-6 text-center">
             <p className="text-sm text-muted-foreground">No like-for-like data yet.</p>
-            <p className="text-xs text-muted-foreground/70 mt-1">Data will appear once shadow trades resolve and analyst trades are imported for the same markets.</p>
           </div>
         )}
       </section>
 
       {/* Standard summary */}
       <section className="space-y-3">
-        <h2 className="text-sm font-medium">Shadow vs Actual — Since Platform Launch</h2>
+        <h2 className="text-sm font-medium">Shadow vs Actual &mdash; Since Platform Launch</h2>
         <div className="grid grid-cols-3 gap-3">
           <div className="rounded-lg border border-border bg-card p-4 space-y-2">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Shadow Benchmark</p>
@@ -335,7 +326,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
             </div>
           </div>
           <div className="rounded-lg border border-border bg-card p-4 space-y-2">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Delta (Shadow − Actual)</p>
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Delta (Shadow &minus; Actual)</p>
             <div className="space-y-1.5">
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate delta</span>
                 <span className="font-medium">
@@ -427,10 +418,14 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
                 const precision = opp?.market?.display_precision ?? 4
                 const resultR = shadowResultR(outcome)
                 const dir = st?.direction
+                const symbol = opp?.market?.symbol ?? ''
+                const currentPrice = livePrices[symbol] ?? null
+                const isOpenTriggered = outcome.trade_outcome_status === 'TRIGGERED'
+
                 return (
                   <tr key={outcome.shadow_outcome_id} className="hover:bg-muted/30">
                     <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">{opp?.date ?? '—'}</td>
-                    <td className="px-3 py-2 font-medium text-xs whitespace-nowrap">{opp?.market?.symbol ?? '—'}</td>
+                    <td className="px-3 py-2 font-medium text-xs whitespace-nowrap">{symbol || '—'}</td>
                     <td className="px-3 py-2 text-xs text-muted-foreground">{st?.session ?? '—'}</td>
                     <td className="px-3 py-2">
                       {dir ? (
@@ -459,11 +454,21 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
                       </span>
                     </td>
                     <td className="px-3 py-2 text-xs tabular-nums font-medium">
-                      {resultR !== null
-                        ? <span className={resultR >= 0 ? 'text-green-700' : 'text-red-700'}>
-                            {resultR > 0 ? '+' : ''}{resultR.toFixed(2)}R
-                          </span>
-                        : <span className="text-muted-foreground">—</span>}
+                      {resultR !== null ? (
+                        <span className={resultR >= 0 ? 'text-green-700' : 'text-red-700'}>
+                          {resultR > 0 ? '+' : ''}{resultR.toFixed(2)}R
+                        </span>
+                      ) : isOpenTriggered && st?.entry != null && st?.stop != null && st?.target != null ? (
+                        <UnrealisedR
+                          entry={Number(st.entry)}
+                          stop={Number(st.stop)}
+                          target={Number(st.target)}
+                          direction={dir as 'BUY' | 'SELL'}
+                          currentPrice={currentPrice}
+                        />
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
                     </td>
                   </tr>
                 )
@@ -514,11 +519,3 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
     </div>
   )
 }
-
-
-
-
-
-
-
-
