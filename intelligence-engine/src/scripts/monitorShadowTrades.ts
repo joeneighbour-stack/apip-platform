@@ -232,7 +232,7 @@ async function main() {
       // Fetch 5-min bars since trade was created (or since triggered_at for TRIGGERED)
       const fromTs = status === 'TRIGGERED' && outcome.triggered_at
         ? Math.floor(new Date(outcome.triggered_at).getTime() / 1000) - 300
-        : Math.floor(new Date(trade.created_at).getTime() / 1000) - 300
+        : Math.floor(new Date(trade.generated_at).getTime() / 1000)
 
       const bars = isCrypto
         ? await fetchCryptoBars(finnhubSym, fromTs, nowTs, CANDLE_KEY)
@@ -455,3 +455,4 @@ const invokedDirectly = process.argv[1] !== undefined &&
 if (invokedDirectly) {
   main().catch(err => { console.error('Fatal:', err); process.exit(1) })
 }
+
