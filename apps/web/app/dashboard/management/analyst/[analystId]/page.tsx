@@ -1,11 +1,11 @@
 import { getCurrentUser } from '@/lib/auth'
-import { MarketNews } from '@/components/analyst/MarketNews'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { redirect, notFound } from 'next/navigation'
 import { KpiSummary } from '@/components/analyst/KpiSummary'
 import { PerformanceBreakdown } from '@/components/analyst/PerformanceBreakdown'
 import { CompliancePanel } from '@/components/analyst/CompliancePanel'
 import { TradeHistoryTable } from '@/components/analyst/TradeHistoryTable'
+import { MarketNews } from '@/components/analyst/MarketNews'
 
 interface PageProps {
   params: { analystId: string }
@@ -22,6 +22,14 @@ function validityLabel(status: string | null): { label: string; color: string } 
   }
 }
 
+function stripBoilerplate(note: string | null): string {
+  if (!note) return ''
+  return note
+    .replace('Treat this as a coaching range rather than an instruction; execution judgement remains important.', '')
+    .replace('The historical profile favours', 'Historical profile favours')
+    .trim()
+}
+
 export default async function AnalystProfilePage({ params }: PageProps) {
   const user = await getCurrentUser()
   if (!['MANAGER', 'ADMIN'].includes(user.role)) redirect('/login')
@@ -32,7 +40,7 @@ export default async function AnalystProfilePage({ params }: PageProps) {
 
   const today = new Date().toISOString().slice(0, 10)
   const now = new Date()
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]
+  const monthStart = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`
   const twoYearsAgo = new Date(now.getFullYear() - 2, now.getMonth(), 1).toISOString().split('T')[0]
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
@@ -45,7 +53,7 @@ export default async function AnalystProfilePage({ params }: PageProps) {
 
   if (!analyst) notFound()
 
-  // Today's recommendations
+  // Today's recommendations via adminDb (bypass RLS)
   const { data: allRecs } = await adminDb
     .from('coaching_recommendations')
     .select(`
@@ -100,6 +108,13 @@ export default async function AnalystProfilePage({ params }: PageProps) {
     .order('period_start', { ascending: true })
 
   const kpis = (kpiTrend ?? []).filter((k: any) => k.period_start === monthStart)
+
+  // Current month stats from KPIs
+  const currentMonthKpi = kpis.find((k: any) => k.kpi_name === 'total_return_r')
+  const monthR = currentMonthKpi ? Number(currentMonthKpi.kpi_value?.value ?? 0) : 0
+  const monthTradeCount = currentMonthKpi ? Number(currentMonthKpi.kpi_value?.trade_count ?? 0) : 0
+  const winRateKpi = kpis.find((k: any) => k.kpi_name === 'win_rate')
+  const winRate = winRateKpi ? Math.round(Number(winRateKpi.kpi_value?.value ?? 0) * 100) : null
 
   // All trades for breakdown
   const allTrades: any[] = []
@@ -160,16 +175,6 @@ export default async function AnalystProfilePage({ params }: PageProps) {
     (disputes ?? []).map((d: any) => [d.trade_id, d])
   )
 
-  // Current month quick stats � use KPI data for consistency with KpiSummary
-  const currentMonthKpi = kpis.find((k: any) => k.kpi_name === "total_return_r")
-  const monthR = currentMonthKpi ? Number(currentMonthKpi.kpi_value?.value ?? 0) : 0
-  const monthTradeCount = currentMonthKpi ? Number(currentMonthKpi.kpi_value?.trade_count ?? 0) : 0
-  const winRateKpi = kpis.find((k: any) => k.kpi_name === "win_rate")
-  const winRate = winRateKpi ? Math.round(Number(winRateKpi.kpi_value?.value ?? 0) * 100) : null
-
-
-
-
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -209,7 +214,7 @@ export default async function AnalystProfilePage({ params }: PageProps) {
         </div>
       </div>
 
-      {/* Today's Recommendations — read-only management view */}
+      {/* Today's Recommendations */}
       <section className="space-y-3">
         <h2 className="text-sm font-medium">
           Today&apos;s Recommendations
@@ -223,7 +228,7 @@ export default async function AnalystProfilePage({ params }: PageProps) {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {recommendations.map((rec: any) => {
               const opp = rec.opportunity
-              const symbol = opp?.market?.symbol ?? '—'
+              const symbol = opp?.market?.symbol ?? '\u2014'
               const direction = opp?.direction ?? null
               const action = opp?.analyst_action ?? ''
               const validity = rec.recommendation_version?.recommendation_validity_status ?? 'VALID'
@@ -231,6 +236,7 @@ export default async function AnalystProfilePage({ params }: PageProps) {
               const marketId = opp?.market?.market_id
               const events = marketId ? (eventsByMarket.get(marketId) ?? []) : []
               const isDoNotUse = validity === 'DO_NOT_USE_RECALCULATE'
+              const note = stripBoilerplate(rec.coaching_note)
 
               return (
                 <div key={rec.recommendation_id}
@@ -255,10 +261,10 @@ export default async function AnalystProfilePage({ params }: PageProps) {
                   {/* Trigger / Expected R */}
                   <div className="flex gap-4 text-xs text-muted-foreground">
                     <span>Trigger <span className="font-medium text-foreground">
-                      {rec.trigger_probability ? `${Math.round(rec.trigger_probability * 100)}%` : '—'}
+                      {rec.trigger_probability ? `${Math.round(rec.trigger_probability * 100)}%` : '\u2014'}
                     </span></span>
                     <span>Expected R <span className={`font-medium ${(rec.expected_r ?? 0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                      {rec.expected_r != null ? `${Number(rec.expected_r) > 0 ? '+' : ''}${Number(rec.expected_r).toFixed(2)}R` : '—'}
+                      {rec.expected_r != null ? `${Number(rec.expected_r) > 0 ? '+' : ''}${Number(rec.expected_r).toFixed(2)}R` : '\u2014'}
                     </span></span>
                   </div>
 
@@ -273,6 +279,9 @@ export default async function AnalystProfilePage({ params }: PageProps) {
                     </div>
                   )}
 
+                  {/* News */}
+                  <MarketNews symbols={[symbol]} />
+
                   {/* Levels */}
                   {!isDoNotUse && (
                     <div className="grid grid-cols-3 gap-2 pt-1 border-t border-border/60">
@@ -284,21 +293,19 @@ export default async function AnalystProfilePage({ params }: PageProps) {
                       </div>
                       <div>
                         <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Risk</p>
-                        <p className="text-xs font-medium tabular-nums">{rec.risk_range ?? '—'}</p>
+                        <p className="text-xs font-medium tabular-nums">{rec.risk_range ?? '\u2014'}</p>
                       </div>
                       <div>
                         <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Target</p>
-                        <p className="text-xs font-medium tabular-nums">{rec.target_range ?? '—'}</p>
+                        <p className="text-xs font-medium tabular-nums">{rec.target_range ?? '\u2014'}</p>
                       </div>
                     </div>
                   )}
 
-                  {/* News */}
-                  <MarketNews symbols={[symbol]} />
                   {/* Coaching note */}
-                  {rec.coaching_note && !isDoNotUse && (
+                  {note && !isDoNotUse && (
                     <p className="text-xs text-muted-foreground leading-relaxed pt-1 border-t border-border/60">
-                      {rec.coaching_note?.replace('Treat this as a coaching range rather than an instruction; execution judgement remains important.', '').trim()}
+                      {note}
                     </p>
                   )}
                 </div>
@@ -329,7 +336,3 @@ export default async function AnalystProfilePage({ params }: PageProps) {
     </div>
   )
 }
-
-
-
-
