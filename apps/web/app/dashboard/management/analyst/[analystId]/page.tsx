@@ -160,15 +160,15 @@ export default async function AnalystProfilePage({ params }: PageProps) {
     (disputes ?? []).map((d: any) => [d.trade_id, d])
   )
 
-  // Current month quick stats
-  const currentMonthTrades = allTrades.filter((t: any) =>
-    t.published_at >= monthStart + 'T00:00:00Z' && t.result_r !== null
-  )
-  const wins = currentMonthTrades.filter((t: any) => Number(t.result_r) > 0)
-  const monthR = currentMonthTrades.reduce((s: number, t: any) => s + Number(t.result_r), 0)
-  const winRate = currentMonthTrades.length > 0
-    ? Math.round(wins.length / currentMonthTrades.length * 100)
-    : null
+  // Current month quick stats — use KPI data for consistency with KpiSummary
+  const currentMonthKpi = kpis.find((k: any) => k.kpi_name === "total_return_r")
+  const monthR = currentMonthKpi ? Number(currentMonthKpi.kpi_value?.value ?? 0) : 0
+  const monthTradeCount = currentMonthKpi ? Number(currentMonthKpi.kpi_value?.trade_count ?? 0) : 0
+  const winRateKpi = kpis.find((k: any) => k.kpi_name === "win_rate")
+  const winRate = winRateKpi ? Math.round(Number(winRateKpi.kpi_value?.value ?? 0) * 100) : null
+
+
+
 
   return (
     <div className="space-y-8">
@@ -195,7 +195,7 @@ export default async function AnalystProfilePage({ params }: PageProps) {
           <p className={`text-2xl font-semibold mt-1 tabular-nums ${monthR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
             {monthR > 0 ? '+' : ''}{monthR.toFixed(2)}R
           </p>
-          <p className="text-xs text-muted-foreground mt-1">{currentMonthTrades.length} closed trades</p>
+          <p className="text-xs text-muted-foreground mt-1">{monthTradeCount} closed trades</p>
         </div>
         <div className="rounded-lg border border-border bg-card p-4">
           <p className="text-xs text-muted-foreground">Win Rate</p>
@@ -298,7 +298,7 @@ export default async function AnalystProfilePage({ params }: PageProps) {
                   {/* Coaching note */}
                   {rec.coaching_note && !isDoNotUse && (
                     <p className="text-xs text-muted-foreground leading-relaxed pt-1 border-t border-border/60">
-                      {rec.coaching_note}
+                      {rec.coaching_note?.replace('Treat this as a coaching range rather than an instruction; execution judgement remains important.', '').trim()}
                     </p>
                   )}
                 </div>
@@ -329,5 +329,7 @@ export default async function AnalystProfilePage({ params }: PageProps) {
     </div>
   )
 }
+
+
 
 
