@@ -24,7 +24,9 @@ export function UnrealisedR({ entry, stop, target, direction, currentPrice, deci
     ? currentPrice - entry
     : entry - currentPrice
 
-  const unrealisedR = pnl / stopDistance
+  // Cap at -1R if price beyond stop (trade would be closed)
+  const rawR = pnl / stopDistance
+  const unrealisedR = rawR < -1 ? -1 : rawR
 
   // Determine if at/beyond target or stop
   const atTarget = direction === 'BUY' ? currentPrice >= target : currentPrice <= target
@@ -38,7 +40,7 @@ export function UnrealisedR({ entry, stop, target, direction, currentPrice, deci
     ? 'text-green-600'
     : 'text-red-600'
 
-  const label = atTarget ? '(target)' : atStop ? '(stopped)' : ''
+  const label = atTarget ? '(target)' : (atStop || rawR < -1) ? '(stopped)' : ''
 
   return (
     <span className={`text-xs tabular-nums ${colour}`}>
@@ -46,3 +48,5 @@ export function UnrealisedR({ entry, stop, target, direction, currentPrice, deci
     </span>
   )
 }
+
+
