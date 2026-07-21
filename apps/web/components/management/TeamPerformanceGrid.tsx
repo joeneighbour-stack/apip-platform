@@ -207,7 +207,7 @@ export function TeamPerformanceGrid({
                   const kpiValue = current?.kpi_value
                   return { col, val, kpiValue, hit: val !== null ? isOnTarget(col.name, val) : null }
                 })
-                const allHit = currentKpis.every(k => k.hit === true)
+                const allHit = currentKpis.some(k => k.hit !== null) && currentKpis.filter(k => k.hit !== null).every(k => k.hit === true)
                 const anyMissed = currentKpis.some(k => k.hit === false)
                 const hasData = currentKpis.some(k => k.val !== null)
                 const returnTrend = trendData(analyst.analyst_id, 'total_return_r')
@@ -410,6 +410,7 @@ export function TeamPerformanceGrid({
     </div>
   )
 }
+
 
 
 
