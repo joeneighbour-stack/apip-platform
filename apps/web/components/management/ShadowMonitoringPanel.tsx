@@ -156,7 +156,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
     ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED', 'CLOSED_PROFIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)
   )
   const resolved = shadowOutcomes.filter(o =>
-    ['TARGET_HIT', 'STOP_HIT', 'EXPIRY'].includes(o.trade_outcome_status)
+    ['TARGET_HIT', 'STOP_HIT', 'CLOSED_PROFIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)
   )
   const wins = shadowOutcomes.filter(o => ['TARGET_HIT', 'CLOSED_PROFIT'].includes(o.trade_outcome_status))
   const shadowWinRate = triggered.length > 0 ? wins.length / triggered.length : null
@@ -514,6 +514,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
     </div>
   )
 }
+
 
 
 

@@ -61,7 +61,7 @@ function generateMonths(n: number): { start: string; end: string }[] {
 
 // Terminal statuses that have a result
 const CLOSED_STATUSES = ['TARGET_HIT', 'STOP_HIT', 'EXPIRY', 'CLOSED_PROFIT', 'CLOSED_LOSS']
-const TRIGGERED_STATUSES = ['TRIGGERED', 'TARGET_HIT', 'STOP_HIT', 'EXPIRY', 'AMBIGUOUS', 'CLOSED_PROFIT', 'CLOSED_LOSS']
+const TRIGGERED_STATUSES = ['TRIGGERED', 'TARGET_HIT', 'STOP_HIT', 'CLOSED_PROFIT', 'CLOSED_LOSS']
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
@@ -252,5 +252,6 @@ const invokedDirectly = process.argv[1] !== undefined &&
 if (invokedDirectly) {
   main().catch(err => { console.error('Fatal:', err); process.exit(1) })
 }
+
 
 
