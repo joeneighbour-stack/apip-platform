@@ -1,5 +1,6 @@
 'use client'
 import { useState } from 'react'
+import Link from 'next/link'
 
 interface AllocationOpportunity {
   analyst_action: string | null
@@ -69,7 +70,7 @@ export function WorkloadPanel({ allocations, availability }: WorkloadPanelProps)
                     'border-border bg-card hover:bg-muted/30'
                   }`}
                 >
-                  <p className="text-xs text-muted-foreground truncate">{name}</p>
+                  <div className="flex items-center justify-between gap-1"><p className="text-xs text-muted-foreground truncate">{name}</p><Link href={`/dashboard/management/analyst/${analystId}`} onClick={e => e.stopPropagation()} className="text-xs text-primary hover:underline shrink-0">Profile</Link></div>
                   <p className="text-2xl font-semibold mt-1">{allocs.length}</p>
                   <p className="text-xs text-muted-foreground">
                     {cap !== null ? `of ${cap} max` : 'markets'}
@@ -131,3 +132,5 @@ export function WorkloadPanel({ allocations, availability }: WorkloadPanelProps)
     </section>
   )
 }
+
+

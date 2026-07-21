@@ -1,48 +1,51 @@
 import { getCurrentUser } from '@/lib/auth'
 import { createClient } from '@/lib/supabase/server'
-import { redirect } from 'next/navigation'
+import { redirect, notFound } from 'next/navigation'
 import { KpiSummary } from '@/components/analyst/KpiSummary'
 import { PerformanceBreakdown } from '@/components/analyst/PerformanceBreakdown'
+import { CompliancePanel } from '@/components/analyst/CompliancePanel'
+import { TradeHistoryTable } from '@/components/analyst/TradeHistoryTable'
 
-export default async function AnalystDrillDownPage({
-  params
-}: {
+interface PageProps {
   params: { analystId: string }
-}) {
+}
+
+export default async function AnalystProfilePage({ params }: PageProps) {
   const user = await getCurrentUser()
   if (!['MANAGER', 'ADMIN'].includes(user.role)) redirect('/login')
 
   const supabase = await createClient()
   const { analystId } = params
 
-  const now = new Date()
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]
-  const thirtySixMonthsAgo = new Date(now.getFullYear() - 3, now.getMonth(), 1).toISOString().split('T')[0]
-  const twoYearsAgo = new Date(now.getFullYear() - 2, now.getMonth(), 1).toISOString().split('T')[0]
-
-  // Analyst info
+  // Fetch analyst details
   const { data: analyst } = await supabase
     .from('analysts')
-    .select('analyst_id, display_name, active, sessions')
+    .select('analyst_id, display_name, active')
     .eq('analyst_id', analystId)
     .single()
 
-  // KPIs -- 36 months
+  if (!analyst) notFound()
+
+  const now = new Date()
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]
+  const twoYearsAgo = new Date(now.getFullYear() - 2, now.getMonth(), 1).toISOString().split('T')[0]
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+
+  // KPI trend
   const { data: kpiTrend } = await supabase
     .from('executive_kpis')
     .select('kpi_name, kpi_value, period_start, period_end')
     .eq('analyst_id', analystId)
-    .gte('period_start', thirtySixMonthsAgo)
+    .gte('period_start', twoYearsAgo)
     .order('period_start', { ascending: true })
 
-  const kpis = (kpiTrend ?? []).filter(k => k.period_start === monthStart)
+  const kpis = (kpiTrend ?? []).filter((k: any) => k.period_start === monthStart)
 
-  // Trades for breakdown -- paginated
+  // All trades for breakdown
   const allTrades: any[] = []
   const PAGE_SIZE = 1000
   let page = 0
   let hasMore = true
-
   while (hasMore) {
     const { data: batch } = await supabase
       .from('actual_trades')
@@ -55,109 +58,120 @@ export default async function AnalystDrillDownPage({
       .gte('published_at', twoYearsAgo)
       .order('published_at', { ascending: false })
       .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
-
-    if (!batch?.length) {
-      hasMore = false
-    } else {
+    if (!batch?.length) { hasMore = false } else {
       allTrades.push(...batch)
       hasMore = batch.length === PAGE_SIZE
       page++
     }
   }
 
-  // Post-trade reviews for this analyst
+  // Last 30 days trades for trade log
+  const recentTrades = allTrades.filter((t: any) => t.published_at >= thirtyDaysAgo + 'T00:00:00Z')
+  const tradeIds = recentTrades.map((t: any) => t.trade_id)
+
+  const { data: tradeDetails } = tradeIds.length > 0
+    ? await supabase
+        .from('actual_trades')
+        .select('trade_id, entry, stop, target, session')
+        .in('trade_id', tradeIds)
+    : { data: [] }
+
+  const detailsByTradeId = new Map((tradeDetails ?? []).map((t: any) => [t.trade_id, t]))
+  const recentTradesWithDetails = recentTrades.map((t: any) => ({
+    ...t,
+    ...(detailsByTradeId.get(t.trade_id) ?? {}),
+  }))
+
+  // Post-trade reviews
   const { data: reviews } = await supabase
     .from('post_trade_reviews')
-    .select(`
-      review_id, direction_alignment, entry_alignment,
-      alignment_score, analyst_facing_review, created_at, market, session
-    `)
-    .in('trade_id', allTrades.map(t => t.trade_id).slice(0, 500))
+    .select('review_id, market, session, direction_alignment, entry_alignment, alignment_score, review_status, created_at')
+    .eq('analyst_id', analystId)
     .order('created_at', { ascending: false })
-    .limit(20)
+    .limit(50)
+
+  // Disputes
+  const { data: disputes } = await supabase
+    .from('trade_disputes')
+    .select('trade_id, status, dispute_type')
+    .eq('raised_by_analyst_id', analystId)
+
+  const disputesByTradeId = new Map(
+    (disputes ?? []).map((d: any) => [d.trade_id, d])
+  )
+
+  // Current month quick stats
+  const currentMonthTrades = allTrades.filter((t: any) =>
+    t.published_at >= monthStart + 'T00:00:00Z' && t.result_r !== null
+  )
+  const wins = currentMonthTrades.filter((t: any) => Number(t.result_r) > 0)
+  const monthR = currentMonthTrades.reduce((s: number, t: any) => s + Number(t.result_r), 0)
+  const winRate = currentMonthTrades.length > 0
+    ? Math.round(wins.length / currentMonthTrades.length * 100)
+    : null
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
+      {/* Header */}
+      <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-xl font-semibold">{analyst?.display_name ?? 'Analyst'}</h1>
-          <div className="flex items-center gap-2 mt-1">
-            <p className="text-sm text-muted-foreground">Performance detail — last 36 months</p>
-            {(analyst?.sessions ?? []).map((s: string) => (
-              <span key={s} className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">{s}</span>
-            ))}
+          <div className="flex items-center gap-3">
+            <h1 className="text-xl font-semibold">{analyst.display_name}</h1>
+            {!analyst.active && (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
+                Inactive
+              </span>
+            )}
           </div>
+          <p className="text-sm text-muted-foreground mt-1">
+            Analyst profile &mdash; management view
+          </p>
         </div>
-        <a href="/dashboard/management/performance"
+        <a href="/dashboard/management"
           className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-          ← Team Performance
+          &larr; Back to Management
         </a>
       </div>
 
+      {/* This month quick stats */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="rounded-lg border border-border bg-card p-4">
+          <p className="text-xs text-muted-foreground">This Month Return</p>
+          <p className={`text-2xl font-semibold mt-1 tabular-nums ${monthR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+            {monthR > 0 ? '+' : ''}{monthR.toFixed(2)}R
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">{currentMonthTrades.length} closed trades</p>
+        </div>
+        <div className="rounded-lg border border-border bg-card p-4">
+          <p className="text-xs text-muted-foreground">Win Rate</p>
+          <p className={`text-2xl font-semibold mt-1 ${winRate !== null && winRate >= 50 ? 'text-green-700' : 'text-muted-foreground'}`}>
+            {winRate !== null ? `${winRate}%` : '&mdash;'}
+          </p>
+        </div>
+        <div className="rounded-lg border border-border bg-card p-4">
+          <p className="text-xs text-muted-foreground">All Time Trades</p>
+          <p className="text-2xl font-semibold mt-1">{allTrades.length.toLocaleString()}</p>
+        </div>
+      </div>
+
+      {/* KPI Summary */}
       <KpiSummary kpis={kpis} kpiTrend={kpiTrend ?? []} />
+
+      {/* Performance Breakdown */}
       <PerformanceBreakdown trades={allTrades} />
 
-      {(reviews?.length ?? 0) > 0 && (
-        <section className="space-y-3">
-          <h2 className="text-sm font-medium">Post-Trade Reviews</h2>
-          <div className="rounded-lg border border-border overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/50">
-                <tr>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Date</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Market</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Session</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Direction</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Entry</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Score</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Notes</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {(reviews ?? []).map(review => (
-                  <tr key={review.review_id} className="hover:bg-muted/30">
-                    <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                      {new Date(review.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
-                    </td>
-                    <td className="px-4 py-2.5 font-medium text-xs">{review.market ?? '—'}</td>
-                    <td className="px-4 py-2.5 text-xs text-muted-foreground">{review.session ?? '—'}</td>
-                    <td className="px-4 py-2.5">
-                      <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
-                        review.direction_alignment === 'Aligned'
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-red-100 text-red-800'
-                      }`}>
-                        {review.direction_alignment}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
-                        review.entry_alignment === 'High'
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-amber-100 text-amber-800'
-                      }`}>
-                        {review.entry_alignment}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <span className={`text-xs font-bold ${
-                        review.alignment_score === 2 ? 'text-green-700' :
-                        review.alignment_score === 1 ? 'text-amber-700' :
-                        'text-red-700'
-                      }`}>
-                        {review.alignment_score}/2
-                      </span>
-                    </td>
-                    <td className="px-4 py-2.5 text-xs text-muted-foreground max-w-xs truncate">
-                      {review.analyst_facing_review}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
+      {/* Coaching Compliance */}
+      <CompliancePanel reviews={reviews ?? []} />
+
+      {/* 30-day Trade Log */}
+      <section className="space-y-3">
+        <h2 className="text-sm font-medium">Trade Log &mdash; Last 30 Days</h2>
+        <TradeHistoryTable
+          trades={recentTradesWithDetails}
+          analystId={analystId}
+          disputesByTradeId={disputesByTradeId}
+        />
+      </section>
     </div>
   )
 }
