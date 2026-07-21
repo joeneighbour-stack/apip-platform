@@ -1,4 +1,5 @@
 import { getCurrentUser } from '@/lib/auth'
+import { MarketNews } from '@/components/analyst/MarketNews'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { redirect, notFound } from 'next/navigation'
 import { KpiSummary } from '@/components/analyst/KpiSummary'
@@ -292,6 +293,8 @@ export default async function AnalystProfilePage({ params }: PageProps) {
                     </div>
                   )}
 
+                  {/* News */}
+                  <MarketNews symbols={[symbol]} />
                   {/* Coaching note */}
                   {rec.coaching_note && !isDoNotUse && (
                     <p className="text-xs text-muted-foreground leading-relaxed pt-1 border-t border-border/60">
@@ -326,4 +329,5 @@ export default async function AnalystProfilePage({ params }: PageProps) {
     </div>
   )
 }
+
 
