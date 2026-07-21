@@ -24,7 +24,6 @@ interface Props {
 export function LiveTradesPanel({ trades }: Props) {
   const [filter, setFilter] = useState<'ALL' | 'TRIGGERED' | 'OPEN' | 'MISALIGNED'>('ALL')
 
-  // Get unique symbols for triggered open trades only
   const openTriggeredSymbols = [...new Set(
     trades
       .filter(t => t.triggered && t.result_r === null)
@@ -108,8 +107,8 @@ export function LiveTradesPanel({ trades }: Props) {
 
               return (
                 <tr key={trade.trade_id} className={`hover:bg-muted/30 transition-colors ${!aligned ? 'bg-amber-50/30' : ''}`}>
-                  <td className="px-3 py-2 text-xs font-medium">{trade.analyst?.display_name ?? '\u2014'}</td>
-                  <td className="px-3 py-2 text-xs">{symbol || '\u2014'}</td>
+                  <td className="px-3 py-2 text-xs font-medium">{trade.analyst?.display_name ?? '—'}</td>
+                  <td className="px-3 py-2 text-xs">{symbol || '—'}</td>
                   <td className="px-3 py-2">
                     <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${trade.direction === 'BUY' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
                       {trade.direction}
@@ -120,14 +119,14 @@ export function LiveTradesPanel({ trades }: Props) {
                       <span className={`text-xs px-1.5 py-0.5 rounded ${trade.recommended_dir === 'BUY' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
                         {trade.recommended_dir}
                       </span>
-                    ) : <span className="text-xs text-muted-foreground">\u2014</span>}
+                    ) : <span className="text-xs text-muted-foreground">—</span>}
                   </td>
                   <td className="px-3 py-2">
                     {!trade.recommended_dir
-                      ? <span className="text-xs text-muted-foreground">\u2014</span>
+                      ? <span className="text-xs text-muted-foreground">—</span>
                       : aligned
-                        ? <span className="text-xs text-green-700 font-medium">\u2713</span>
-                        : <span className="text-xs text-amber-600 font-medium">\u2717</span>}
+                        ? <span className="text-xs text-green-700 font-medium">&#10003;</span>
+                        : <span className="text-xs text-amber-600 font-medium">&#10007;</span>}
                   </td>
                   <td className="px-3 py-2 text-xs tabular-nums">{Number(trade.entry).toFixed(4)}</td>
                   <td className="px-3 py-2">
@@ -151,7 +150,7 @@ export function LiveTradesPanel({ trades }: Props) {
                         currentPrice={currentPrice}
                       />
                     ) : (
-                      <span className="text-muted-foreground">\u2014</span>
+                      <span className="text-muted-foreground">—</span>
                     )}
                   </td>
                   <td className="px-3 py-2 text-xs text-muted-foreground">{time}</td>
