@@ -1,5 +1,5 @@
 import { getCurrentUser } from '@/lib/auth'
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { redirect, notFound } from 'next/navigation'
 import { KpiSummary } from '@/components/analyst/KpiSummary'
 import { PerformanceBreakdown } from '@/components/analyst/PerformanceBreakdown'
@@ -10,12 +10,30 @@ interface PageProps {
   params: { analystId: string }
 }
 
+function validityLabel(status: string | null): { label: string; color: string } | null {
+  switch (status) {
+    case 'DO_NOT_USE_RECALCULATE': return { label: 'Levels outdated', color: 'text-red-700' }
+    case 'ENTRY_ALREADY_PASSED':   return { label: 'Entry passed', color: 'text-amber-600' }
+    case 'STALE_PRICE':
+    case 'CAUTION_VOLATILITY':
+    case 'ZONE_CHANGED':           return { label: 'High volatility', color: 'text-amber-600' }
+    default: return null
+  }
+}
+
 export default async function AnalystProfilePage({ params }: PageProps) {
   const user = await getCurrentUser()
   if (!['MANAGER', 'ADMIN'].includes(user.role)) redirect('/login')
 
   const supabase = await createClient()
+  const adminDb = createAdminClient()
   const { analystId } = params
+
+  const today = new Date().toISOString().slice(0, 10)
+  const now = new Date()
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]
+  const twoYearsAgo = new Date(now.getFullYear() - 2, now.getMonth(), 1).toISOString().split('T')[0]
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
   // Fetch analyst details
   const { data: analyst } = await supabase
@@ -26,10 +44,51 @@ export default async function AnalystProfilePage({ params }: PageProps) {
 
   if (!analyst) notFound()
 
-  const now = new Date()
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]
-  const twoYearsAgo = new Date(now.getFullYear() - 2, now.getMonth(), 1).toISOString().split('T')[0]
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  // Today's recommendations
+  const { data: allRecs } = await adminDb
+    .from('coaching_recommendations')
+    .select(`
+      recommendation_id, entry_range_low, entry_range_high,
+      risk_range, target_range, trigger_probability, expected_r,
+      coaching_note, shown_at,
+      opportunity:opportunity_id (
+        analyst_action, direction, current_zone,
+        market:market_id ( symbol, asset_class, market_id )
+      ),
+      recommendation_version:active_recommendation_version_id (
+        recommendation_validity_status
+      )
+    `)
+    .eq('analyst_id', analystId)
+    .gte('shown_at', today + 'T00:00:00Z')
+    .order('shown_at', { ascending: false })
+
+  // Deduplicate by symbol
+  const seenSymbols = new Set<string>()
+  const recommendations = (allRecs ?? []).filter((rec: any) => {
+    const symbol = rec.opportunity?.market?.symbol
+    if (!symbol || seenSymbols.has(symbol)) return false
+    seenSymbols.add(symbol)
+    return true
+  })
+
+  // Event risk for today's markets
+  const marketIds = recommendations.map((r: any) => r.opportunity?.market?.market_id).filter(Boolean)
+  const { data: eventRisks } = marketIds.length > 0
+    ? await adminDb
+        .from('market_event_risk')
+        .select('market_id, event:event_id ( event_name, event_time_uk )')
+        .in('market_id', marketIds)
+        .eq('event_risk_status', 'HIGH_RISK')
+    : { data: [] }
+
+  const eventsByMarket = new Map<string, string[]>()
+  for (const er of (eventRisks ?? []) as any[]) {
+    const event = er.event
+    if (!event || event.event_time_uk?.slice(0, 10) !== today) continue
+    if (!eventsByMarket.has(er.market_id)) eventsByMarket.set(er.market_id, [])
+    eventsByMarket.get(er.market_id)!.push(event.event_name)
+  }
 
   // KPI trend
   const { data: kpiTrend } = await supabase
@@ -118,17 +177,12 @@ export default async function AnalystProfilePage({ params }: PageProps) {
           <div className="flex items-center gap-3">
             <h1 className="text-xl font-semibold">{analyst.display_name}</h1>
             {!analyst.active && (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
-                Inactive
-              </span>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">Inactive</span>
             )}
           </div>
-          <p className="text-sm text-muted-foreground mt-1">
-            Analyst profile &mdash; management view
-          </p>
+          <p className="text-sm text-muted-foreground mt-1">Analyst profile &mdash; management view</p>
         </div>
-        <a href="/dashboard/management"
-          className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+        <a href="/dashboard/management" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
           &larr; Back to Management
         </a>
       </div>
@@ -145,7 +199,7 @@ export default async function AnalystProfilePage({ params }: PageProps) {
         <div className="rounded-lg border border-border bg-card p-4">
           <p className="text-xs text-muted-foreground">Win Rate</p>
           <p className={`text-2xl font-semibold mt-1 ${winRate !== null && winRate >= 50 ? 'text-green-700' : 'text-muted-foreground'}`}>
-            {winRate !== null ? `${winRate}%` : '&mdash;'}
+            {winRate !== null ? `${winRate}%` : '\u2014'}
           </p>
         </div>
         <div className="rounded-lg border border-border bg-card p-4">
@@ -153,6 +207,103 @@ export default async function AnalystProfilePage({ params }: PageProps) {
           <p className="text-2xl font-semibold mt-1">{allTrades.length.toLocaleString()}</p>
         </div>
       </div>
+
+      {/* Today's Recommendations — read-only management view */}
+      <section className="space-y-3">
+        <h2 className="text-sm font-medium">
+          Today&apos;s Recommendations
+          <span className="ml-2 text-xs font-normal text-muted-foreground">({recommendations.length} markets)</span>
+        </h2>
+        {recommendations.length === 0 ? (
+          <div className="rounded-lg border border-border p-6">
+            <p className="text-sm text-muted-foreground">No recommendations generated yet for today.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {recommendations.map((rec: any) => {
+              const opp = rec.opportunity
+              const symbol = opp?.market?.symbol ?? '—'
+              const direction = opp?.direction ?? null
+              const action = opp?.analyst_action ?? ''
+              const validity = rec.recommendation_version?.recommendation_validity_status ?? 'VALID'
+              const vLabel = validityLabel(validity)
+              const marketId = opp?.market?.market_id
+              const events = marketId ? (eventsByMarket.get(marketId) ?? []) : []
+              const isDoNotUse = validity === 'DO_NOT_USE_RECALCULATE'
+
+              return (
+                <div key={rec.recommendation_id}
+                  className={`rounded-lg border p-4 space-y-3 ${isDoNotUse ? 'border-red-200 bg-red-50/20 opacity-60' : 'border-border bg-card'}`}>
+
+                  {/* Header */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold">{symbol}</span>
+                      {direction && (
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+                          direction === 'BUY' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                        }`}>{direction}</span>
+                      )}
+                      {action === 'ENTER_NOW' && !isDoNotUse && (
+                        <span className="text-xs font-medium text-green-700">&#9889;</span>
+                      )}
+                    </div>
+                    {vLabel && <span className={`text-xs font-medium ${vLabel.color}`}>{vLabel.label}</span>}
+                  </div>
+
+                  {/* Trigger / Expected R */}
+                  <div className="flex gap-4 text-xs text-muted-foreground">
+                    <span>Trigger <span className="font-medium text-foreground">
+                      {rec.trigger_probability ? `${Math.round(rec.trigger_probability * 100)}%` : '—'}
+                    </span></span>
+                    <span>Expected R <span className={`font-medium ${(rec.expected_r ?? 0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                      {rec.expected_r != null ? `${Number(rec.expected_r) > 0 ? '+' : ''}${Number(rec.expected_r).toFixed(2)}R` : '—'}
+                    </span></span>
+                  </div>
+
+                  {/* Event risk */}
+                  {events.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {events.map((e, i) => (
+                        <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-700">
+                          &#9888; {e}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Levels */}
+                  {!isDoNotUse && (
+                    <div className="grid grid-cols-3 gap-2 pt-1 border-t border-border/60">
+                      <div>
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Entry</p>
+                        <p className="text-xs font-medium tabular-nums">
+                          {Number(rec.entry_range_low).toFixed(4)}&ndash;{Number(rec.entry_range_high).toFixed(4)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Risk</p>
+                        <p className="text-xs font-medium tabular-nums">{rec.risk_range ?? '—'}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Target</p>
+                        <p className="text-xs font-medium tabular-nums">{rec.target_range ?? '—'}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Coaching note */}
+                  {rec.coaching_note && !isDoNotUse && (
+                    <p className="text-xs text-muted-foreground leading-relaxed pt-1 border-t border-border/60">
+                      {rec.coaching_note}
+                    </p>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </section>
 
       {/* KPI Summary */}
       <KpiSummary kpis={kpis} kpiTrend={kpiTrend ?? []} />
@@ -175,3 +326,4 @@ export default async function AnalystProfilePage({ params }: PageProps) {
     </div>
   )
 }
+
