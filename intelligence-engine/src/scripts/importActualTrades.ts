@@ -328,7 +328,7 @@ async function main() {
         successRows += batch.length
       }
       processed += batch.length
-      process.stdout.write(`\r  Upserted ${processed}/${tradeRows.length}`)
+      process.stdout.write(`\r  Upserted ${processed}/${safeTradeRows.length}`)
     }
     console.log('')
 
@@ -445,3 +445,4 @@ const invokedDirectly = process.argv[1] !== undefined &&
 if (invokedDirectly) {
   main().catch(err => { console.error('Fatal:', err); process.exit(1) })
 }
+
