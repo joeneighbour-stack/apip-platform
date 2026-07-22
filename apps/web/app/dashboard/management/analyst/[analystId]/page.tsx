@@ -8,7 +8,7 @@ import { TradeHistoryTable } from '@/components/analyst/TradeHistoryTable'
 import { MarketNews } from '@/components/analyst/MarketNews'
 
 interface PageProps {
-  params: { analystId: string }
+  params: Promise<{ analystId: string }>
 }
 
 function validityLabel(status: string | null): { label: string; color: string } | null {
@@ -36,7 +36,7 @@ export default async function AnalystProfilePage({ params }: PageProps) {
 
   const supabase = await createClient()
   const adminDb = createAdminClient()
-  const { analystId } = params
+  const { analystId } = await params
 
   const today = new Date().toISOString().slice(0, 10)
   const now = new Date()
@@ -336,3 +336,4 @@ export default async function AnalystProfilePage({ params }: PageProps) {
     </div>
   )
 }
+
