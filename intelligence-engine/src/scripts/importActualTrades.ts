@@ -37,6 +37,8 @@ const ANALYST_CODE_MAP: Record<string, string> = {
 
 // Symbol normalisations — API name → APIP market symbol
 const SYMBOL_OVERRIDES: Record<string, string> = {
+  'NATURAL GAS.1': 'SKIP',
+  'Natural Gas.1': 'SKIP',
   'US100':                'NASDAQ',
   'NAS100':               'NASDAQ',
   'WTI':                  'Oil',
@@ -251,6 +253,7 @@ async function main() {
     // Resolve symbol
     const rawSymbol = (t.Symbol ?? '').trim()
     const normSymbol = SYMBOL_OVERRIDES[rawSymbol.toUpperCase()] ?? SYMBOL_OVERRIDES[rawSymbol] ?? rawSymbol
+    if (normSymbol === 'SKIP') { outOfScopeRows++; continue }
     const marketId = marketIdBySymbol.get(normSymbol) ?? marketIdBySymbol.get(normSymbol.toLowerCase())
     if (!marketId) {
       unknownSymbols.add(rawSymbol)
@@ -445,5 +448,7 @@ const invokedDirectly = process.argv[1] !== undefined &&
 if (invokedDirectly) {
   main().catch(err => { console.error('Fatal:', err); process.exit(1) })
 }
+
+
 
 
