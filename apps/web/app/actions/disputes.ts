@@ -2,11 +2,10 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { revalidatePath } from 'next/cache'
-import type { Database } from '@/types/database'
 
 // Service role client -- bypasses RLS for admin operations (trade override + audit log)
 function createServiceClient() {
-  return createServerClient<Database>(
+  return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
     { cookies: { getAll: () => [], setAll: () => {} } }
@@ -16,7 +15,7 @@ function createServiceClient() {
 // Regular client -- for role checks (uses the user's session)
 async function createUserClient() {
   const cookieStore = await cookies()
-  return createServerClient<Database>(
+  return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
@@ -55,7 +54,7 @@ export async function resolveDispute(
     .single()
 
   if (!dispute) return { error: 'Dispute not found' }
-  if (dispute.status === 'RESOLVED' || dispute.status === 'REJECTED') {
+  if ((dispute as any).status === 'RESOLVED' || (dispute as any).status === 'REJECTED') {
     return { error: 'Dispute is already closed' }
   }
 
@@ -152,5 +151,7 @@ export async function rejectDispute(
   revalidatePath('/dashboard/management')
   return {}
 }
+
+
 
 
