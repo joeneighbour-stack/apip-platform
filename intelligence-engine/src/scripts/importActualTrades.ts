@@ -315,7 +315,7 @@ async function main() {
   }
 
   if (!isDryRun && tradeRows.length > 0) {
-    // Batch upsert in chunks of 500 for performance
+    // Batch upsert actual trades in chunks of 500
     const BATCH_SIZE = 500
     let processed = 0
     for (let i = 0; i < tradeRows.length; i += BATCH_SIZE) {
@@ -448,6 +448,7 @@ const invokedDirectly = process.argv[1] !== undefined &&
 if (invokedDirectly) {
   main().catch(err => { console.error('Fatal:', err); process.exit(1) })
 }
+
 
 
 
