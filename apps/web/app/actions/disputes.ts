@@ -22,7 +22,7 @@ async function createUserClient() {
     {
       cookies: {
         getAll: () => cookieStore.getAll(),
-        setAll: (c) => { try { c.forEach(({ name, value, options }) => cookieStore.set(name, value, options)) } catch {} }
+        setAll: (c: { name: string; value: string; options?: any }[]) => { try { c.forEach(({ name, value, options }) => cookieStore.set(name, value, options)) } catch {} }
       }
     }
   )
@@ -152,3 +152,4 @@ export async function rejectDispute(
   revalidatePath('/dashboard/management')
   return {}
 }
+
