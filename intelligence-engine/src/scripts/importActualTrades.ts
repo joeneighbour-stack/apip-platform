@@ -331,7 +331,7 @@ async function main() {
         successRows += batch.length
       }
       processed += batch.length
-      process.stdout.write(`\r  Upserted ${processed}/${safeTradeRows.length}`)
+      process.stdout.write(`\r  Upserted ${processed}/${tradeRows.length}`)
     }
     console.log('')
 
