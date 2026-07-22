@@ -45,7 +45,7 @@ export async function resolveDispute(
     .eq('auth_user_id', user.id)
     .single()
 
-  if (!appUser || appUser.role !== 'ADMIN') return { error: 'Insufficient permissions' }
+  if (!appUser || (appUser as any).role !== 'ADMIN') return { error: 'Insufficient permissions' }
 
   // Get the dispute to find the trade_id and original values
   const { data: dispute } = await userClient
@@ -152,4 +152,5 @@ export async function rejectDispute(
   revalidatePath('/dashboard/management')
   return {}
 }
+
 
