@@ -1,4 +1,5 @@
 'use client'
+import { useState } from 'react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Cell } from 'recharts'
 
 interface Analyst {
@@ -20,11 +21,14 @@ interface ShadowOutcome {
 interface ActualTrade {
   result_r: number | null
   triggered: boolean
+  published_at?: string
+  analyst_id?: string
 }
 interface TeamPerformanceGridProps {
   analysts: Analyst[]
   kpiData: KpiRow[]
   currentMonthStart: string
+  lastMonthStart: string
   shadowOutcomes: ShadowOutcome[]
   actualTrades: ActualTrade[]
   shadowKpiData: { kpi_name: string; kpi_value: any; period_start: string }[]
@@ -79,9 +83,32 @@ function shadowResultR(outcome: ShadowOutcome): number | null {
   return null
 }
 
+type Period = 'THIS_MONTH' | 'LAST_MONTH' | 'LAST_WEEK'
+
 export function TeamPerformanceGrid({
-  analysts, kpiData, currentMonthStart, shadowOutcomes, actualTrades, shadowKpiData
+  analysts, kpiData, currentMonthStart, lastMonthStart, shadowOutcomes, actualTrades, shadowKpiData
 }: TeamPerformanceGridProps) {
+  const [period, setPeriod] = useState<Period>('THIS_MONTH')
+
+  // Derive active period for KPI lookup
+  const now = new Date()
+  const dayOfWeek = now.getUTCDay() // 0=Sun, 1=Mon
+  const daysToMonday = (dayOfWeek + 6) % 7
+  const monday = new Date(now)
+  monday.setUTCDate(now.getUTCDate() - daysToMonday)
+  monday.setUTCHours(0, 0, 0, 0)
+  const friday = new Date(monday)
+  friday.setUTCDate(monday.getUTCDate() + 4)
+  friday.setUTCHours(23, 59, 59, 999)
+  const lastWeekStart = monday.toISOString().slice(0, 10)
+  const lastWeekEnd = friday.toISOString().slice(0, 10)
+
+  const activePeriodStart = period === 'LAST_MONTH' ? lastMonthStart : currentMonthStart
+
+  // For Last Week — filter actual trades to Mon-Fri this week
+  const periodTrades = period === 'LAST_WEEK'
+    ? actualTrades.filter(t => t.published_at && t.published_at >= lastWeekStart && t.published_at <= lastWeekEnd + 'T23:59:59Z')
+    : actualTrades
 
   const index = new Map<string, Map<string, KpiRow[]>>()
   for (const row of kpiData) {
@@ -91,14 +118,14 @@ export function TeamPerformanceGrid({
     byName.get(row.kpi_name)!.push(row)
   }
 
-  // Team aggregate for current month
+  // Team aggregate for active period
   const teamAgg: Record<string, number[]> = {}
   for (const analyst of analysts) {
     const byName = index.get(analyst.analyst_id)
     if (!byName) continue
     for (const col of KPI_COLS) {
       const rows = byName.get(col.name) ?? []
-      const current = rows.find(r => r.period_start === currentMonthStart)
+      const current = rows.find(r => r.period_start === activePeriodStart)
       const val = getValue(current)
       if (val !== null) {
         if (!teamAgg[col.name]) teamAgg[col.name] = []
@@ -107,17 +134,56 @@ export function TeamPerformanceGrid({
     }
   }
 
-  // Shadow summary (live from raw outcomes)
+  // For Last Week — compute team stats from raw trades
+  const weekTeamAgg: Record<string, number[]> = {}
+  if (period === 'LAST_WEEK') {
+    const byAnalyst = new Map<string, ActualTrade[]>()
+    for (const t of periodTrades) {
+      if (!t.analyst_id) continue
+      if (!byAnalyst.has(t.analyst_id)) byAnalyst.set(t.analyst_id, [])
+      byAnalyst.get(t.analyst_id)!.push(t)
+    }
+    for (const analyst of analysts) {
+      const trades = byAnalyst.get(analyst.analyst_id) ?? []
+      const triggered = trades.filter(t => t.triggered && t.result_r !== null)
+      const wins = triggered.filter(t => (t.result_r ?? 0) > 0)
+      const totalR = triggered.reduce((s, t) => s + (t.result_r ?? 0), 0)
+      const winRate = triggered.length > 0 ? wins.length / triggered.length : null
+      const trigRate = trades.length > 0 ? triggered.length / trades.length : null
+
+      if (totalR !== 0 || triggered.length > 0) {
+        if (!weekTeamAgg['total_return_r']) weekTeamAgg['total_return_r'] = []
+        weekTeamAgg['total_return_r'].push(totalR)
+      }
+      if (winRate !== null) {
+        if (!weekTeamAgg['win_rate']) weekTeamAgg['win_rate'] = []
+        weekTeamAgg['win_rate'].push(winRate)
+      }
+      if (trigRate !== null) {
+        if (!weekTeamAgg['triggered_rate']) weekTeamAgg['triggered_rate'] = []
+        weekTeamAgg['triggered_rate'].push(trigRate)
+      }
+    }
+  }
+
+  const activeTeamAgg = period === 'LAST_WEEK' ? weekTeamAgg : teamAgg
+
+  // Shadow summary
   const shadowTriggered = shadowOutcomes.filter(o =>
     ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED', 'CLOSED_PROFIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)
   )
-  const shadowWins = shadowOutcomes.filter(o => o.trade_outcome_status === 'TARGET_HIT' || o.trade_outcome_status === 'CLOSED_PROFIT' || (o.result_r !== null && Number(o.result_r) > 0))
+  const shadowWins = shadowOutcomes.filter(o =>
+    o.trade_outcome_status === 'TARGET_HIT' ||
+    o.trade_outcome_status === 'CLOSED_PROFIT' ||
+    (o.result_r !== null && Number(o.result_r) > 0)
+  )
   const shadowWinRate = shadowTriggered.length > 0 ? shadowWins.length / shadowTriggered.length : null
   const shadowTriggerRate = shadowOutcomes.length > 0 ? shadowTriggered.length / shadowOutcomes.length : null
   const shadowTotalR = shadowTriggered.reduce((s, o) => s + (shadowResultR(o) ?? 0), 0)
 
-  // Shadow monthly trend from KPI data
-  const shadowReturnTrend = shadowKpiData.length > 0 ? shadowKpiData.filter(k => k.kpi_name === 'total_return_r').map(k => ({ month: monthLabel(k.period_start), value: k.kpi_value?.value ?? 0 })) : [{ month: 'Jul 26', value: 0 }]
+  const shadowReturnTrend = shadowKpiData.length > 0
+    ? shadowKpiData.filter(k => k.kpi_name === 'total_return_r').map(k => ({ month: monthLabel(k.period_start), value: k.kpi_value?.value ?? 0 }))
+    : [{ month: 'Aug 26', value: 0 }]
 
   // Actual summary
   const actualTriggered = actualTrades.filter(t => t.triggered && t.result_r !== null)
@@ -127,10 +193,7 @@ export function TeamPerformanceGrid({
   const actualTotalR = actualTriggered.reduce((s, t) => s + (t.result_r ?? 0), 0)
 
   // Team long-term R trend
-  const allMonths = [...new Set(kpiData
-    .filter(k => k.kpi_name === 'total_return_r')
-    .map(k => k.period_start)
-  )].sort()
+  const allMonths = [...new Set(kpiData.filter(k => k.kpi_name === 'total_return_r').map(k => k.period_start))].sort()
   const teamReturnTrend = allMonths.map(month => {
     const total = analysts.reduce((sum, analyst) => {
       const rows = index.get(analyst.analyst_id)?.get('total_return_r') ?? []
@@ -148,15 +211,31 @@ export function TeamPerformanceGrid({
       .map(r => ({ month: monthLabel(r.period_start), value: getValue(r) }))
   }
 
+  const periodLabel = period === 'THIS_MONTH' ? 'This Month' : period === 'LAST_MONTH' ? 'Last Month' : 'Last Week'
+
   return (
     <div className="space-y-8">
 
       {/* Team summary row */}
       <section className="space-y-3">
-        <h2 className="text-sm font-medium">Team Summary &mdash; This Month</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-medium">Team Summary &mdash; {periodLabel}</h2>
+          <div className="flex items-center gap-1">
+            {(['THIS_MONTH', 'LAST_WEEK', 'LAST_MONTH'] as Period[]).map(p => (
+              <button key={p} onClick={() => setPeriod(p)}
+                className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
+                  period === p
+                    ? 'bg-foreground text-background border-foreground'
+                    : 'border-border text-muted-foreground hover:text-foreground'
+                }`}>
+                {p === 'THIS_MONTH' ? 'This Month' : p === 'LAST_WEEK' ? 'Last Week' : 'Last Month'}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="grid grid-cols-5 gap-3">
           {KPI_COLS.map(col => {
-            const vals = teamAgg[col.name] ?? []
+            const vals = activeTeamAgg[col.name] ?? []
             const agg = vals.length > 0
               ? col.name === 'total_return_r'
                 ? vals.reduce((a, b) => a + b, 0)
@@ -200,17 +279,43 @@ export function TeamPerformanceGrid({
             <tbody className="divide-y divide-border">
               {analysts.map(analyst => {
                 const byName = index.get(analyst.analyst_id)
-                const currentKpis = KPI_COLS.map(col => {
-                  const rows = byName?.get(col.name) ?? []
-                  const current = rows.find(r => r.period_start === currentMonthStart)
-                  const val = getValue(current)
-                  const kpiValue = current?.kpi_value
-                  return { col, val, kpiValue, hit: val !== null ? isOnTarget(col.name, val) : null }
-                })
+
+                // For Last Week — compute per-analyst stats from raw trades
+                let currentKpis: { col: typeof KPI_COLS[0]; val: number | null; kpiValue: any; hit: boolean | null }[]
+                if (period === 'LAST_WEEK') {
+                  const trades = periodTrades.filter(t => t.analyst_id === analyst.analyst_id)
+                  const triggered = trades.filter(t => t.triggered && t.result_r !== null)
+                  const wins = triggered.filter(t => (t.result_r ?? 0) > 0)
+                  const totalR = triggered.reduce((s, t) => s + (t.result_r ?? 0), 0)
+                  const winRate = triggered.length > 0 ? wins.length / triggered.length : null
+                  const trigRate = trades.length > 0 ? triggered.length / trades.length : null
+
+                  const weekVals: Record<string, number | null> = {
+                    total_return_r: triggered.length > 0 ? totalR : null,
+                    win_rate: winRate,
+                    triggered_rate: trigRate,
+                    max_drawdown: null,
+                    alignment_rate: null,
+                  }
+                  currentKpis = KPI_COLS.map(col => {
+                    const val = weekVals[col.name] ?? null
+                    return { col, val, kpiValue: null, hit: val !== null ? isOnTarget(col.name, val) : null }
+                  })
+                } else {
+                  currentKpis = KPI_COLS.map(col => {
+                    const rows = byName?.get(col.name) ?? []
+                    const current = rows.find(r => r.period_start === activePeriodStart)
+                    const val = getValue(current)
+                    const kpiValue = current?.kpi_value
+                    return { col, val, kpiValue, hit: val !== null ? isOnTarget(col.name, val) : null }
+                  })
+                }
+
                 const allHit = currentKpis.some(k => k.hit !== null) && currentKpis.filter(k => k.hit !== null).every(k => k.hit === true)
                 const anyMissed = currentKpis.some(k => k.hit === false)
                 const hasData = currentKpis.some(k => k.val !== null)
                 const returnTrend = trendData(analyst.analyst_id, 'total_return_r')
+
                 return (
                   <tr key={analyst.analyst_id} className="hover:bg-muted/30 transition-colors">
                     <td className="px-4 py-3 font-medium">
@@ -284,8 +389,7 @@ export function TeamPerformanceGrid({
                     interval={Math.floor(teamReturnTrend.length / 12)} />
                   <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false}
                     tickFormatter={v => `${v > 0 ? '+' : ''}${v.toFixed(0)}R`} />
-                  <Tooltip formatter={(v: any) => [`${Number(v).toFixed(2)}R`, 'Team Return']}
-                    contentStyle={{ fontSize: 11 }} />
+                  <Tooltip formatter={(v: any) => [`${Number(v).toFixed(2)}R`, 'Team Return']} contentStyle={{ fontSize: 11 }} />
                   <ReferenceLine y={0} stroke="hsl(var(--border))" />
                   <Bar dataKey="value" radius={[2, 2, 0, 0]}>
                     {teamReturnTrend.map((entry, i) => (
@@ -336,14 +440,12 @@ export function TeamPerformanceGrid({
             <div className="space-y-1.5">
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate delta</span>
                 <span className="font-medium">
-                  {shadowWinRate !== null && actualWinRate !== null
-                    ? `${((shadowWinRate - actualWinRate) * 100).toFixed(1)}pp` : '\u2014'}
+                  {shadowWinRate !== null && actualWinRate !== null ? `${((shadowWinRate - actualWinRate) * 100).toFixed(1)}pp` : '\u2014'}
                 </span>
               </div>
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger delta</span>
                 <span className="font-medium">
-                  {shadowTriggerRate !== null && actualTriggerRate !== null
-                    ? `${((shadowTriggerRate - actualTriggerRate) * 100).toFixed(1)}pp` : '\u2014'}
+                  {shadowTriggerRate !== null && actualTriggerRate !== null ? `${((shadowTriggerRate - actualTriggerRate) * 100).toFixed(1)}pp` : '\u2014'}
                 </span>
               </div>
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Status</span>
@@ -391,9 +493,7 @@ export function TeamPerformanceGrid({
                   <XAxis dataKey="month" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false}
                     tickFormatter={v => `${v > 0 ? '+' : ''}${Number(v).toFixed(0)}R`} />
-                  <Tooltip
-                    formatter={(v: any) => [`${Number(v).toFixed(2)}R`, 'Shadow Return']}
-                    contentStyle={{ fontSize: 11 }} />
+                  <Tooltip formatter={(v: any) => [`${Number(v).toFixed(2)}R`, 'Shadow Return']} contentStyle={{ fontSize: 11 }} />
                   <ReferenceLine y={0} stroke="hsl(var(--border))" />
                   <Bar dataKey="value" radius={[2, 2, 0, 0]}>
                     {shadowReturnTrend.map((entry, i) => (
@@ -410,8 +510,3 @@ export function TeamPerformanceGrid({
     </div>
   )
 }
-
-
-
-
-

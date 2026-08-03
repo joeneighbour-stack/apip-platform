@@ -13,6 +13,8 @@ export default async function ManagementPerformancePage() {
   const now = new Date()
   const year = now.getUTCFullYear()
   const month = now.getUTCMonth()
+  const lastMonth = new Date(Date.UTC(year, month - 1, 1))
+  const lastMonthStart = ${lastMonth.getUTCFullYear()}--01`r
   const monthStart = `${year}-${String(month + 1).padStart(2, '0')}-01`
 
   const d36 = new Date(Date.UTC(year, month - 35, 1))
@@ -41,7 +43,7 @@ export default async function ManagementPerformancePage() {
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
   const { data: actualTrades } = await supabase
     .from('actual_trades')
-    .select('result_r, triggered')
+    .select('result_r, triggered, published_at, analyst_id, market:market_id(symbol)')
     .eq('source_system', 'ACUITY_PERFORMANCE_API')
     .gte('published_at', thirtyDaysAgo)
 
@@ -77,6 +79,7 @@ export default async function ManagementPerformancePage() {
         analysts={analystsWithData}
         kpiData={analystKpis}
         currentMonthStart={monthStart}
+        lastMonthStart={lastMonthStart}
         shadowOutcomes={(shadowOutcomes as any[]) ?? []}
         actualTrades={(actualTrades as any[]) ?? []}
         shadowKpiData={shadowKpiData}
@@ -84,3 +87,6 @@ export default async function ManagementPerformancePage() {
     </div>
   )
 }
+
+
+
