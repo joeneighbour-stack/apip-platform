@@ -107,7 +107,7 @@ export function TeamPerformanceGrid({
 
   // For Last Week — filter actual trades to Mon-Fri this week
   const periodTrades = period === 'LAST_WEEK'
-    ? actualTrades.filter(t => t.published_at && t.published_at >= lastWeekStart && t.published_at <= lastWeekEnd + 'T23:59:59Z')
+    ? actualTrades.filter(t => t.published_at && t.published_at.slice(0, 10) >= lastWeekStart && t.published_at.slice(0, 10) <= lastWeekEnd)
     : actualTrades
 
   const index = new Map<string, Map<string, KpiRow[]>>()
@@ -510,3 +510,4 @@ export function TeamPerformanceGrid({
     </div>
   )
 }
+
