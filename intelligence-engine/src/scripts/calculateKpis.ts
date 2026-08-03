@@ -10,20 +10,16 @@ import path from 'node:path'
 function maxDrawdown(trades: { result_r: number }[]): { value: number; sequence_length: number } {
   if (trades.length === 0) return { value: 0, sequence_length: 0 }
 
-  // Build equity curve
   let equity = 0
   let peak = 0
   let maxDD = 0
   let maxSeq = 0
   let currentSeq = 0
-  let inDrawdown = false
 
   for (const t of trades) {
     equity += t.result_r
-
     if (equity > peak) {
       peak = equity
-      inDrawdown = false
       currentSeq = 0
     } else {
       const dd = equity - peak
@@ -80,17 +76,17 @@ async function main() {
   const { data: teamRow } = await db.from('teams').select('team_id').eq('active', true).single()
   const teamId = teamRow?.team_id ?? null
 
-  // Load analyst publications for trigger rate -- more accurate than actual_trades
-  // analyst_publications has both triggered and non-triggered setups from the API
-  // with reconciliation against the corrected backfill
   const windowStart = months[months.length - 1]!.start
 
+  // Load API publications for trigger rate denominator
+  // Only ACUITY_PERFORMANCE_API has both triggered and untriggered setups
   const allPubRows: any[] = []
   let pubPage = 0, pubHasMore = true
   while (pubHasMore) {
     const { data: pubBatch } = await db
       .from('analyst_publications')
       .select('analyst_id, published_at, reconciliation_status')
+      .eq('source_system', 'ACUITY_PERFORMANCE_API')
       .gte('published_at', windowStart)
       .range(pubPage * 1000, pubPage * 1000 + 999)
     if (!pubBatch?.length) { pubHasMore = false } else {
@@ -103,7 +99,7 @@ async function main() {
   // Group publications by analyst_id + month
   const pubsByAnalystMonth = new Map<string, { total: number; triggered: number }>()
   for (const p of allPubRows) {
-    const month = p.published_at.slice(0, 7) // YYYY-MM
+    const month = p.published_at.slice(0, 7)
     const key = `${p.analyst_id}::${month}`
     const existing = pubsByAnalystMonth.get(key) ?? { total: 0, triggered: 0 }
     const isTriggered = p.reconciliation_status === 'WEBHOOK_TRUE'
@@ -122,7 +118,6 @@ async function main() {
       trade:trade_id ( analyst_id, published_at )
     `)
 
-  // Group reviews by analyst_id
   const reviewsByAnalystId = new Map<string, any[]>()
   for (const r of (reviewRows ?? [])) {
     const analystId = (r.trade as any)?.analyst_id
@@ -131,6 +126,8 @@ async function main() {
     reviewsByAnalystId.get(analystId)!.push(r)
   }
   console.log(`  Post-trade reviews loaded: ${reviewRows?.length ?? 0}`)
+
+  // Load all trades
   const PAGE_SIZE = 1000
   const allTrades: any[] = []
   let page = 0, hasMore = true
@@ -164,25 +161,26 @@ async function main() {
       )
       if (monthTrades.length === 0) continue
 
-      // Return (R) -- sum of closed triggered trades only (exclude open/pending)
+      // Return (R) -- sum of closed triggered trades only
       const allTriggered = monthTrades.filter(t => t.triggered)
-      const triggered = allTriggered.filter(t => t.result_r !== null) // closed only
+      const triggered = allTriggered.filter(t => t.result_r !== null)
       const returnR = triggered.reduce((s, t) => s + Number(t.result_r), 0)
 
-      // Win rate -- wins / triggered
+      // Win rate
       const wins = triggered.filter(t => Number(t.result_r) > 0)
       const winRate = triggered.length > 0 ? wins.length / triggered.length : null
 
-      // Trigger rate -- from analyst_publications (has both triggered and non-triggered)
+      // Trigger rate -- API publications as denominator, only when untriggered pubs exist
       const monthKey = `${analyst.analyst_id}::${start.slice(0, 7)}`
       const pubStats = pubsByAnalystMonth.get(monthKey)
-      const triggerRate = pubStats && pubStats.total >= 5
-        ? pubStats.triggered / pubStats.total
+      const hasUntriggered = pubStats && (pubStats.total - pubStats.triggered) > 0
+      const triggerRate = hasUntriggered && pubStats!.total >= 5
+        ? pubStats!.triggered / pubStats!.total
         : null
       const totalSetups = pubStats?.total ?? 0
       const apiTriggered = pubStats?.triggered ?? 0
 
-      // Max drawdown -- on triggered trades only, sorted by date
+      // Max drawdown
       const sortedTriggered = [...triggered].sort((a, b) =>
         a.published_at.localeCompare(b.published_at)
       )
@@ -240,7 +238,7 @@ async function main() {
         })
       }
 
-      // Alignment rate -- from post_trade_reviews for this analyst/month
+      // Alignment rate
       const analystReviews = reviewsByAnalystId.get(analyst.analyst_id) ?? []
       const monthReviews = analystReviews.filter(r => {
         const pubDate = (r.trade as any)?.published_at?.slice(0, 10)
@@ -251,7 +249,6 @@ async function main() {
         const fullyAligned = monthReviews.filter(r => r.alignment_score === 2).length
         const partiallyAligned = monthReviews.filter(r => r.alignment_score === 1).length
         const notAligned = monthReviews.filter(r => r.alignment_score === 0).length
-        // Weighted: full=1.0, partial=0.5, none=0
         const alignmentRate = (fullyAligned + partiallyAligned * 0.5) / monthReviews.length
         kpiRows.push({
           ...baseKpi,
@@ -282,14 +279,14 @@ async function main() {
     }
   }
 
-  console.log(`\nTotal KPI rows: ${kpiRows.length}`)
+  console.log(`Total KPI rows: ${kpiRows.length}`)
 
   if (isDryRun) {
     console.log('\nDRY RUN -- nothing written.')
     return
   }
 
-  console.log('\nReplacing existing KPIs...')
+  console.log('Replacing existing KPIs...')
   const analystIds = analysts.map(a => a.analyst_id)
   const { error: delError } = await db
     .from('executive_kpis')
@@ -308,7 +305,7 @@ async function main() {
     process.stdout.write(`\rInserted ${inserted}/${kpiRows.length}`)
   }
 
-  console.log(`\n\nDone. ${inserted} KPI rows written.`)
+  console.log(`\nDone. ${inserted} KPI rows written.`)
 }
 
 const thisFilePath = fileURLToPath(import.meta.url)
@@ -317,5 +314,3 @@ const invokedDirectly = process.argv[1] !== undefined &&
 if (invokedDirectly) {
   main().catch(err => { console.error('Fatal:', err); process.exit(1) })
 }
-
-
