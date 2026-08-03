@@ -43,7 +43,7 @@ export default async function ManagementPerformancePage() {
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
   const { data: actualTrades } = await supabase
     .from('actual_trades')
-    .select('result_r, triggered, published_at, analyst_id, market:market_id(symbol)')
+    .select('result_r, triggered, published_at, analyst_id')
     .eq('source_system', 'ACUITY_PERFORMANCE_API')
     .gte('published_at', thirtyDaysAgo)
 
@@ -87,6 +87,7 @@ export default async function ManagementPerformancePage() {
     </div>
   )
 }
+
 
 
 
