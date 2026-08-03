@@ -352,7 +352,7 @@ async function main() {
               }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
               console.log(`  ${symbol}: EXPIRY (price unavailable)`)
             } else {
-              const resultR = calcResultR(dir, triggeredPrice, exitPrice, stop)
+              const resultR = calcResultR(dir, trade.entry, exitPrice, trade.stop)
               await db.from('shadow_trade_outcomes').update({
                 trade_outcome_status: resultR >= 0 ? 'CLOSED_PROFIT' : 'CLOSED_LOSS',
                 closed_at: expiresAt.toISOString(),
@@ -392,7 +392,7 @@ async function main() {
 
           // Target hit
           if (targetHit) {
-            const resultR = calcResultR(dir, triggeredPrice, target, stop)
+            const resultR = calcResultR(dir, trade.entry, target, trade.stop)
             await db.from('shadow_trade_outcomes').update({
               trade_outcome_status: 'TARGET_HIT',
               closed_at: new Date(bar.ts * 1000).toISOString(),
@@ -411,7 +411,7 @@ async function main() {
 
           // Stop hit
           if (stopHit) {
-            const resultR = calcResultR(dir, triggeredPrice, stop, stop)
+            const resultR = calcResultR(dir, trade.entry, trade.stop, trade.stop)
             await db.from('shadow_trade_outcomes').update({
               trade_outcome_status: 'STOP_HIT',
               closed_at: new Date(bar.ts * 1000).toISOString(),
@@ -455,4 +455,7 @@ const invokedDirectly = process.argv[1] !== undefined &&
 if (invokedDirectly) {
   main().catch(err => { console.error('Fatal:', err); process.exit(1) })
 }
+
+
+
 
