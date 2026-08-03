@@ -93,9 +93,9 @@ export function TeamPerformanceGrid({
   // Derive active period for KPI lookup
   const now = new Date()
   const dayOfWeek = now.getUTCDay() // 0=Sun, 1=Mon
-  const daysToMonday = (dayOfWeek + 6) % 7
+  const daysToLastMonday = (dayOfWeek + 6) % 7 + 7
   const monday = new Date(now)
-  monday.setUTCDate(now.getUTCDate() - daysToMonday)
+  monday.setUTCDate(now.getUTCDate() - daysToLastMonday)
   monday.setUTCHours(0, 0, 0, 0)
   const friday = new Date(monday)
   friday.setUTCDate(monday.getUTCDate() + 4)
@@ -510,4 +510,3 @@ export function TeamPerformanceGrid({
     </div>
   )
 }
-
