@@ -14,7 +14,7 @@ export default async function ManagementPerformancePage() {
   const year = now.getUTCFullYear()
   const month = now.getUTCMonth()
   const lastMonth = new Date(Date.UTC(year, month - 1, 1))
-  const lastMonthStart = ${lastMonth.getUTCFullYear()}--01`r
+  const lastMonthStart = `${lastMonth.getUTCFullYear()}-${String(lastMonth.getUTCMonth() + 1).padStart(2, '0')}-01`
   const monthStart = `${year}-${String(month + 1).padStart(2, '0')}-01`
 
   const d36 = new Date(Date.UTC(year, month - 35, 1))
