@@ -94,7 +94,7 @@ export default async function ManagementPerformancePage() {
         </a>
       </div>
       <TeamPerformanceGrid
-        analysts={analystsWithData}
+        analysts={(analysts as any[]) ?? []}
         kpiData={analystKpis}
         currentMonthStart={monthStart}
         lastMonthStart={lastMonthStart}
@@ -108,6 +108,7 @@ export default async function ManagementPerformancePage() {
     </div>
   )
 }
+
 
 
 
