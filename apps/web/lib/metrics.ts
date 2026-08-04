@@ -223,7 +223,7 @@ const ROLLING_WINDOWS: { label: string; days: number | null }[] = [
 // Rolling windows are always measured back from "today", independent of whatever
 // date-range preset is active on the page -- this is how institutional rolling-return
 // tables work (a fixed, standard set of lookback periods), not a filtered sub-view.
-export function rollingWindows(trades: MetricsTrade[], pubs: MetricsPublication[], asOf: Date): RollingRow[] {
+export function rollingWindows(trades: MetricsTrade[], asOf: Date): RollingRow[] {
   const triggered = triggeredTrades(trades)
   const earliest = triggered.length > 0
     ? triggered.reduce((min, t) => t.published_at < min ? t.published_at : min, triggered[0]!.published_at).slice(0, 10)
@@ -343,4 +343,52 @@ export function compareSummaries(
 
 export function distinctAnalystCount(trades: MetricsTrade[]): number {
   return new Set(triggeredTrades(trades).map(t => t.analyst_id)).size
+}
+
+export interface TradeStatisticsSummary {
+  winRate: number | null
+  lossRate: number | null
+  avgWinner: number | null
+  avgLoser: number | null
+  avgR: number | null
+  profitFactor: number | null
+  triggerRate: number | null
+  generated: number
+  triggered: number
+  expired: number
+  avgDurationHours: number | null
+}
+
+// "Expired" = published but never triggered (triggered=false, result_r still null) --
+// the ACUITY_PERFORMANCE_API feed records every generated setup, not just triggered
+// ones, so this is derivable directly from `trades` without a separate query.
+export function computeTradeStatistics(trades: MetricsTrade[], pubs: MetricsPublication[]): TradeStatisticsSummary {
+  const triggered = triggeredTrades(trades)
+  const wins = triggered.filter(t => (t.result_r ?? 0) > 0)
+  const losses = triggered.filter(t => (t.result_r ?? 0) < 0)
+  const avgWinner = wins.length > 0 ? wins.reduce((s, t) => s + (t.result_r ?? 0), 0) / wins.length : null
+  const avgLoser = losses.length > 0 ? losses.reduce((s, t) => s + (t.result_r ?? 0), 0) / losses.length : null
+  const expired = trades.filter(t => !t.triggered && t.result_r === null).length
+  const durations = trades
+    .filter(t => t.triggered && t.closed_at)
+    .map(t => (new Date(t.closed_at as string).getTime() - new Date(t.published_at).getTime()) / (60 * 60 * 1000))
+    .filter(h => h >= 0)
+  const avgDurationHours = durations.length > 0 ? durations.reduce((s, h) => s + h, 0) / durations.length : null
+  const wr = winRate(trades)
+  const avg = avgR(trades)
+  const pf = profitFactor(trades)
+
+  return {
+    winRate: wr,
+    lossRate: wr !== null ? round2(1 - wr) : null,
+    avgWinner: avgWinner !== null ? round2(avgWinner) : null,
+    avgLoser: avgLoser !== null ? round2(avgLoser) : null,
+    avgR: avg !== null ? round2(avg) : null,
+    profitFactor: pf !== null ? round2(pf) : null,
+    triggerRate: triggerRate(trades, pubs),
+    generated: pubs.length,
+    triggered: triggered.length,
+    expired,
+    avgDurationHours: avgDurationHours !== null ? Math.round(avgDurationHours * 10) / 10 : null,
+  }
 }
