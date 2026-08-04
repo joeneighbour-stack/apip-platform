@@ -82,6 +82,30 @@ const KPI_COLS = [
   { name: 'alignment_rate', label: 'Alignment' },
 ]
 
+// Prefer ACUITY_PERFORMANCE_API rows over MANUAL_BACKFILL for the same analyst+date --
+// the two sources do genuinely overlap on some dates (backfill re-imports of trades the
+// live webhook already captured), so counting both unconditionally double-counts. But the
+// live feed has real outage gaps (e.g. all of July 2026) where NO API rows exist at all for
+// a date that still has real backfill-sourced trades -- a blanket "API only" filter (the
+// previous fix for the overlap problem) silently zeroes out those weeks instead. This picks
+// the correct source per analyst+day rather than a single global rule.
+function preferApiPerDay(trades: ActualTrade[]): ActualTrade[] {
+  const apiDatesByAnalyst = new Map<string, Set<string>>()
+  for (const t of trades) {
+    if (t.source_system === 'ACUITY_PERFORMANCE_API' && t.analyst_id && t.published_at) {
+      const date = t.published_at.slice(0, 10)
+      if (!apiDatesByAnalyst.has(t.analyst_id)) apiDatesByAnalyst.set(t.analyst_id, new Set())
+      apiDatesByAnalyst.get(t.analyst_id)!.add(date)
+    }
+  }
+  return trades.filter(t => {
+    if (t.source_system === 'ACUITY_PERFORMANCE_API') return true
+    if (!t.analyst_id || !t.published_at) return true
+    const apiDates = apiDatesByAnalyst.get(t.analyst_id)
+    return !apiDates?.has(t.published_at.slice(0, 10))
+  })
+}
+
 function shadowResultR(outcome: ShadowOutcome): number | null {
   if (outcome.result_r !== null) return outcome.result_r
   if (outcome.trade_outcome_status === 'TARGET_HIT') return outcome.shadow_trade?.rr ?? null
@@ -100,15 +124,16 @@ export function TeamPerformanceGrid({
 
   // Filter trades by period. This Month and Last Week are live/in-progress periods computed
   // directly from actualTrades; Last Month is closed and read from the pre-aggregated
-  // executive_kpis table via kpiData. Last Week is always within the ACUITY_PERFORMANCE_API
-  // -covered window, so restrict to that source -- MANUAL_BACKFILL rows for these dates are
-  // historical CSV re-imports of the same trades already captured by the webhook feed, and
-  // counting both double-counts every trade that exists in both sources.
+  // executive_kpis table via kpiData. Last Week used to hard-restrict to ACUITY_PERFORMANCE_API
+  // only (on the assumption it's always within the live-feed-covered window), which silently
+  // zeroed out any week that fell inside a live-feed outage (confirmed: all of July 2026 has
+  // zero API-sourced actual_trades rows despite real MANUAL_BACKFILL trades existing) --
+  // preferApiPerDay() picks the right source per analyst+day instead of one global rule, so
+  // outage weeks still show their real (backfill-sourced) data.
   const periodTrades = period === 'LAST_WEEK'
-    ? actualTrades.filter(t =>
-        t.source_system === 'ACUITY_PERFORMANCE_API' &&
+    ? preferApiPerDay(actualTrades.filter(t =>
         t.published_at && t.published_at.slice(0, 10) >= lastWeekStart && t.published_at.slice(0, 10) <= lastWeekEnd
-      )
+      ))
     : period === 'THIS_MONTH'
     ? actualTrades.filter(t => t.published_at && t.published_at.slice(0, 10) >= currentMonthStart)
     : actualTrades
@@ -143,9 +168,12 @@ export function TeamPerformanceGrid({
     }
   } else {
     // This Month / Last Week: compute live from raw trades per analyst. Total R and win rate
-    // use all triggered trades regardless of source; trigger rate numerator is restricted to
-    // ACUITY_PERFORMANCE_API triggered trades (for Last Week, periodTrades is already API-only,
-    // so `triggered` there is already equivalent to the API-only set).
+    // use all triggered trades regardless of source. Trigger rate numerator is restricted to
+    // ACUITY_PERFORMANCE_API triggered trades for This Month (periodTrades there is an
+    // unfiltered source mix); for Last Week, periodTrades has already been through
+    // preferApiPerDay(), so `triggered` there IS the correct per-day-best-source set already
+    // -- re-restricting to API-only on top of that would zero out the numerator for any week
+    // that fell back to backfill data, undoing the fix above.
     const byAnalyst = new Map<string, ActualTrade[]>()
     for (const t of periodTrades) {
       if (!t.analyst_id) continue
@@ -158,7 +186,7 @@ export function TeamPerformanceGrid({
       const wins = triggered.filter(t => (t.result_r ?? 0) > 0)
       const totalR = triggered.reduce((s, t) => s + (t.result_r ?? 0), 0)
       const winRate = triggered.length > 0 ? wins.length / triggered.length : null
-      const apiTriggered = triggered.filter(t => t.source_system === 'ACUITY_PERFORMANCE_API')
+      const apiTriggered = period === 'LAST_WEEK' ? triggered : triggered.filter(t => t.source_system === 'ACUITY_PERFORMANCE_API')
       const pubTotal = periodPublications.filter(p => p.analyst_id === analyst.analyst_id).length
       const trigRate = pubTotal > 0 ? apiTriggered.length / pubTotal : null
       if (triggered.length > 0) {
@@ -306,7 +334,7 @@ export function TeamPerformanceGrid({
                   const wins = triggered.filter(t => (t.result_r ?? 0) > 0)
                   const totalR = triggered.reduce((s, t) => s + (t.result_r ?? 0), 0)
                   const winRate = triggered.length > 0 ? wins.length / triggered.length : null
-                  const apiTriggered = triggered.filter(t => t.source_system === 'ACUITY_PERFORMANCE_API')
+                  const apiTriggered = period === 'LAST_WEEK' ? triggered : triggered.filter(t => t.source_system === 'ACUITY_PERFORMANCE_API')
                   const pubTotal = periodPublications.filter(p => p.analyst_id === analyst.analyst_id).length
                   const trigRate = pubTotal > 0 ? apiTriggered.length / pubTotal : null
                   const liveVals: Record<string, number | null> = {

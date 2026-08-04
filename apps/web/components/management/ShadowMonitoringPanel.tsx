@@ -163,13 +163,14 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
     ? triggered.reduce((s, o) => s + (o.shadow_trade?.rr ?? 0), 0) / triggered.length
     : null
 
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-  const recentActual = actualTrades.filter(t => t.published_at >= thirtyDaysAgo)
-  const actualTriggered = recentActual.filter(t => t.triggered && t.result_r !== null)
+  // actualTrades already arrives from the server scoped to [first shadow trade date, now] --
+  // no further date slicing here, so this is a genuine like-for-like total against the
+  // "Since Platform Launch" shadow figures above, not a mismatched rolling window.
+  const actualTriggered = actualTrades.filter(t => t.triggered && t.result_r !== null)
   const actualWins = actualTriggered.filter(t => (t.result_r ?? 0) > 0)
   const actualWinRate = actualTriggered.length > 0 ? actualWins.length / actualTriggered.length : null
   const actualTotalR = actualTriggered.reduce((s, t) => s + (t.result_r ?? 0), 0)
-  const actualTriggerRate = recentActual.length > 0 ? actualTriggered.length / recentActual.length : null
+  const actualTriggerRate = actualTrades.length > 0 ? actualTriggered.length / actualTrades.length : null
 
   const byMarket = new Map<string, { symbol: string; assetClass: string; total: number; triggered: number; wins: number; totalR: number; avgRr: number; rrCount: number }>()
   for (const o of shadowOutcomes) {
@@ -311,9 +312,9 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
             </div>
           </div>
           <div className="rounded-lg border border-border bg-card p-4 space-y-2">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Analyst Actual (30 days)</p>
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Analyst Actual (Since Shadow Launch)</p>
             <div className="space-y-1.5">
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Total setups</span><span className="font-medium">{recentActual.length}</span></div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Total setups</span><span className="font-medium">{actualTrades.length}</span></div>
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Triggered</span><span className="font-medium">{actualTriggered.length}</span></div>
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger rate</span><span className="font-medium">{actualTriggerRate !== null ? `${Math.round(actualTriggerRate * 100)}%` : '—'}</span></div>
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate</span><span className="font-medium">{actualWinRate !== null ? `${Math.round(actualWinRate * 100)}%` : '—'}</span></div>

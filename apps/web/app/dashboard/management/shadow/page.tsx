@@ -8,8 +8,8 @@ export default async function ShadowMonitoringPage() {
   if (!['MANAGER', 'ADMIN'].includes(user.role)) redirect('/login')
 
   const supabase = await createClient()
+  // Only used as a fallback floor if shadow_trades is empty (see shadowStartDate below).
   const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
   // Shadow outcomes -- all resolved outcomes for like-for-like comparison
   const { data: shadowOutcomes } = await supabase
@@ -33,16 +33,63 @@ export default async function ShadowMonitoringPage() {
     `)
     .order('shadow_outcome_id', { ascending: false })
 
-  // Actual trades for like-for-like -- last 90 days
-  const { data: actualTrades } = await supabase
-    .from('actual_trades')
-    .select(`
-      trade_id, direction, result_r, triggered, published_at,
-      market:market_id ( symbol, asset_class, market_id )
-    `)
-    .eq('source_system', 'ACUITY_PERFORMANCE_API')
-    .gte('published_at', ninetyDaysAgo)
-    .order('published_at', { ascending: false })
+  // The analyst-actual comparison should span the whole time shadow trading has been
+  // running, not an arbitrary rolling window -- find the earliest shadow trade and use
+  // its date as the floor. Falls back to a 90-day window only if shadow_trades is empty
+  // (e.g. a fresh environment) so this page doesn't break before shadow trading starts.
+  const { data: earliestShadowTrade } = await supabase
+    .from('shadow_trades')
+    .select('generated_at')
+    .order('generated_at', { ascending: true })
+    .limit(1)
+  const shadowStartDate = (earliestShadowTrade as any[] | null)?.[0]?.generated_at?.slice(0, 10) ?? ninetyDaysAgo
+
+  // Fetch ALL actual trades (both source systems) from shadowStartDate to now, paginated --
+  // PostgREST caps responses at 1000 rows regardless of .limit(), and .range() pagination is
+  // only stable with a deterministic tiebreaking .order() (unordered pagination has silently
+  // dropped rows in this codebase before). Both ACUITY_PERFORMANCE_API and MANUAL_BACKFILL are
+  // included because the live feed has real outage gaps (e.g. most of July 2026 has zero
+  // API-sourced rows) that a source_system filter alone would wrongly read as "no trades" --
+  // preferApiPerDay then resolves the rare date where both sources do overlap.
+  const rawActualTrades: any[] = []
+  {
+    const PAGE_SIZE = 1000
+    let page = 0
+    let hasMore = true
+    while (hasMore) {
+      const { data } = await supabase
+        .from('actual_trades')
+        .select(`
+          trade_id, direction, result_r, triggered, published_at, analyst_id, source_system,
+          market:market_id ( symbol, asset_class, market_id )
+        `)
+        .gte('published_at', shadowStartDate)
+        .order('published_at', { ascending: false })
+        .order('trade_id', { ascending: false })
+        .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
+      if (!data?.length) { hasMore = false } else {
+        rawActualTrades.push(...data)
+        hasMore = data.length === PAGE_SIZE
+        page++
+      }
+    }
+  }
+
+  // Same source-preference rule as TeamPerformanceGrid.tsx's preferApiPerDay(): API wins over
+  // backfill for a given analyst+day when both exist, backfill is kept where API has a gap.
+  const apiDatesByAnalyst = new Map<string, Set<string>>()
+  for (const t of rawActualTrades) {
+    if (t.source_system === 'ACUITY_PERFORMANCE_API' && t.analyst_id && t.published_at) {
+      const date = t.published_at.slice(0, 10)
+      if (!apiDatesByAnalyst.has(t.analyst_id)) apiDatesByAnalyst.set(t.analyst_id, new Set())
+      apiDatesByAnalyst.get(t.analyst_id)!.add(date)
+    }
+  }
+  const actualTrades = rawActualTrades.filter(t => {
+    if (t.source_system === 'ACUITY_PERFORMANCE_API') return true
+    if (!t.analyst_id || !t.published_at) return true
+    return !apiDatesByAnalyst.get(t.analyst_id)?.has(t.published_at.slice(0, 10))
+  })
 
   // Sort shadow by date desc
   const sorted = (shadowOutcomes ?? []).sort((a, b) => {
