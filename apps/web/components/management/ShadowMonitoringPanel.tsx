@@ -35,9 +35,15 @@ interface ActualTrade {
   market: { symbol: string; asset_class: string; market_id: string } | null
 }
 
+interface ActualPublication {
+  published_at: string
+  reconciliation_status: string
+}
+
 interface Props {
   shadowOutcomes: ShadowOutcome[]
   actualTrades: ActualTrade[]
+  actualPublications: ActualPublication[]
 }
 
 const STATUS_STYLES: Record<string, string> = {
@@ -81,7 +87,7 @@ function monthLabel(dateStr: string) {
   return d.toLocaleString('en-GB', { day: 'numeric', month: 'short' })
 }
 
-export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
+export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades, actualPublications }: Props) {
   // Live prices for TRIGGERED shadow trades
   const triggeredSymbols = [...new Set(shadowOutcomes
     .filter(o => o.trade_outcome_status === 'TRIGGERED')
@@ -163,14 +169,21 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
     ? triggered.reduce((s, o) => s + (o.shadow_trade?.rr ?? 0), 0) / triggered.length
     : null
 
-  // actualTrades already arrives from the server scoped to [first shadow trade date, now] --
-  // no further date slicing here, so this is a genuine like-for-like total against the
-  // "Since Platform Launch" shadow figures above, not a mismatched rolling window.
+  // "Total setups" and "Triggered"/"Trigger rate" compare against the same universe the
+  // shadow side counts from (a recommendation, not an executed trade) -- analyst_publications,
+  // not actual_trades. Using trade rows here previously undercounted "setups" against shadow's
+  // 586, since a setup that never triggered has a publication but no actual_trades row at all.
+  // Triggered is read straight off reconciliation_status (WEBHOOK_TRUE), the same signal
+  // lib/metrics.ts's canonical triggerRate() and calculateKpis.ts use -- not a join to
+  // actual_trades, which is known to understate this (see lib/metrics.ts comment on
+  // triggerRate()). actualTrades (and its triggered/result_r fields) is still the only source
+  // for Win rate and Total R, since publications don't carry a financial result.
   const actualTriggered = actualTrades.filter(t => t.triggered && t.result_r !== null)
   const actualWins = actualTriggered.filter(t => (t.result_r ?? 0) > 0)
   const actualWinRate = actualTriggered.length > 0 ? actualWins.length / actualTriggered.length : null
   const actualTotalR = actualTriggered.reduce((s, t) => s + (t.result_r ?? 0), 0)
-  const actualTriggerRate = actualTrades.length > 0 ? actualTriggered.length / actualTrades.length : null
+  const actualPublicationsTriggered = actualPublications.filter(p => p.reconciliation_status === 'WEBHOOK_TRUE')
+  const actualTriggerRate = actualPublications.length > 0 ? actualPublicationsTriggered.length / actualPublications.length : null
 
   const byMarket = new Map<string, { symbol: string; assetClass: string; total: number; triggered: number; wins: number; totalR: number; avgRr: number; rrCount: number }>()
   for (const o of shadowOutcomes) {
@@ -314,8 +327,8 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
           <div className="rounded-lg border border-border bg-card p-4 space-y-2">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Analyst Actual (Since Shadow Launch)</p>
             <div className="space-y-1.5">
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Total setups</span><span className="font-medium">{actualTrades.length}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Triggered</span><span className="font-medium">{actualTriggered.length}</span></div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Total setups</span><span className="font-medium">{actualPublications.length}</span></div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Triggered</span><span className="font-medium">{actualPublicationsTriggered.length}</span></div>
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger rate</span><span className="font-medium">{actualTriggerRate !== null ? `${Math.round(actualTriggerRate * 100)}%` : '—'}</span></div>
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate</span><span className="font-medium">{actualWinRate !== null ? `${Math.round(actualWinRate * 100)}%` : '—'}</span></div>
               <div className="flex justify-between text-xs">

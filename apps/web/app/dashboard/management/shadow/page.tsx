@@ -1,5 +1,5 @@
 import { getCurrentUser } from '@/lib/auth'
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { ShadowMonitoringPanel } from '@/components/management/ShadowMonitoringPanel'
 
@@ -8,6 +8,7 @@ export default async function ShadowMonitoringPage() {
   if (!['MANAGER', 'ADMIN'].includes(user.role)) redirect('/login')
 
   const supabase = await createClient()
+  const adminDb = createAdminClient()
   // Only used as a fallback floor if shadow_trades is empty (see shadowStartDate below).
   const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
@@ -91,6 +92,35 @@ export default async function ShadowMonitoringPage() {
     return !apiDatesByAnalyst.get(t.analyst_id)?.has(t.published_at.slice(0, 10))
   })
 
+  // "Total setups" on the analyst side should count the same thing shadow's 586 setups
+  // count: recommendations generated, not trades executed -- a setup that never triggered
+  // has an analyst_publications row but no actual_trades row at all, so counting trades
+  // undercounts against shadow's universe. ACUITY_PERFORMANCE_API only, matching the shadow
+  // era window; analyst_publications RLS scopes MANAGER to only their own managed analysts
+  // (migrations/018_publication_rls.sql), so this needs the service-role client to see the
+  // full team total, same as /api/analytics/publications and the Last Week fetch above.
+  const rawActualPublications: any[] = []
+  {
+    const PAGE_SIZE = 1000
+    let page = 0
+    let hasMore = true
+    while (hasMore) {
+      const { data } = await adminDb
+        .from('analyst_publications')
+        .select('published_at, reconciliation_status')
+        .eq('source_system', 'ACUITY_PERFORMANCE_API')
+        .gte('published_at', shadowStartDate)
+        .order('published_at', { ascending: false })
+        .order('publication_id', { ascending: false })
+        .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
+      if (!data?.length) { hasMore = false } else {
+        rawActualPublications.push(...data)
+        hasMore = data.length === PAGE_SIZE
+        page++
+      }
+    }
+  }
+
   // Sort shadow by date desc
   const sorted = (shadowOutcomes ?? []).sort((a, b) => {
     const dateA = (a.shadow_trade as any)?.opportunity?.date ?? ''
@@ -115,6 +145,7 @@ export default async function ShadowMonitoringPage() {
       <ShadowMonitoringPanel
         shadowOutcomes={sorted}
         actualTrades={actualTrades ?? []}
+        actualPublications={rawActualPublications}
       />
     </div>
   )

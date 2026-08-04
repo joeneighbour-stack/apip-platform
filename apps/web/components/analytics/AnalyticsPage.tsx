@@ -126,13 +126,22 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
   const bestMarkets = useMemo(() => rankAttribution(byMarket, MIN_TRADES_FOR_MARKET_RANKING, 'best'), [byMarket])
   const worstMarkets = useMemo(() => rankAttribution(byMarket, MIN_TRADES_FOR_MARKET_RANKING, 'worst'), [byMarket])
 
+  // Same minimum-sample rule as the market attribution table: a market with only a
+  // couple of trades can produce an eye-catching single result that isn't a genuine
+  // "best performer" signal, so a trade can't appear here unless its own market has hit
+  // MIN_TRADES_FOR_MARKET_RANKING triggered trades in this period.
+  const qualifyingMarketIds = useMemo(
+    () => new Set(byMarket.filter(r => r.trades >= MIN_TRADES_FOR_MARKET_RANKING).map(r => r.key)),
+    [byMarket]
+  )
   const bestTrades = useMemo(() => {
-    const { best } = bestWorstTrades(periodTrades, 10)
+    const qualifyingTrades = periodTrades.filter(t => qualifyingMarketIds.has(t.market_id))
+    const { best } = bestWorstTrades(qualifyingTrades, 10)
     return best.map(t => ({
       date: t.published_at.slice(0, 10), symbol: t.symbol,
       analystName: analystNameById.get(t.analyst_id) ?? 'Unknown', direction: t.direction, resultR: t.result_r ?? 0,
     }))
-  }, [periodTrades, analystNameById])
+  }, [periodTrades, qualifyingMarketIds, analystNameById])
 
   const universe = useMemo(() => describeUniverse(filters, dateRange, markets, analysts), [filters, dateRange, markets, analysts])
 
