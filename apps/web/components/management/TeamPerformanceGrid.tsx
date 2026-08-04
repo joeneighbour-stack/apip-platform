@@ -97,9 +97,15 @@ export function TeamPerformanceGrid({
 
   const activePeriodStart = period === 'LAST_MONTH' ? lastMonthStart : currentMonthStart
 
-  // Filter trades by period
+  // Filter trades by period. Last Week is always within the ACUITY_PERFORMANCE_API-covered
+  // window, so restrict to that source -- MANUAL_BACKFILL rows for these dates are historical
+  // CSV re-imports of the same trades already captured by the webhook feed, and counting both
+  // double-counts every trade that exists in both sources.
   const periodTrades = period === 'LAST_WEEK'
-    ? actualTrades.filter(t => t.published_at && t.published_at.slice(0, 10) >= lastWeekStart && t.published_at.slice(0, 10) <= lastWeekEnd)
+    ? actualTrades.filter(t =>
+        t.source_system === 'ACUITY_PERFORMANCE_API' &&
+        t.published_at && t.published_at.slice(0, 10) >= lastWeekStart && t.published_at.slice(0, 10) <= lastWeekEnd
+      )
     : actualTrades
 
   const index = new Map<string, Map<string, KpiRow[]>>()

@@ -40,13 +40,33 @@ export default async function ManagementPerformancePage() {
       shadow_trade:shadow_trade_id ( rr )
     `)
 
+  // Supabase/PostgREST caps responses at 1000 rows server-side regardless of .limit() --
+  // paginate with .range() to fetch all trades in the window (~1200+ rows in a 30-day span).
+  // .range() pagination is only stable with an explicit deterministic .order() -- without one,
+  // Postgres doesn't guarantee consistent row order across separate paginated queries, which
+  // silently drops rows between page boundaries (confirmed: caused specific analysts' trades
+  // to disappear from later pages even though the total row count looked correct).
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-  const { data: actualTrades } = await supabase
-    .from('actual_trades')
-    .select('result_r, triggered, published_at, analyst_id, source_system')
-    .in('source_system', ['ACUITY_PERFORMANCE_API', 'MANUAL_BACKFILL'])
-    .gte('published_at', thirtyDaysAgo)
-    .limit(5000)
+  const actualTrades: any[] = []
+  {
+    const PAGE_SIZE = 1000
+    let page = 0
+    let hasMore = true
+    while (hasMore) {
+      const { data } = await supabase
+        .from('actual_trades')
+        .select('result_r, triggered, published_at, analyst_id, source_system')
+        .in('source_system', ['ACUITY_PERFORMANCE_API', 'MANUAL_BACKFILL'])
+        .gte('published_at', thirtyDaysAgo)
+        .order('trade_id', { ascending: true })
+        .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
+      if (!data?.length) { hasMore = false } else {
+        actualTrades.push(...data)
+        hasMore = data.length === PAGE_SIZE
+        page++
+      }
+    }
+  }
 
   // Fetch last week API publications for trigger rate denominator
   const lwNow = new Date()
