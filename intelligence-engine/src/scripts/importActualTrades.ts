@@ -113,6 +113,9 @@ async function main() {
   // Hard floor -- manual backfill is source of truth before this date
   const MIN_API_DATE = '2026-06-19'
 
+  const syncDaysBackEnv = process.env.SYNC_DAYS_BACK
+  const syncDaysBack = syncDaysBackEnv ? Number(syncDaysBackEnv) : null
+
   let fromDate: string
   let toDate = toArg ?? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
@@ -123,6 +126,14 @@ async function main() {
       console.log(`  Warning: --from=${fromArg} is before MIN_API_DATE, clamped to ${MIN_API_DATE}`)
     }
     console.log(`Sync window: ${fromDate} → ${toDate} (explicit)`)
+  } else if (syncDaysBack !== null && !Number.isNaN(syncDaysBack)) {
+    // SYNC_DAYS_BACK env override -- start date is today minus N days
+    const daysBackDate = new Date(Date.now() - syncDaysBack * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    fromDate = daysBackDate < MIN_API_DATE ? MIN_API_DATE : daysBackDate
+    if (daysBackDate < MIN_API_DATE) {
+      console.log(`  Warning: SYNC_DAYS_BACK=${syncDaysBack} resolves before MIN_API_DATE, clamped to ${MIN_API_DATE}`)
+    }
+    console.log(`Sync window: ${fromDate} → ${toDate} (SYNC_DAYS_BACK=${syncDaysBack} override)`)
   } else {
     // Find last successful ACUITY_PERFORMANCE_API sync
     const { data: lastBatch } = await db
@@ -199,24 +210,41 @@ async function main() {
   console.log(`\nFetching from webhook...`)
   const fetchStart = Date.now()
 
+  const MAX_FETCH_ATTEMPTS = 3
+  const RETRY_DELAY_MS = 5000
+
   let rawTrades: any[] = []
-  try {
-    const credentials = Buffer.from(`${WEBHOOK_USERNAME}:${WEBHOOK_PASSWORD}`).toString('base64')
-    const res = await fetch(WEBHOOK_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Basic ${credentials}`,
-      },
-      body: JSON.stringify({ from: fromDate, to: toDate }),
-    })
-    if (!res.ok) {
-      console.error(`Webhook returned HTTP ${res.status}`)
-      process.exit(1)
+  let fetchSucceeded = false
+  let lastFetchError = ''
+
+  for (let attempt = 1; attempt <= MAX_FETCH_ATTEMPTS; attempt++) {
+    try {
+      const credentials = Buffer.from(`${WEBHOOK_USERNAME}:${WEBHOOK_PASSWORD}`).toString('base64')
+      const res = await fetch(WEBHOOK_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Basic ${credentials}`,
+        },
+        body: JSON.stringify({ from: fromDate, to: toDate }),
+      })
+      if (!res.ok) {
+        throw new Error(`Webhook returned HTTP ${res.status}`)
+      }
+      rawTrades = await res.json()
+      fetchSucceeded = true
+      break
+    } catch (err) {
+      lastFetchError = (err as Error).message
+      console.error(`Webhook fetch attempt ${attempt}/${MAX_FETCH_ATTEMPTS} failed: ${lastFetchError}`)
+      if (attempt < MAX_FETCH_ATTEMPTS) {
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS))
+      }
     }
-    rawTrades = await res.json()
-  } catch (err) {
-    console.error('Webhook fetch failed:', (err as Error).message)
+  }
+
+  if (!fetchSucceeded) {
+    console.error(`\nWebhook fetch failed after ${MAX_FETCH_ATTEMPTS} attempts. Last error: ${lastFetchError}`)
     process.exit(1)
   }
 
