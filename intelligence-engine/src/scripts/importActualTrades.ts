@@ -180,6 +180,38 @@ async function main() {
   console.log(`\nAnalysts mapped: ${analystIdByCode.size}/${Object.keys(ANALYST_CODE_MAP).length}`)
   console.log(`Markets in DB: ${markets?.length ?? 0}`)
 
+  // ── Load existing MANUAL_BACKFILL trades for the sync window ────────────────
+  // The webhook feed and the historical CSV backfill can both cover the same real
+  // trade for dates at/after MIN_API_DATE (the backfill file wasn't cut off exactly
+  // at the API cutover) -- without this check, importing inserts a second,
+  // ACUITY_PERFORMANCE_API-sourced row for a trade that already exists as
+  // MANUAL_BACKFILL, double-counting it in every downstream R calculation.
+  // Paginated with a deterministic order: .range() without one doesn't guarantee
+  // stable results across pages and can silently drop rows on a table this size.
+  const backfillKeys = new Set<string>()
+  {
+    const PAGE_SIZE = 1000
+    let page = 0
+    let hasMore = true
+    while (hasMore) {
+      const { data } = await db
+        .from('actual_trades')
+        .select('analyst_id, market_id, direction, published_at')
+        .eq('source_system', 'MANUAL_BACKFILL')
+        .gte('published_at', fromDate)
+        .order('trade_id', { ascending: true })
+        .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
+      if (!data?.length) { hasMore = false } else {
+        for (const t of data) {
+          backfillKeys.add(`${t.analyst_id}::${t.market_id}::${t.direction}::${t.published_at.slice(0, 10)}`)
+        }
+        hasMore = data.length === PAGE_SIZE
+        page++
+      }
+    }
+  }
+  console.log(`MANUAL_BACKFILL trades in sync window: ${backfillKeys.size} (dedup keys)`)
+
   // ── Start import batch ───────────────────────────────────────────────────
   let batchId: string | null = null
   if (!isDryRun) {
@@ -262,7 +294,7 @@ async function main() {
   console.log(`  Analyst trades: ${analystTrades.length}, Pattern (skipped): ${patternCount}`)
 
   // ── Normalise and upsert ─────────────────────────────────────────────────
-  let successRows = 0, duplicateRows = 0, errorRows = 0, outOfScopeRows = 0
+  let successRows = 0, duplicateRows = 0, errorRows = 0, outOfScopeRows = 0, skippedBackfill = 0
   let unknownAnalysts = new Set<string>()
   let unknownSymbols = new Set<string>()
   const tradeRows: any[] = []
@@ -297,6 +329,12 @@ async function main() {
 
     // Skip trades with no entry price
     if (t.Entry == null) { errorRows++; continue }
+
+    // Skip trades that already exist as MANUAL_BACKFILL for this analyst/market/
+    // direction/day -- inserting an API-sourced row alongside it would double-count
+    // the same real trade in every downstream R calculation.
+    const dedupKey = `${analystId}::${marketId}::${direction}::${String(t.PublicationDate).slice(0, 10)}`
+    if (backfillKeys.has(dedupKey)) { skippedBackfill++; continue }
 
     tradeRows.push({
       source_system: 'ACUITY_PERFORMANCE_API',
@@ -458,6 +496,7 @@ async function main() {
   console.log(`Updated:          ${duplicateRows}`)
   console.log(`Out of scope:     ${outOfScopeRows} (equities not in APIP universe)`)
   console.log(`Errors:           ${errorRows}`)
+  console.log(`Skipped backfill: ${skippedBackfill} (already exist as MANUAL_BACKFILL)`)
 
   if (unknownAnalysts.size > 0) {
     console.log(`Unknown analysts: ${[...unknownAnalysts].join(', ')}`)
