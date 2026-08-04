@@ -33,6 +33,8 @@ interface TeamPerformanceGridProps {
   actualTrades: ActualTrade[]
   shadowKpiData: { kpi_name: string; kpi_value: any; period_start: string }[]
   lastWeekPublications?: { analyst_id: string; reconciliation_status: string }[]
+  lastWeekStart: string
+  lastWeekEnd: string
 }
 
 type Period = 'THIS_MONTH' | 'LAST_MONTH' | 'LAST_WEEK'
@@ -88,26 +90,14 @@ function shadowResultR(outcome: ShadowOutcome): number | null {
 
 export function TeamPerformanceGrid({
   analysts, kpiData, currentMonthStart, lastMonthStart, shadowOutcomes, actualTrades, shadowKpiData,
-  lastWeekPublications = []
+  lastWeekPublications = [], lastWeekStart, lastWeekEnd
 }: TeamPerformanceGridProps) {
   const [period, setPeriod] = useState<Period>('THIS_MONTH')
 
-  // Last week date range (Mon-Fri of previous week)
-  const now = new Date()
-  const dayOfWeek = now.getUTCDay()
-  const daysToLastMonday = (dayOfWeek + 6) % 7 + 7
-  const monday = new Date(now)
-  monday.setUTCDate(now.getUTCDate() - daysToLastMonday)
-  monday.setUTCHours(0, 0, 0, 0)
-  const friday = new Date(monday)
-  friday.setUTCDate(monday.getUTCDate() + 4)
-  friday.setUTCHours(23, 59, 59, 999)
-  const lastWeekStart = monday.toISOString().slice(0, 10)
-  const lastWeekEnd = friday.toISOString().slice(0, 10)
-
   const activePeriodStart = period === 'LAST_MONTH' ? lastMonthStart : currentMonthStart
 
-  // Filter trades by period
+  // Filter trades by period. lastWeekStart/lastWeekEnd come from the server (page.tsx) so
+  // this range always matches the one used to fetch lastWeekPublications.
   const periodTrades = period === 'LAST_WEEK'
     ? actualTrades.filter(t => t.published_at && t.published_at.slice(0, 10) >= lastWeekStart && t.published_at.slice(0, 10) <= lastWeekEnd)
     : actualTrades

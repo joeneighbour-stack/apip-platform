@@ -46,6 +46,7 @@ export default async function ManagementPerformancePage() {
     .select('result_r, triggered, published_at, analyst_id, source_system')
     .in('source_system', ['ACUITY_PERFORMANCE_API', 'MANUAL_BACKFILL'])
     .gte('published_at', thirtyDaysAgo)
+    .limit(5000)
 
   // Fetch last week API publications for trigger rate denominator
   const lwNow = new Date()
@@ -101,6 +102,8 @@ export default async function ManagementPerformancePage() {
         actualTrades={(actualTrades as any[]) ?? []}
         shadowKpiData={shadowKpiData}
         lastWeekPublications={(lastWeekPubs as any[]) ?? []}
+        lastWeekStart={lwStart}
+        lastWeekEnd={lwEnd}
       />
     </div>
   )
