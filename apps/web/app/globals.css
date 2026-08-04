@@ -24,3 +24,14 @@
     font-feature-settings: "rlig" 1, "calt" 1;
   }
 }
+
+/* Institutional PDF report: dedicated A4 print layout, no dashboard chrome. */
+@media print {
+  @page {
+    size: A4;
+    margin: 16mm 14mm;
+  }
+  html, body {
+    background: white !important;
+  }
+}
