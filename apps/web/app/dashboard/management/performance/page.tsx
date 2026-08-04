@@ -85,6 +85,13 @@ export default async function ManagementPerformancePage() {
     .gte('published_at', lwStart)
     .lte('published_at', lwEnd + 'T23:59:59Z')
 
+  // Fetch this month's API publications for trigger rate denominator (month-to-date)
+  const { data: thisMonthPubs } = await adminDb
+    .from('analyst_publications')
+    .select('analyst_id, reconciliation_status')
+    .eq('source_system', 'ACUITY_PERFORMANCE_API')
+    .gte('published_at', monthStart)
+
   // Admin client bypasses RLS to read INTERNAL_ONLY shadow KPIs
   const { data: shadowKpiRows } = await adminDb
     .from('executive_kpis')
@@ -124,6 +131,7 @@ export default async function ManagementPerformancePage() {
         lastWeekPublications={(lastWeekPubs as any[]) ?? []}
         lastWeekStart={lwStart}
         lastWeekEnd={lwEnd}
+        thisMonthPublications={(thisMonthPubs as any[]) ?? []}
       />
     </div>
   )
