@@ -13,6 +13,7 @@ import {
 } from '@/lib/analyticsFilters'
 import { resolveDateRange, resolveComparisonRange, SINCE_INCEPTION_FLOOR } from '@/lib/dateRanges'
 import { formatDate } from '@/lib/format'
+import type { DefaultAnalyticsView } from '@/lib/analyticsCache'
 import { AnalyticsFilters } from './AnalyticsFilters'
 import { UniverseSummary } from './UniverseSummary'
 import { PerformanceKpiStrip } from './PerformanceKpiStrip'
@@ -51,32 +52,68 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
   })
   const [trades, setTrades] = useState<MetricsTrade[]>([])
   const [pubs, setPubs] = useState<MetricsPublication[]>([])
+  const [rawDataLoaded, setRawDataLoaded] = useState(false)
   const [loading, setLoading] = useState(true)
   const [reportOpen, setReportOpen] = useState(false)
+  const [cachedView, setCachedView] = useState<DefaultAnalyticsView | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
 
-  useEffect(() => {
+  // "Since Inception / All Analysts / All Markets" with nothing else applied -- the one
+  // view worth serving from the server-side cache (see lib/analyticsCache.ts). Never true
+  // for the analyst-locked view: a locked analyst is itself a filter.
+  const isDefaultView = !lockedAnalystId &&
+    filters.datePreset === 'SINCE_INCEPTION' && filters.product === 'ALL' &&
+    filters.analystIds.length === 0 && filters.assetClasses.length === 0 &&
+    filters.marketIds.length === 0 && filters.directions.length === 0 &&
+    filters.sessions.length === 0 && filters.triggerStatus === 'ALL'
+
+  function normaliseTrades(tradeRows: any[]): MetricsTrade[] {
+    return (tradeRows ?? []).map((t: any) => ({
+      analyst_id: t.analyst_id,
+      market_id: t.market?.market_id ?? '',
+      symbol: t.market?.symbol ?? 'Unknown',
+      asset_class: t.market?.asset_class ?? 'Unknown',
+      direction: t.direction,
+      session: t.session ?? null,
+      source_system: t.source_system,
+      triggered: t.triggered,
+      result_r: t.result_r,
+      published_at: t.published_at,
+      closed_at: t.closed_at,
+    }))
+  }
+
+  function fetchRawData(): Promise<void> {
     const analystParam = lockedAnalystId ? `&analystId=${lockedAnalystId}` : ''
-    Promise.all([
+    return Promise.all([
       fetch(`/api/analytics/trades?from=${SINCE_INCEPTION_FLOOR}${analystParam}`).then(r => r.json()),
       fetch(`/api/analytics/publications?from=${SINCE_INCEPTION_FLOOR}${analystParam}`).then(r => r.json()),
     ]).then(([tradeRows, pubRows]) => {
-      const normalisedTrades: MetricsTrade[] = (tradeRows ?? []).map((t: any) => ({
-        analyst_id: t.analyst_id,
-        market_id: t.market?.market_id ?? '',
-        symbol: t.market?.symbol ?? 'Unknown',
-        asset_class: t.market?.asset_class ?? 'Unknown',
-        direction: t.direction,
-        session: t.session ?? null,
-        source_system: t.source_system,
-        triggered: t.triggered,
-        result_r: t.result_r,
-        published_at: t.published_at,
-        closed_at: t.closed_at,
-      }))
-      setTrades(normalisedTrades)
+      setTrades(normaliseTrades(tradeRows))
       setPubs(pubRows ?? [])
-      setLoading(false)
-    }).catch(() => setLoading(false))
+      setRawDataLoaded(true)
+    })
+  }
+
+  // On the default view: show the cheap pre-computed cache immediately (fast first paint
+  // for "the most expensive query and most common access pattern"), then fetch the full
+  // raw dataset in the background anyway -- not for this render, but so filtering/Report
+  // Builder work instantly the moment the user touches a filter, instead of only starting
+  // that fetch reactively once they do. On any other view, this is unchanged from before:
+  // fetch raw and compute everything client-side.
+  useEffect(() => {
+    if (isDefaultView) {
+      fetch('/api/analytics/summary').then(r => r.json()).then((data: DefaultAnalyticsView) => {
+        setCachedView(data)
+        setLoading(false)
+      }).catch(() => setLoading(false))
+      fetchRawData().catch(() => {})
+    } else {
+      fetchRawData().then(() => setLoading(false)).catch(() => setLoading(false))
+    }
+    // Intentionally runs once on mount only -- filtering below is all client-side against
+    // the fetched dataset, matching the page's existing (pre-cache) behaviour.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   function updateFilters(next: AnalyticsFilterState) {
@@ -151,6 +188,56 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
     return formatDate(latest.slice(0, 10))
   }, [trades, today])
 
+  // Only the default view can be served from cache, and only once it's actually arrived --
+  // every other rendered value below falls back to the normal client-computed pipeline
+  // above, completely unchanged, the moment any filter takes this out of the default state.
+  const useCache = isDefaultView && cachedView !== null
+  const displaySummary = useCache ? cachedView!.summary : summary
+  const displayPrevious = useCache ? null : previousSummary
+  const displayCumulative = useCache ? cachedView!.cumulative : cumulative
+  const displayDrawdown = useCache ? cachedView!.drawdown : drawdown
+  const displayRolling = useCache ? cachedView!.rolling : rolling
+  const displayMonthly = useCache ? cachedView!.monthly : monthly
+  const displayTradeStats = useCache ? cachedView!.tradeStats : tradeStats
+  const displayDistribution = useCache ? cachedView!.distribution : distribution
+  const displayByAnalyst = useCache ? cachedView!.byAnalyst : byAnalyst
+  const displayByAssetClass = useCache ? cachedView!.byAssetClass : byAssetClass
+  const displayByMarket = useCache ? cachedView!.byMarket : byMarket
+  const displayBestMarkets = useCache ? cachedView!.bestMarkets : bestMarkets
+  const displayWorstMarkets = useCache ? cachedView!.worstMarkets : worstMarkets
+  const displayBestTrades = useCache ? cachedView!.bestTrades : bestTrades
+  const displayUniverse = useCache ? cachedView!.universe : universe
+  const displayTradeCount = useCache ? cachedView!.tradeCount : triggeredTrades(periodTrades).length
+
+  const lastUpdatedLabel = useMemo(() => {
+    if (!cachedView) return null
+    const ms = Date.now() - new Date(cachedView.computedAt).getTime()
+    const mins = Math.max(0, Math.round(ms / 60_000))
+    if (mins < 1) return 'Last updated: just now'
+    if (mins === 1) return 'Last updated: 1 minute ago'
+    if (mins < 60) return `Last updated: ${mins} minutes ago`
+    const hours = Math.round(mins / 60)
+    return `Last updated: ${hours} hour${hours === 1 ? '' : 's'} ago`
+  }, [cachedView])
+
+  async function handleRefresh() {
+    setRefreshing(true)
+    try {
+      const data = await fetch('/api/analytics/summary?force=true').then(r => r.json())
+      setCachedView(data)
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
+  // Report Builder needs the raw trade/publication rows (it computes its own report-safe
+  // projection from them), not the pre-aggregated cache -- fetch them now if the page
+  // loaded straight into the cached default view and the background fetch hasn't landed yet.
+  async function handleGenerateReport() {
+    if (!rawDataLoaded) await fetchRawData().catch(() => {})
+    setReportOpen(true)
+  }
+
   if (loading) {
     return (
       <div className="rounded-lg border border-border p-12 text-center space-y-3">
@@ -172,43 +259,55 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
 
       <div className="flex items-start justify-between gap-4">
         <UniverseSummary
-          title={universe.title} periodLabel={universe.periodLabel} segments={universe.segments}
-          analystSegment={universe.analystSegment} redactAnalysts={false}
-          tradeCount={triggeredTrades(periodTrades).length}
+          title={displayUniverse.title} periodLabel={displayUniverse.periodLabel} segments={displayUniverse.segments}
+          analystSegment={displayUniverse.analystSegment} redactAnalysts={false}
+          tradeCount={displayTradeCount}
         />
-        <button onClick={() => setReportOpen(true)}
-          className="shrink-0 text-xs px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
-          Generate Report
-        </button>
+        <div className="flex shrink-0 items-center gap-3">
+          {useCache && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">{lastUpdatedLabel}</span>
+              <button onClick={handleRefresh} disabled={refreshing}
+                title="Bypass the cache and recompute now"
+                className="text-xs px-2.5 py-1.5 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 disabled:opacity-50 transition-colors">
+                {refreshing ? 'Refreshing...' : 'Refresh'}
+              </button>
+            </div>
+          )}
+          <button onClick={handleGenerateReport}
+            className="text-xs px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
+            Generate Report
+          </button>
+        </div>
       </div>
 
-      <PerformanceKpiStrip summary={summary} previous={previousSummary} comparisonLabel={comparison.label} />
+      <PerformanceKpiStrip summary={displaySummary} previous={displayPrevious} comparisonLabel={comparison.label} />
 
-      <CumulativePerformanceChart data={cumulative} />
-      <DrawdownChart data={drawdown} />
+      <CumulativePerformanceChart data={displayCumulative} />
+      <DrawdownChart data={displayDrawdown} />
 
-      <RollingPerformanceTable rows={rolling} />
-      <MonthlyPerformanceMatrix rows={monthly} />
+      <RollingPerformanceTable rows={displayRolling} />
+      <MonthlyPerformanceMatrix rows={displayMonthly} />
 
       <section className="space-y-4">
         <h2 className="text-sm font-medium">Performance Attribution</h2>
-        {!lockedAnalystId && <AttributionTable title="By Analyst" rows={byAnalyst} />}
-        <AttributionTable title="By Asset Class" rows={byAssetClass} />
-        <AttributionTable title="By Market" rows={byMarket} minTrades={10} entityLabel="Markets" />
+        {!lockedAnalystId && <AttributionTable title="By Analyst" rows={displayByAnalyst} />}
+        <AttributionTable title="By Asset Class" rows={displayByAssetClass} />
+        <AttributionTable title="By Market" rows={displayByMarket} minTrades={10} entityLabel="Markets" />
       </section>
 
-      <ContributionChart title="Contribution by Market" rows={byMarket} />
+      <ContributionChart title="Contribution by Market" rows={displayByMarket} />
 
-      <TradeStatistics stats={tradeStats} distribution={distribution} />
+      <TradeStatistics stats={displayTradeStats} distribution={displayDistribution} />
 
       <section className="space-y-4">
         <h2 className="text-sm font-medium">Best / Worst Performance</h2>
-        <BestPerformers best={bestTrades} />
+        <BestPerformers best={displayBestTrades} />
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <AttributionTable title={`Best Performing Markets (min ${MIN_TRADES_FOR_MARKET_RANKING} trades)`}
-            rows={bestMarkets} showMaxDD={false} />
+            rows={displayBestMarkets} showMaxDD={false} />
           <AttributionTable title={`Worst Performing Markets (min ${MIN_TRADES_FOR_MARKET_RANKING} trades)`}
-            rows={worstMarkets} showMaxDD={false} />
+            rows={displayWorstMarkets} showMaxDD={false} />
         </div>
       </section>
 

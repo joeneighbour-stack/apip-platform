@@ -1,0 +1,19 @@
+name: Warm Analytics Cache
+
+on:
+  schedule:
+    # 06:00 UTC weekdays -- after the morning import/engine runs, so the cache reflects
+    # the day's fresh data rather than warming with yesterday's numbers.
+    - cron: '0 6 * * 1-5'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  warm-cache:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Hit /api/analytics/warm-cache
+        run: |
+          curl --fail --silent --show-error \
+            -H "x-warm-cache-secret: ${{ secrets.ANALYTICS_WARM_CACHE_SECRET }}" \
+            "${{ secrets.APP_BASE_URL }}/api/analytics/warm-cache"
