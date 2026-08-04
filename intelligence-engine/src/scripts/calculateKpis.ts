@@ -286,13 +286,14 @@ async function main() {
     return
   }
 
-  console.log('Replacing existing KPIs...')
+  console.log(`Replacing existing KPIs from ${windowStart} onward...`)
   const analystIds = analysts.map(a => a.analyst_id)
   const { error: delError } = await db
     .from('executive_kpis')
     .delete()
     .in('analyst_id', analystIds)
     .in('kpi_name', ['total_return_r', 'return_r', 'win_rate', 'triggered_rate', 'trigger_rate', 'max_drawdown', 'alignment_rate'])
+    .gte('period_start', windowStart)
 
   if (delError) { console.error('Delete error:', delError.message); process.exit(1) }
 
