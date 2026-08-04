@@ -1,7 +1,8 @@
+import { Suspense } from 'react'
 import { getCurrentUser } from '@/lib/auth'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { PerformanceAnalyticsClient } from '@/components/analytics/PerformanceAnalyticsClient'
+import { AnalyticsPage } from '@/components/analytics/AnalyticsPage'
 
 export default async function PerformanceAnalyticsPage() {
   const user = await getCurrentUser()
@@ -21,16 +22,18 @@ export default async function PerformanceAnalyticsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
+      <div className="print:hidden">
         <h1 className="text-xl font-semibold">Performance Analytics</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Deep dive into performance drivers across analysts, markets, and time periods
+          Institutional-style performance analysis across analysts, markets, and time periods
         </p>
       </div>
-      <PerformanceAnalyticsClient
-        analysts={analysts ?? []}
-        markets={markets ?? []}
-      />
+      <Suspense>
+        <AnalyticsPage
+          analysts={(analysts as any[]) ?? []}
+          markets={(markets as any[]) ?? []}
+        />
+      </Suspense>
     </div>
   )
 }
