@@ -41,7 +41,10 @@ export default async function AnalystProfilePage({ params }: PageProps) {
   const today = new Date().toISOString().slice(0, 10)
   const now = new Date()
   const monthStart = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`
-  const twoYearsAgo = new Date(now.getFullYear() - 2, now.getMonth(), 1).toISOString().split('T')[0]
+  // Full history floor -- the KPI backfill and actual_trades import both cover back to
+  // 2017, and "All Time Trades" / KPI History are meant to show the whole thing, not a
+  // recent window. Previously capped at 2 years, which silently truncated both queries.
+  const historyFloor = '2015-01-01'
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
   // Fetch analyst details
@@ -104,7 +107,7 @@ export default async function AnalystProfilePage({ params }: PageProps) {
     .from('executive_kpis')
     .select('kpi_name, kpi_value, period_start, period_end')
     .eq('analyst_id', analystId)
-    .gte('period_start', twoYearsAgo)
+    .gte('period_start', historyFloor)
     .order('period_start', { ascending: true })
 
   const kpis = (kpiTrend ?? []).filter((k: any) => k.period_start === monthStart)
@@ -130,8 +133,9 @@ export default async function AnalystProfilePage({ params }: PageProps) {
         market:market_id ( symbol, asset_class )
       `)
       .eq('analyst_id', analystId)
-      .gte('published_at', twoYearsAgo)
+      .gte('published_at', historyFloor)
       .order('published_at', { ascending: false })
+      .order('trade_id', { ascending: false })
       .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
     if (!batch?.length) { hasMore = false } else {
       allTrades.push(...batch)

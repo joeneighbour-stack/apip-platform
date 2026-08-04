@@ -96,36 +96,36 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
   const [dateRangeDays, setDateRangeDays] = useState(1)
   const [comparisonWindow, setComparisonWindow] = useState(30)
 
-  const likeForLike = useMemo(() => {
+  // Simple aggregate comparison: all shadow trade outcomes vs all analyst actual
+  // trades for the period, grouped by date only -- not restricted to markets
+  // triggered by both. A prior version keyed both sides by `marketId::date`, which
+  // zeroed out analyst R for any day the analyst didn't trade the exact same market
+  // as a given shadow setup, and could double-count analyst R when multiple shadow
+  // outcomes existed for the same market/date.
+  const dailyComparison = useMemo(() => {
     const cutoff = new Date(Date.now() - comparisonWindow * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-    const actualByMarketDate = new Map<string, number>()
+
+    const actualRByDate = new Map<string, number>()
     for (const at of actualTrades) {
-      const marketId = (at.market as any)?.market_id
       const date = at.published_at.slice(0, 10)
-      if (!marketId || date < cutoff) continue
-      const key = `${marketId}::${date}`
-      const existing = actualByMarketDate.get(key) ?? 0
+      if (date < cutoff) continue
       const r = at.triggered && at.result_r !== null ? Number(at.result_r) : 0
-      actualByMarketDate.set(key, existing + r)
+      actualRByDate.set(date, (actualRByDate.get(date) ?? 0) + r)
     }
 
     const dailyData = new Map<string, { date: string; shadowR: number; analystR: number; count: number }>()
     for (const outcome of shadowOutcomes) {
-      const st = outcome.shadow_trade
-      const opp = st?.opportunity
-      const market = opp?.market
+      const opp = outcome.shadow_trade?.opportunity
       if (!opp?.date || opp.date < cutoff) continue
       const shadowR = shadowResultR(outcome) ?? 0
-      const marketId = market?.market_id
-      const key = `${marketId}::${opp.date}`
-      const analystR = actualByMarketDate.get(key) ?? 0
-      const existing = dailyData.get(opp.date) ?? { date: opp.date, shadowR: 0, analystR: 0, count: 0 }
-      dailyData.set(opp.date, {
-        date: opp.date,
-        shadowR: existing.shadowR + shadowR,
-        analystR: existing.analystR + analystR,
-        count: existing.count + 1,
-      })
+      const existing = dailyData.get(opp.date) ?? { date: opp.date, shadowR: 0, analystR: actualRByDate.get(opp.date) ?? 0, count: 0 }
+      dailyData.set(opp.date, { ...existing, shadowR: existing.shadowR + shadowR, count: existing.count + 1 })
+    }
+    // Days with analyst trades but no shadow outcome shouldn't be dropped -- the
+    // analyst side of the comparison covers the whole period, not just days the
+    // shadow engine also produced a setup.
+    for (const [date, r] of actualRByDate.entries()) {
+      if (!dailyData.has(date)) dailyData.set(date, { date, shadowR: 0, analystR: r, count: 0 })
     }
 
     const sorted = [...dailyData.values()].sort((a, b) => a.date.localeCompare(b.date))
@@ -145,8 +145,8 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
     })
   }, [shadowOutcomes, actualTrades, comparisonWindow])
 
-  const totalShadowR = likeForLike.length > 0 ? likeForLike[likeForLike.length - 1]!.cumulativeShadowR : 0
-  const totalAnalystR = likeForLike.length > 0 ? likeForLike[likeForLike.length - 1]!.cumulativeAnalystR : 0
+  const totalShadowR = dailyComparison.length > 0 ? dailyComparison[dailyComparison.length - 1]!.cumulativeShadowR : 0
+  const totalAnalystR = dailyComparison.length > 0 ? dailyComparison[dailyComparison.length - 1]!.cumulativeAnalystR : 0
   const deltaR = totalShadowR - totalAnalystR
 
   const triggered = shadowOutcomes.filter(o =>
@@ -215,10 +215,10 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
         </p>
       </div>
 
-      {/* Like-for-like comparison chart */}
+      {/* Period comparison chart */}
       <section className="space-y-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-medium">Shadow vs Analyst &mdash; Like-for-Like Comparison</h2>
+          <h2 className="text-sm font-medium">Shadow vs Analyst &mdash; Period Comparison</h2>
           <div className="flex items-center gap-1">
             {COMPARISON_WINDOWS.map(w => (
               <button key={w.days}
@@ -235,7 +235,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
         </div>
 
         <p className="text-xs text-muted-foreground">
-          Analyst R = 0 for any market the engine covered but analyst did not trade. Same markets, same dates.
+          Aggregate comparison: all shadow trade outcomes vs all analyst actual trades for the period, by date. Not restricted to markets triggered by both.
         </p>
 
         <div className="grid grid-cols-3 gap-3">
@@ -244,14 +244,14 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
             <p className={`text-2xl font-semibold tabular-nums ${totalShadowR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
               {totalShadowR > 0 ? '+' : ''}{totalShadowR.toFixed(2)}R
             </p>
-            <p className="text-xs text-muted-foreground">{likeForLike.length} trading days</p>
+            <p className="text-xs text-muted-foreground">{dailyComparison.length} trading days</p>
           </div>
           <div className="rounded-lg border border-border bg-card p-4 space-y-2">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Analyst R ({comparisonWindow}d)</p>
             <p className={`text-2xl font-semibold tabular-nums ${totalAnalystR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
               {totalAnalystR > 0 ? '+' : ''}{totalAnalystR.toFixed(2)}R
             </p>
-            <p className="text-xs text-muted-foreground">Same markets only</p>
+            <p className="text-xs text-muted-foreground">All markets</p>
           </div>
           <div className="rounded-lg border border-border bg-card p-4 space-y-2">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Framework Edge</p>
@@ -262,14 +262,14 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
           </div>
         </div>
 
-        {likeForLike.length > 0 ? (
+        {dailyComparison.length > 0 ? (
           <div className="rounded-lg border border-border bg-card p-4">
-            <p className="text-xs text-muted-foreground mb-3">Cumulative R &mdash; Shadow vs Analyst (like-for-like)</p>
+            <p className="text-xs text-muted-foreground mb-3">Cumulative R &mdash; Shadow vs Analyst</p>
             <div className="h-48">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={likeForLike} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                <LineChart data={dailyComparison} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                   <XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false}
-                    interval={Math.max(0, Math.floor(likeForLike.length / 8))} />
+                    interval={Math.max(0, Math.floor(dailyComparison.length / 8))} />
                   <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false}
                     tickFormatter={v => `${v > 0 ? '+' : ''}${v.toFixed(0)}R`} />
                   <Tooltip
@@ -285,7 +285,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades }: Props) {
           </div>
         ) : (
           <div className="rounded-lg border border-border bg-card p-6 text-center">
-            <p className="text-sm text-muted-foreground">No like-for-like data yet.</p>
+            <p className="text-sm text-muted-foreground">No comparison data yet.</p>
           </div>
         )}
       </section>
