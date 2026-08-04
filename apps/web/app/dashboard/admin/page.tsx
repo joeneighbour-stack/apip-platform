@@ -7,6 +7,7 @@ import { MarketManagementPanel } from '@/components/admin/MarketManagementPanel'
 import { AnalystManagementPanel } from '@/components/admin/AnalystManagementPanel'
 import { ThresholdsPanel } from '@/components/admin/ThresholdsPanel'
 import { DisputeResolutionPanel } from '@/components/admin/DisputeResolutionPanel'
+import { ManualTradeEntryPanel } from '@/components/admin/ManualTradeEntryPanel'
 import { NotificationsPanel } from '@/components/management/NotificationsPanel'
 
 export default async function AdminCentrePage() {
@@ -76,6 +77,7 @@ export default async function AdminCentrePage() {
       <NotificationsPanel notifications={notifications ?? []} showAll={true} />
       <EngineRunsPanel runs={engineRuns ?? []} />
       <DisputeResolutionPanel disputes={disputes ?? []} />
+      <ManualTradeEntryPanel analysts={(analysts as any[]) ?? []} markets={(markets as any[]) ?? []} />
       <UserManagementPanel users={appUsers ?? []} analysts={analysts ?? []} isAdmin={user.role === 'ADMIN'} />
       <AnalystManagementPanel analysts={analysts ?? []} />
       <MarketManagementPanel markets={markets ?? []} />
