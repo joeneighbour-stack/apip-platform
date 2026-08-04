@@ -43,7 +43,7 @@ export default async function ManagementPerformancePage() {
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
   const { data: actualTrades } = await supabase
     .from('actual_trades')
-    .select('result_r, triggered, published_at, analyst_id')
+    .select('result_r, triggered, published_at, analyst_id, source_system')
     .in('source_system', ['ACUITY_PERFORMANCE_API', 'MANUAL_BACKFILL'])
     .gte('published_at', thirtyDaysAgo)
 
@@ -63,6 +63,13 @@ export default async function ManagementPerformancePage() {
     .eq('source_system', 'ACUITY_PERFORMANCE_API')
     .gte('published_at', lwStart)
     .lte('published_at', lwEnd + 'T23:59:59Z')
+
+  // Fetch this month's API publications for trigger rate denominator (month-to-date)
+  const { data: thisMonthPubs } = await adminDb
+    .from('analyst_publications')
+    .select('analyst_id, reconciliation_status')
+    .eq('source_system', 'ACUITY_PERFORMANCE_API')
+    .gte('published_at', monthStart)
 
   // Admin client bypasses RLS to read INTERNAL_ONLY shadow KPIs
   const { data: shadowKpiRows } = await adminDb
@@ -99,8 +106,9 @@ export default async function ManagementPerformancePage() {
         lastMonthStart={lastMonthStart}
         shadowOutcomes={(shadowOutcomes as any[]) ?? []}
         actualTrades={(actualTrades as any[]) ?? []}
-        actualTrades={(actualTrades as any[]) ?? []}
+        shadowKpiData={shadowKpiData}
         lastWeekPublications={(lastWeekPubs as any[]) ?? []}
+        thisMonthPublications={(thisMonthPubs as any[]) ?? []}
       />
     </div>
   )
