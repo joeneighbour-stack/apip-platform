@@ -10,7 +10,25 @@ export async function GET(req: Request) {
   const url = new URL(req.url)
   const from = url.searchParams.get('from') ?? new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
   const to = url.searchParams.get('to')
+  const requestedAnalystId = url.searchParams.get('analystId')
   const supabase = await createClient()
+
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const { data: appUser } = await supabase
+    .from('app_users')
+    .select('role, analyst_id')
+    .eq('auth_user_id', user.id)
+    .single()
+
+  const role = (appUser as any)?.role
+  // actual_trades RLS already confines an ANALYST session to their own rows
+  // (migrations/002_rls.sql, actual_trades_select_own), but we scope explicitly here too
+  // so an analyst can never pull another analyst's data by passing a different
+  // ?analystId= on this route -- the param is ignored in favour of the session's own id,
+  // not merely checked against it.
+  const scopedAnalystId = role === 'ANALYST' ? (appUser as any)?.analyst_id ?? null : requestedAnalystId
 
   const FIELDS = `trade_id, analyst_id, direction, result_r,
     triggered, published_at, closed_at, expiry, historical_backfill, source_system, session,
@@ -26,6 +44,7 @@ export async function GET(req: Request) {
       .select(FIELDS)
       .gte('published_at', from + 'T00:00:00Z')
     if (to) query = query.lte('published_at', to + 'T23:59:59Z')
+    if (scopedAnalystId) query = query.eq('analyst_id', scopedAnalystId)
 
     const { data, error } = await query
       .order('published_at', { ascending: false })

@@ -13,6 +13,7 @@ interface Props {
   onChange: (filters: AnalyticsFilterState) => void
   analysts: Analyst[]
   markets: Market[]
+  hideAnalystFilter?: boolean
 }
 
 const DIRECTION_OPTIONS = [{ value: 'BUY', label: 'BUY' }, { value: 'SELL', label: 'SELL' }]
@@ -21,7 +22,7 @@ const SESSION_OPTIONS = [
   { value: 'APAC', label: 'APAC' }, { value: 'CRYPTO', label: 'Crypto' },
 ]
 
-export function AnalyticsFilters({ filters, onChange, analysts, markets }: Props) {
+export function AnalyticsFilters({ filters, onChange, analysts, markets, hideAnalystFilter }: Props) {
   const [moreOpen, setMoreOpen] = useState(false)
 
   function set<K extends keyof AnalyticsFilterState>(key: K, value: AnalyticsFilterState[K]) {
@@ -77,7 +78,7 @@ export function AnalyticsFilters({ filters, onChange, analysts, markets }: Props
       </div>
 
       {/* Product / Analyst / Asset class / Market */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className={`grid grid-cols-2 gap-3 ${hideAnalystFilter ? 'sm:grid-cols-3' : 'sm:grid-cols-4'}`}>
         <div>
           <p className="text-xs text-muted-foreground mb-1">Product / Strategy</p>
           <select value={filters.product} onChange={e => set('product', e.target.value as AnalyticsFilterState['product'])}
@@ -85,9 +86,11 @@ export function AnalyticsFilters({ filters, onChange, analysts, markets }: Props
             {PRODUCT_OPTIONS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
           </select>
         </div>
-        <MultiSelect label="Analyst (internal only)"
-          options={analysts.filter(a => a.active).map(a => ({ value: a.analyst_id, label: a.display_name }))}
-          selected={filters.analystIds} onChange={v => set('analystIds', v)} placeholder="All analysts" />
+        {!hideAnalystFilter && (
+          <MultiSelect label="Analyst (internal only)"
+            options={analysts.filter(a => a.active).map(a => ({ value: a.analyst_id, label: a.display_name }))}
+            selected={filters.analystIds} onChange={v => set('analystIds', v)} placeholder="All analysts" />
+        )}
         <MultiSelect label="Asset Class"
           options={assetClasses.map(c => ({ value: c, label: c }))}
           selected={filters.assetClasses}

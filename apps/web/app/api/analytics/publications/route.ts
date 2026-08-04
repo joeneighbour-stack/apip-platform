@@ -19,13 +19,22 @@ export async function GET(req: Request) {
     .single()
 
   const role = (appUser as any)?.role
-  if (!role || !['MANAGER', 'ADMIN', 'EXECUTIVE'].includes(role)) {
+  if (!role || !['MANAGER', 'ADMIN', 'EXECUTIVE', 'ANALYST'].includes(role)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
   const url = new URL(req.url)
   const from = url.searchParams.get('from') ?? new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
   const to = url.searchParams.get('to')
+  const requestedAnalystId = url.searchParams.get('analystId')
+
+  // This route bypasses RLS via the service-role client (see comment above), so unlike
+  // /trades, an ANALYST caller gets no free row-level scoping -- their own analyst_id
+  // is enforced here instead, ignoring any ?analystId= they pass (not just checking it).
+  const scopedAnalystId = role === 'ANALYST' ? (appUser as any)?.analyst_id ?? null : requestedAnalystId
+  if (role === 'ANALYST' && !scopedAnalystId) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
 
   const adminDb = createAdminClient()
   const FIELDS = 'analyst_id, market_id, published_at, reconciliation_status'
@@ -41,6 +50,7 @@ export async function GET(req: Request) {
       .eq('source_system', 'ACUITY_PERFORMANCE_API')
       .gte('published_at', from + 'T00:00:00Z')
     if (to) query = query.lte('published_at', to + 'T23:59:59Z')
+    if (scopedAnalystId) query = query.eq('analyst_id', scopedAnalystId)
 
     const { data, error } = await query
       .order('published_at', { ascending: false })

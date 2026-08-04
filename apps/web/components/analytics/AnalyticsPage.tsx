@@ -32,23 +32,33 @@ interface Market { market_id: string; symbol: string; asset_class: string }
 interface Props {
   analysts: Analyst[]
   markets: Market[]
+  // When set, this view is permanently scoped to one analyst (the analyst-facing "My
+  // Performance" page): the analyst filter is forced to this id and hidden, "By Analyst"
+  // attribution is dropped (redundant with a single analyst), and the API requests carry
+  // it explicitly so the server can validate it against the session -- see
+  // /api/analytics/trades and /publications routes. Undefined for the management view.
+  lockedAnalystId?: string
 }
 
-export function AnalyticsPage({ analysts, markets }: Props) {
+export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
 
-  const [filters, setFilters] = useState<AnalyticsFilterState>(() => filtersFromSearchParams(searchParams))
+  const [filters, setFilters] = useState<AnalyticsFilterState>(() => {
+    const initial = filtersFromSearchParams(searchParams)
+    return lockedAnalystId ? { ...initial, analystIds: [lockedAnalystId] } : initial
+  })
   const [trades, setTrades] = useState<MetricsTrade[]>([])
   const [pubs, setPubs] = useState<MetricsPublication[]>([])
   const [loading, setLoading] = useState(true)
   const [reportOpen, setReportOpen] = useState(false)
 
   useEffect(() => {
+    const analystParam = lockedAnalystId ? `&analystId=${lockedAnalystId}` : ''
     Promise.all([
-      fetch(`/api/analytics/trades?from=${SINCE_INCEPTION_FLOOR}`).then(r => r.json()),
-      fetch(`/api/analytics/publications?from=${SINCE_INCEPTION_FLOOR}`).then(r => r.json()),
+      fetch(`/api/analytics/trades?from=${SINCE_INCEPTION_FLOOR}${analystParam}`).then(r => r.json()),
+      fetch(`/api/analytics/publications?from=${SINCE_INCEPTION_FLOOR}${analystParam}`).then(r => r.json()),
     ]).then(([tradeRows, pubRows]) => {
       const normalisedTrades: MetricsTrade[] = (tradeRows ?? []).map((t: any) => ({
         analyst_id: t.analyst_id,
@@ -70,8 +80,9 @@ export function AnalyticsPage({ analysts, markets }: Props) {
   }, [])
 
   function updateFilters(next: AnalyticsFilterState) {
-    setFilters(next)
-    const params = filtersToSearchParams(next)
+    const locked = lockedAnalystId ? { ...next, analystIds: [lockedAnalystId] } : next
+    setFilters(locked)
+    const params = filtersToSearchParams(locked)
     router.replace(`${pathname}?${params.toString()}`, { scroll: false })
   }
 
@@ -105,7 +116,7 @@ export function AnalyticsPage({ analysts, markets }: Props) {
   const tradeStats = useMemo(() => computeTradeStatistics(periodTrades, periodPubs), [periodTrades, periodPubs])
   const distribution = useMemo(() => resultDistribution(periodTrades), [periodTrades])
 
-  const byAnalyst = useMemo(() => attributionBy(periodTrades, t => ({ key: t.analyst_id, label: analystNameById.get(t.analyst_id) ?? 'Unknown' })), [periodTrades, analystNameById])
+  const byAnalyst = useMemo(() => lockedAnalystId ? [] : attributionBy(periodTrades, t => ({ key: t.analyst_id, label: analystNameById.get(t.analyst_id) ?? 'Unknown' })), [periodTrades, analystNameById, lockedAnalystId])
   const byAssetClass = useMemo(() => attributionBy(periodTrades, t => ({ key: t.asset_class, label: t.asset_class })), [periodTrades])
   const byMarket = useMemo(() => attributionBy(periodTrades, t => ({ key: t.market_id, label: t.symbol })), [periodTrades])
 
@@ -148,7 +159,7 @@ export function AnalyticsPage({ analysts, markets }: Props) {
         so nesting the report inside a print:hidden wrapper would hide it under print
         media too (confirmed via Playwright print-media screenshot during verification). */}
     <div className="space-y-6 print:hidden">
-      <AnalyticsFilters filters={filters} onChange={updateFilters} analysts={analysts} markets={markets} />
+      <AnalyticsFilters filters={filters} onChange={updateFilters} analysts={analysts} markets={markets} hideAnalystFilter={!!lockedAnalystId} />
 
       <div className="flex items-start justify-between gap-4">
         <UniverseSummary
@@ -172,7 +183,7 @@ export function AnalyticsPage({ analysts, markets }: Props) {
 
       <section className="space-y-4">
         <h2 className="text-sm font-medium">Performance Attribution</h2>
-        <AttributionTable title="By Analyst" rows={byAnalyst} />
+        {!lockedAnalystId && <AttributionTable title="By Analyst" rows={byAnalyst} />}
         <AttributionTable title="By Asset Class" rows={byAssetClass} />
         <AttributionTable title="By Market" rows={byMarket} minTrades={10} entityLabel="Markets" />
       </section>
