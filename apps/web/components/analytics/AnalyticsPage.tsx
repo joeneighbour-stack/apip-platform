@@ -136,6 +136,12 @@ export function AnalyticsPage({ analysts, markets }: Props) {
   }
 
   return (
+    <>
+    {/* print:hidden must be scoped to the dashboard chrome only -- ReportBuilder (and
+        the PerformanceReport it mounts) is rendered as a sibling below, outside this
+        div. A display:none ancestor can't be overridden by a descendant's print:static,
+        so nesting the report inside a print:hidden wrapper would hide it under print
+        media too (confirmed via Playwright print-media screenshot during verification). */}
     <div className="space-y-6 print:hidden">
       <AnalyticsFilters filters={filters} onChange={updateFilters} analysts={analysts} markets={markets} />
 
@@ -175,17 +181,19 @@ export function AnalyticsPage({ analysts, markets }: Props) {
         <BestWorstTrades best={bestWorst.best} worst={bestWorst.worst} />
       </section>
 
-      {reportOpen && (
-        <ReportBuilder
-          trades={periodTrades} pubs={periodPubs}
-          previousTrades={previousTrades} previousPubs={previousPubs}
-          dateRange={dateRange} comparisonLabel={comparison.label}
-          defaultTitle={universe.title}
-          defaultSubtitle={universe.segments.join(' • ')}
-          dataThroughDate={dataThroughDate}
-          onClose={() => setReportOpen(false)}
-        />
-      )}
     </div>
+
+    {reportOpen && (
+      <ReportBuilder
+        trades={periodTrades} pubs={periodPubs} historyTrades={historyTrades}
+        previousTrades={previousTrades} previousPubs={previousPubs}
+        dateRange={dateRange} comparisonLabel={comparison.label}
+        defaultTitle={universe.title}
+        defaultSubtitle={universe.segments.join(' • ')}
+        dataThroughDate={dataThroughDate}
+        onClose={() => setReportOpen(false)}
+      />
+    )}
+    </>
   )
 }

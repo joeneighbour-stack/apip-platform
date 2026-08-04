@@ -18,6 +18,10 @@ import { PerformanceReport } from './report/PerformanceReport'
 interface Props {
   trades: MetricsTrade[]
   pubs: MetricsPublication[]
+  // Rolling Performance and Monthly Matrix always look across full available history
+  // for the active non-date filters, independent of the date-range preset -- same
+  // rule as the interactive dashboard (see lib/metrics rollingWindows() comment).
+  historyTrades: MetricsTrade[]
   previousTrades: MetricsTrade[] | null
   previousPubs: MetricsPublication[]
   dateRange: DateRange
@@ -85,7 +89,7 @@ function savePresets(presets: Preset[]) {
 }
 
 export function ReportBuilder({
-  trades, pubs, previousTrades, previousPubs, dateRange, comparisonLabel,
+  trades, pubs, historyTrades, previousTrades, previousPubs, dateRange, comparisonLabel,
   defaultTitle, defaultSubtitle, dataThroughDate, onClose,
 }: Props) {
   const [title, setTitle] = useState(defaultTitle)
@@ -160,8 +164,8 @@ export function ReportBuilder({
       comparison: previousSummary ? { current: summary, previous: previousSummary, label: comparisonLabel } : null,
       cumulative: cumulativeSeries(trades),
       drawdown: drawdownSeries(trades),
-      rolling: rollingWindows(trades, new Date()),
-      monthly: monthlyMatrix(trades),
+      rolling: rollingWindows(historyTrades, new Date()),
+      monthly: monthlyMatrix(historyTrades),
       attribution,
       contribution,
       tradeStats: computeTradeStatistics(trades, pubs),
