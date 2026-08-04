@@ -23,7 +23,6 @@ interface ActualTrade {
   triggered: boolean
   published_at?: string
   analyst_id?: string
-  source_system?: string
 }
 interface TeamPerformanceGridProps {
   analysts: Analyst[]
@@ -34,7 +33,6 @@ interface TeamPerformanceGridProps {
   actualTrades: ActualTrade[]
   shadowKpiData: { kpi_name: string; kpi_value: any; period_start: string }[]
   lastWeekPublications?: { analyst_id: string; reconciliation_status: string }[]
-  thisMonthPublications?: { analyst_id: string; reconciliation_status: string }[]
 }
 
 type Period = 'THIS_MONTH' | 'LAST_MONTH' | 'LAST_WEEK'
@@ -90,7 +88,7 @@ function shadowResultR(outcome: ShadowOutcome): number | null {
 
 export function TeamPerformanceGrid({
   analysts, kpiData, currentMonthStart, lastMonthStart, shadowOutcomes, actualTrades, shadowKpiData,
-  lastWeekPublications = [], thisMonthPublications = []
+  lastWeekPublications = []
 }: TeamPerformanceGridProps) {
   const [period, setPeriod] = useState<Period>('THIS_MONTH')
 
@@ -109,15 +107,10 @@ export function TeamPerformanceGrid({
 
   const activePeriodStart = period === 'LAST_MONTH' ? lastMonthStart : currentMonthStart
 
-  // Filter trades by period. THIS_MONTH and LAST_WEEK are in-progress periods computed
-  // live from raw trades; LAST_MONTH is closed and served from the pre-aggregated executive_kpis table.
+  // Filter trades by period
   const periodTrades = period === 'LAST_WEEK'
     ? actualTrades.filter(t => t.published_at && t.published_at.slice(0, 10) >= lastWeekStart && t.published_at.slice(0, 10) <= lastWeekEnd)
-    : period === 'THIS_MONTH'
-    ? actualTrades.filter(t => t.published_at && t.published_at.slice(0, 10) >= currentMonthStart)
     : actualTrades
-
-  const periodPublications = period === 'LAST_WEEK' ? lastWeekPublications : thisMonthPublications
 
   const index = new Map<string, Map<string, KpiRow[]>>()
   for (const row of kpiData) {
@@ -129,9 +122,9 @@ export function TeamPerformanceGrid({
 
   // Team aggregate for current/last month from KPIs
   const teamAgg: Record<string, number[]> = {}
-  const liveTeamAgg: Record<string, number[]> = {}
+  const weekTeamAgg: Record<string, number[]> = {}
 
-  if (period === 'LAST_MONTH') {
+  if (period !== 'LAST_WEEK') {
     for (const analyst of analysts) {
       const byName = index.get(analyst.analyst_id)
       if (!byName) continue
@@ -146,9 +139,7 @@ export function TeamPerformanceGrid({
       }
     }
   } else {
-    // This month / last week: compute from raw trades per analyst.
-    // Trigger rate numerator is all triggered trades (result_r not null) regardless of
-    // source system, denominator is total API publications for the period.
+    // Last week: compute from raw trades per analyst
     const byAnalyst = new Map<string, ActualTrade[]>()
     for (const t of periodTrades) {
       if (!t.analyst_id) continue
@@ -161,25 +152,25 @@ export function TeamPerformanceGrid({
       const wins = triggered.filter(t => (t.result_r ?? 0) > 0)
       const totalR = triggered.reduce((s, t) => s + (t.result_r ?? 0), 0)
       const winRate = triggered.length > 0 ? wins.length / triggered.length : null
-      const pubTotal = periodPublications.filter(p => p.analyst_id === analyst.analyst_id).length
-      const trigRate = pubTotal > 0 ? triggered.length / pubTotal : null
+      const lwPubTotal = lastWeekPublications.filter(p => p.analyst_id === analyst.analyst_id).length
+      const trigRate = lwPubTotal > 0 ? triggered.length / lwPubTotal : null
 
       if (totalR !== 0 || triggered.length > 0) {
-        if (!liveTeamAgg['total_return_r']) liveTeamAgg['total_return_r'] = []
-        liveTeamAgg['total_return_r'].push(totalR)
+        if (!weekTeamAgg['total_return_r']) weekTeamAgg['total_return_r'] = []
+        weekTeamAgg['total_return_r'].push(totalR)
         if (winRate !== null) {
-          if (!liveTeamAgg['win_rate']) liveTeamAgg['win_rate'] = []
-          liveTeamAgg['win_rate'].push(winRate)
+          if (!weekTeamAgg['win_rate']) weekTeamAgg['win_rate'] = []
+          weekTeamAgg['win_rate'].push(winRate)
         }
         if (trigRate !== null) {
-          if (!liveTeamAgg['triggered_rate']) liveTeamAgg['triggered_rate'] = []
-          liveTeamAgg['triggered_rate'].push(trigRate)
+          if (!weekTeamAgg['triggered_rate']) weekTeamAgg['triggered_rate'] = []
+          weekTeamAgg['triggered_rate'].push(trigRate)
         }
       }
     }
   }
 
-  const displayAgg = period === 'LAST_MONTH' ? teamAgg : liveTeamAgg
+  const displayAgg = period === 'LAST_WEEK' ? weekTeamAgg : teamAgg
 
   // Shadow summary
   const shadowOutcomesSafe = shadowOutcomes ?? []
@@ -303,15 +294,15 @@ export function TeamPerformanceGrid({
                 let hasData = false
                 let returnTrend = trendData(analyst.analyst_id, 'total_return_r')
 
-                if (period !== 'LAST_MONTH') {
+                if (period === 'LAST_WEEK') {
                   const trades = periodTrades.filter(t => t.analyst_id === analyst.analyst_id)
                   const triggered = trades.filter(t => t.triggered && t.result_r !== null)
                   const wins = triggered.filter(t => (t.result_r ?? 0) > 0)
                   const totalR = triggered.reduce((s, t) => s + (t.result_r ?? 0), 0)
                   const winRate = triggered.length > 0 ? wins.length / triggered.length : null
-                  const pubTotal = periodPublications.filter(p => p.analyst_id === analyst.analyst_id).length
-                  const trigRate = pubTotal > 0 ? triggered.length / pubTotal : null
-                  const liveVals: Record<string, number | null> = {
+                  const lwPubTotal = lastWeekPublications.filter(p => p.analyst_id === analyst.analyst_id).length
+                  const trigRate = lwPubTotal > 0 ? triggered.length / lwPubTotal : null
+                  const weekVals: Record<string, number | null> = {
                     total_return_r: triggered.length > 0 ? totalR : null,
                     win_rate: winRate,
                     triggered_rate: trigRate,
@@ -320,7 +311,7 @@ export function TeamPerformanceGrid({
                   }
                   hasData = triggered.length > 0
                   analystKpis = KPI_COLS.map(col => {
-                    const val = liveVals[col.name] ?? null
+                    const val = weekVals[col.name] ?? null
                     return { col, val, kpiValue: null, hit: val !== null ? isOnTarget(col.name, val) : null }
                   })
                 } else {
@@ -537,5 +528,3 @@ export function TeamPerformanceGrid({
     </div>
   )
 }
-
-
