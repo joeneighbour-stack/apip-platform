@@ -66,15 +66,41 @@ export function profitFactor(trades: MetricsTrade[]): number | null {
   return gains / Math.abs(losses)
 }
 
-// Trigger rate numerator is restricted to ACUITY_PERFORMANCE_API-sourced trades --
-// MANUAL_BACKFILL rows for the same recent dates duplicate the webhook feed (see
-// TeamPerformanceGrid history), so including both double-counts. Caller must pass
-// `pubs` already filtered to the same universe (date/analyst/market/asset-class) as
-// `trades`, and gated at a minimum sample size to avoid noisy tiny-sample rates.
-export function triggerRate(trades: MetricsTrade[], pubs: MetricsPublication[]): number | null {
-  if (pubs.length < MIN_TRIGGER_SAMPLE) return null
-  const apiTriggered = trades.filter(t => t.source_system === 'ACUITY_PERFORMANCE_API' && isTriggeredWithResult(t))
-  return apiTriggered.length / pubs.length
+// Mirrors calculateKpis.ts's actual formula exactly: both numerator and denominator
+// come from `analyst_publications` alone (reconciliation_status), with no join back
+// to actual_trades. (An earlier version of this function cross-referenced
+// ACUITY_PERFORMANCE_API-sourced trades for the numerator -- empirically verified
+// against production data to be wrong: actual_trades only carries that source_system
+// from MIN_API_DATE onward, while analyst_publications' webhook history goes back to
+// ~2022, so the numerator was structurally starved and produced a ~1% rate. Publication
+// reconciliation_status alone gives ~35%, consistent with this codebase's own
+// triggered_rate target.)
+//
+// Per calculateKpis.ts's "hasUntriggered" gate: a month where every publication shows
+// WEBHOOK_TRUE hasn't had its untriggered outcomes reconciled (common in backfill-era
+// months where only triggered setups were ever recorded) -- including it would treat
+// an unreconciled month as 100% triggered. Only months with a genuine untriggered
+// baseline (and a minimum sample) count, and each qualifying month's own rate is
+// averaged in (not trade-volume-weighted), same as the batch job.
+export function triggerRate(pubs: MetricsPublication[]): number | null {
+  const pubsByMonth = new Map<string, MetricsPublication[]>()
+  for (const p of pubs) {
+    const key = p.published_at.slice(0, 7)
+    if (!pubsByMonth.has(key)) pubsByMonth.set(key, [])
+    pubsByMonth.get(key)!.push(p)
+  }
+
+  const monthRates: number[] = []
+  for (const [, monthPubs] of pubsByMonth.entries()) {
+    if (monthPubs.length < MIN_TRIGGER_SAMPLE) continue
+    const triggeredCount = monthPubs.filter(p => p.reconciliation_status === 'WEBHOOK_TRUE').length
+    const hasUntriggered = triggeredCount < monthPubs.length
+    if (!hasUntriggered) continue
+    monthRates.push(triggeredCount / monthPubs.length)
+  }
+
+  if (monthRates.length === 0) return null
+  return monthRates.reduce((s, r) => s + r, 0) / monthRates.length
 }
 
 export interface DrawdownResult {
@@ -122,7 +148,7 @@ export function computeSummary(trades: MetricsTrade[], pubs: MetricsPublication[
     totalR: round2(totalR(trades)),
     avgR: avg !== null ? round2(avg) : null,
     winRate: winRate(trades),
-    triggerRate: triggerRate(trades, pubs),
+    triggerRate: triggerRate(pubs),
     maxDrawdown: maxDrawdown(trades).value,
     profitFactor: pf !== null ? round2(pf) : null,
     triggeredCount: triggeredTrades(trades).length,
@@ -345,6 +371,24 @@ export function distinctAnalystCount(trades: MetricsTrade[]): number {
   return new Set(triggeredTrades(trades).map(t => t.analyst_id)).size
 }
 
+// Ties are common at the -1R floor (a capped loss), and Array.sort's stability means a
+// plain sort-then-slice(-n) on ties silently surfaces whichever end of the tied block
+// happens to sit at the array's tail -- since `trades` arrives published_at-descending
+// from the API, that tail is the OLDEST tied trades, not the most recent. Breaking ties
+// by recency explicitly avoids depending on incoming array order at all.
+export function bestWorstTrades(trades: MetricsTrade[], n = 10): { best: MetricsTrade[]; worst: MetricsTrade[] } {
+  const triggered = triggeredTrades(trades)
+  const sorted = (direction: 'best' | 'worst') => {
+    const sign = direction === 'worst' ? 1 : -1
+    return [...triggered].sort((a, b) => {
+      const resultDiff = sign * ((a.result_r ?? 0) - (b.result_r ?? 0))
+      if (resultDiff !== 0) return resultDiff
+      return b.published_at.localeCompare(a.published_at)
+    })
+  }
+  return { best: sorted('best').slice(0, n), worst: sorted('worst').slice(0, n) }
+}
+
 export interface TradeStatisticsSummary {
   winRate: number | null
   lossRate: number | null
@@ -359,16 +403,20 @@ export interface TradeStatisticsSummary {
   avgDurationHours: number | null
 }
 
-// "Expired" = published but never triggered (triggered=false, result_r still null) --
-// the ACUITY_PERFORMANCE_API feed records every generated setup, not just triggered
-// ones, so this is derivable directly from `trades` without a separate query.
+// "Generated" and "Expired" are counted from `pubs` (already ACUITY_PERFORMANCE_API
+// only, per the /api/analytics/publications route), not from `trades` -- actual_trades
+// mixes in MANUAL_BACKFILL rows, which either duplicate recent API-sourced trades or
+// (for genuinely historical dates) were never published through the webhook feed at
+// all, so counting "generated"/"expired" off `trades` inflates or deflates these
+// operational figures depending on the window. `analyst_publications` is the record
+// of every setup actually published, so it's the correct source for both.
 export function computeTradeStatistics(trades: MetricsTrade[], pubs: MetricsPublication[]): TradeStatisticsSummary {
   const triggered = triggeredTrades(trades)
   const wins = triggered.filter(t => (t.result_r ?? 0) > 0)
   const losses = triggered.filter(t => (t.result_r ?? 0) < 0)
   const avgWinner = wins.length > 0 ? wins.reduce((s, t) => s + (t.result_r ?? 0), 0) / wins.length : null
   const avgLoser = losses.length > 0 ? losses.reduce((s, t) => s + (t.result_r ?? 0), 0) / losses.length : null
-  const expired = trades.filter(t => !t.triggered && t.result_r === null).length
+  const expired = pubs.filter(p => p.reconciliation_status !== 'WEBHOOK_TRUE').length
   const durations = trades
     .filter(t => t.triggered && t.closed_at)
     .map(t => (new Date(t.closed_at as string).getTime() - new Date(t.published_at).getTime()) / (60 * 60 * 1000))
@@ -385,7 +433,7 @@ export function computeTradeStatistics(trades: MetricsTrade[], pubs: MetricsPubl
     avgLoser: avgLoser !== null ? round2(avgLoser) : null,
     avgR: avg !== null ? round2(avg) : null,
     profitFactor: pf !== null ? round2(pf) : null,
-    triggerRate: triggerRate(trades, pubs),
+    triggerRate: triggerRate(pubs),
     generated: pubs.length,
     triggered: triggered.length,
     expired,

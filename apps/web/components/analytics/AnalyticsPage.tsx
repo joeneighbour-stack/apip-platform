@@ -4,7 +4,7 @@ import { useRouter, useSearchParams, usePathname } from 'next/navigation'
 import {
   type MetricsTrade, type MetricsPublication,
   computeSummary, cumulativeSeries, drawdownSeries, rollingWindows, monthlyMatrix,
-  attributionBy, computeTradeStatistics, resultDistribution, triggeredTrades, isTriggeredWithResult,
+  attributionBy, computeTradeStatistics, resultDistribution, triggeredTrades, bestWorstTrades,
 } from '@/lib/metrics'
 import {
   type AnalyticsFilterState, filtersFromSearchParams, filtersToSearchParams,
@@ -109,13 +109,12 @@ export function AnalyticsPage({ analysts, markets }: Props) {
   const byMarket = useMemo(() => attributionBy(periodTrades, t => ({ key: t.market_id, label: t.symbol })), [periodTrades])
 
   const bestWorst = useMemo(() => {
-    const triggered = triggeredTrades(periodTrades).filter(isTriggeredWithResult)
-    const sorted = [...triggered].sort((a, b) => (b.result_r ?? 0) - (a.result_r ?? 0))
+    const { best, worst } = bestWorstTrades(periodTrades, 10)
     const toRow = (t: MetricsTrade) => ({
       date: t.published_at.slice(0, 10), symbol: t.symbol,
       analystName: analystNameById.get(t.analyst_id) ?? 'Unknown', direction: t.direction, resultR: t.result_r ?? 0,
     })
-    return { best: sorted.slice(0, 10).map(toRow), worst: sorted.slice(-10).reverse().map(toRow) }
+    return { best: best.map(toRow), worst: worst.map(toRow) }
   }, [periodTrades, analystNameById])
 
   const universe = useMemo(() => describeUniverse(filters, dateRange, markets, analysts), [filters, dateRange, markets, analysts])
@@ -169,7 +168,7 @@ export function AnalyticsPage({ analysts, markets }: Props) {
         <h2 className="text-sm font-medium">Performance Attribution</h2>
         <AttributionTable title="By Analyst" rows={byAnalyst} />
         <AttributionTable title="By Asset Class" rows={byAssetClass} />
-        <AttributionTable title="By Market" rows={byMarket} />
+        <AttributionTable title="By Market" rows={byMarket} minTrades={10} entityLabel="Markets" />
       </section>
 
       <ContributionChart title="Contribution by Market" rows={byMarket} />

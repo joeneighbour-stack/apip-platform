@@ -2,9 +2,9 @@
 import { useEffect, useState } from 'react'
 import {
   type MetricsTrade, type MetricsPublication, type AttributionRow,
-  triggeredTrades, isTriggeredWithResult, computeSummary, cumulativeSeries, drawdownSeries,
+  triggeredTrades, computeSummary, cumulativeSeries, drawdownSeries,
   rollingWindows, monthlyMatrix, attributionBy, computeTradeStatistics, resultDistribution,
-  distinctAnalystCount,
+  distinctAnalystCount, bestWorstTrades,
 } from '@/lib/metrics'
 import {
   type ReportData, type ReportSections, type ReportAttributionDimension, type ReportSafeTrade,
@@ -144,17 +144,16 @@ export function ReportBuilder({
       contribution[dim] = rows
     }
 
-    const triggered = triggeredTrades(trades).filter(isTriggeredWithResult)
-    const sortedByResult = [...triggered].sort((a, b) => (b.result_r ?? 0) - (a.result_r ?? 0))
-    const best = sortedByResult.slice(0, 10).map(toReportSafeTrade)
-    const worst = sortedByResult.slice(-10).reverse().map(toReportSafeTrade)
+    const { best: bestTrades, worst: worstTrades } = bestWorstTrades(trades, 10)
+    const best = bestTrades.map(toReportSafeTrade)
+    const worst = worstTrades.map(toReportSafeTrade)
 
     const data: ReportData = {
       universe: {
         title, subtitle,
         periodLabel: `${formatDate(dateRange.start)} – ${formatDate(dateRange.end)}`,
         filterSummary: subtitle,
-        tradeCount: triggered.length,
+        tradeCount: triggeredTrades(trades).length,
         generatedAt: new Date().toISOString(),
         dataThrough: dataThroughDate,
       },
