@@ -79,8 +79,15 @@ export interface ReportData {
   contribution: Partial<Record<ReportAttributionDimension, AttributionRow[]>>
   tradeStats: ReportTradeStatistics
   distribution: DistributionBucket[]
-  // null when automatically omitted by the anonymity safeguard (see distinctAnalystCount)
-  bestWorst: { best: ReportSafeTrade[]; worst: ReportSafeTrade[] } | null
+  // null when automatically omitted by the anonymity safeguard (see distinctAnalystCount).
+  // No individual "worst" trades -- the worst a single trade can be is -1R (capped), so
+  // every stop-out ranks equally; bestMarkets/worstMarkets below carries that signal
+  // instead, and isn't subject to the same trade-level anonymity gate (aggregated,
+  // min-sample-size rows carry materially less re-identification risk than a specific
+  // trade's date+market+direction).
+  bestWorst: { best: ReportSafeTrade[] } | null
+  bestMarkets: AttributionRow[]
+  worstMarkets: AttributionRow[]
   distinctAnalystCount: number
   compliance: ReportCompliance
 }

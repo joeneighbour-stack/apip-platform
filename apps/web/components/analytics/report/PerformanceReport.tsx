@@ -1,11 +1,12 @@
 import type { ReportData } from '@/lib/reportSanitiser'
 import { MIN_TRADES_PER_ATTRIBUTION_ROW } from '@/lib/reportSanitiser'
+import { MIN_TRADES_FOR_MARKET_RANKING } from '@/lib/metrics'
 import { PAST_PERFORMANCE_WARNING } from '@/lib/compliance'
 import { formatR, formatPercent } from '@/lib/format'
 import { ReportHeader } from './ReportHeader'
 import { ReportFooter } from './ReportFooter'
 import { ReportDisclaimer } from './ReportDisclaimer'
-import { ReportBestWorstTable } from './ReportBestWorstTable'
+import { ReportBestPerformers } from './ReportBestPerformers'
 import { CumulativePerformanceChart } from '../CumulativePerformanceChart'
 import { DrawdownChart } from '../DrawdownChart'
 import { RollingPerformanceTable } from '../RollingPerformanceTable'
@@ -91,7 +92,7 @@ export function PerformanceReport({ data }: Props) {
       )}
 
       {/* PAGE 3 -- Detailed Analysis */}
-      {(page3Dims.length > 0 || data.sections.tradeStatistics || (data.sections.bestWorst && data.bestWorst)) && (
+      {(page3Dims.length > 0 || data.sections.tradeStatistics || data.sections.bestWorst) && (
         <section className="break-after-page p-2">
           {data.sections.attribution && page3Dims.map(dim => (
             <div key={dim} className="mb-4">
@@ -100,7 +101,15 @@ export function PerformanceReport({ data }: Props) {
           ))}
           {data.sections.tradeStatistics && <div className="mb-4"><TradeStatistics stats={data.tradeStats} distribution={data.distribution} /></div>}
           {data.sections.bestWorst && data.bestWorst && (
-            <ReportBestWorstTable best={data.bestWorst.best} worst={data.bestWorst.worst} />
+            <div className="mb-4"><ReportBestPerformers best={data.bestWorst.best} /></div>
+          )}
+          {data.sections.bestWorst && (
+            <div className="grid grid-cols-2 gap-4">
+              <AttributionTable title={`Best Performing Markets (min ${MIN_TRADES_FOR_MARKET_RANKING} trades)`}
+                rows={data.bestMarkets} showMaxDD={false} />
+              <AttributionTable title={`Worst Performing Markets (min ${MIN_TRADES_FOR_MARKET_RANKING} trades)`}
+                rows={data.worstMarkets} showMaxDD={false} />
+            </div>
           )}
           <ReportFooter pageLabel="Page 3" />
         </section>

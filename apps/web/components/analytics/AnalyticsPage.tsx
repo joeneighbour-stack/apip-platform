@@ -5,6 +5,7 @@ import {
   type MetricsTrade, type MetricsPublication,
   computeSummary, cumulativeSeries, drawdownSeries, rollingWindows, monthlyMatrix,
   attributionBy, computeTradeStatistics, resultDistribution, triggeredTrades, bestWorstTrades,
+  rankAttribution, MIN_TRADES_FOR_MARKET_RANKING,
 } from '@/lib/metrics'
 import {
   type AnalyticsFilterState, filtersFromSearchParams, filtersToSearchParams,
@@ -22,7 +23,7 @@ import { MonthlyPerformanceMatrix } from './MonthlyPerformanceMatrix'
 import { AttributionTable } from './AttributionTable'
 import { ContributionChart } from './ContributionChart'
 import { TradeStatistics } from './TradeStatistics'
-import { BestWorstTrades } from './BestWorstTrades'
+import { BestPerformers } from './BestPerformers'
 import { ReportBuilder } from './ReportBuilder'
 
 interface Analyst { analyst_id: string; display_name: string; active: boolean }
@@ -108,13 +109,18 @@ export function AnalyticsPage({ analysts, markets }: Props) {
   const byAssetClass = useMemo(() => attributionBy(periodTrades, t => ({ key: t.asset_class, label: t.asset_class })), [periodTrades])
   const byMarket = useMemo(() => attributionBy(periodTrades, t => ({ key: t.market_id, label: t.symbol })), [periodTrades])
 
-  const bestWorst = useMemo(() => {
-    const { best, worst } = bestWorstTrades(periodTrades, 10)
-    const toRow = (t: MetricsTrade) => ({
+  // A single trade's worst possible outcome is capped at -1R, so every stop-out ranks
+  // equally -- individual "worst performer" trades carry no signal. Ranking markets by
+  // aggregate Total R (with a real sample size) surfaces where performance is won/lost.
+  const bestMarkets = useMemo(() => rankAttribution(byMarket, MIN_TRADES_FOR_MARKET_RANKING, 'best'), [byMarket])
+  const worstMarkets = useMemo(() => rankAttribution(byMarket, MIN_TRADES_FOR_MARKET_RANKING, 'worst'), [byMarket])
+
+  const bestTrades = useMemo(() => {
+    const { best } = bestWorstTrades(periodTrades, 10)
+    return best.map(t => ({
       date: t.published_at.slice(0, 10), symbol: t.symbol,
       analystName: analystNameById.get(t.analyst_id) ?? 'Unknown', direction: t.direction, resultR: t.result_r ?? 0,
-    })
-    return { best: best.map(toRow), worst: worst.map(toRow) }
+    }))
   }, [periodTrades, analystNameById])
 
   const universe = useMemo(() => describeUniverse(filters, dateRange, markets, analysts), [filters, dateRange, markets, analysts])
@@ -175,9 +181,15 @@ export function AnalyticsPage({ analysts, markets }: Props) {
 
       <TradeStatistics stats={tradeStats} distribution={distribution} />
 
-      <section className="space-y-2">
+      <section className="space-y-4">
         <h2 className="text-sm font-medium">Best / Worst Performance</h2>
-        <BestWorstTrades best={bestWorst.best} worst={bestWorst.worst} />
+        <BestPerformers best={bestTrades} />
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <AttributionTable title={`Best Performing Markets (min ${MIN_TRADES_FOR_MARKET_RANKING} trades)`}
+            rows={bestMarkets} showMaxDD={false} />
+          <AttributionTable title={`Worst Performing Markets (min ${MIN_TRADES_FOR_MARKET_RANKING} trades)`}
+            rows={worstMarkets} showMaxDD={false} />
+        </div>
       </section>
 
     </div>

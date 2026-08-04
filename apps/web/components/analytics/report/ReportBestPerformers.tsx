@@ -2,27 +2,18 @@ import type { ReportSafeTrade } from '@/lib/reportSanitiser'
 
 interface Props {
   best: ReportSafeTrade[]
-  worst: ReportSafeTrade[]
 }
 
 // Report-only variant: ReportSafeTrade has no field capable of holding an analyst
-// identity, and this component never imports the internal BestWorstTrades component
+// identity, and this component never imports the internal BestPerformers component
 // (which does have an analyst column) -- there is no code path from here to that data.
-export function ReportBestWorstTable({ best, worst }: Props) {
-  if (best.length === 0 && worst.length === 0) return null
-  return (
-    <div className="grid grid-cols-2 gap-4">
-      <Table title="Best Performers" rows={best} />
-      <Table title="Worst Performers" rows={worst} />
-    </div>
-  )
-}
-
-function Table({ title, rows }: { title: string; rows: ReportSafeTrade[] }) {
-  if (rows.length === 0) return null
+// No "Worst Performers" table -- the worst a single trade can be is -1R (capped), so
+// every stop-out ranks equally; Worst Performing Markets replaces it.
+export function ReportBestPerformers({ best }: Props) {
+  if (best.length === 0) return null
   return (
     <div>
-      <p className="text-[8pt] font-semibold uppercase tracking-wide mb-1">{title}</p>
+      <p className="text-[8pt] font-semibold uppercase tracking-wide mb-1">Best Performers</p>
       <table className="w-full text-[8pt] border-collapse">
         <thead>
           <tr className="border-b border-black/20">
@@ -32,7 +23,7 @@ function Table({ title, rows }: { title: string; rows: ReportSafeTrade[] }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, i) => (
+          {best.map((r, i) => (
             <tr key={i} className="border-b border-black/5">
               <td className="py-1">{r.date}</td>
               <td className="py-1 font-medium">{r.symbol}</td>

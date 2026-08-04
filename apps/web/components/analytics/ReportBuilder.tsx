@@ -4,7 +4,7 @@ import {
   type MetricsTrade, type MetricsPublication, type AttributionRow,
   triggeredTrades, computeSummary, cumulativeSeries, drawdownSeries,
   rollingWindows, monthlyMatrix, attributionBy, computeTradeStatistics, resultDistribution,
-  distinctAnalystCount, bestWorstTrades,
+  distinctAnalystCount, bestWorstTrades, rankAttribution, MIN_TRADES_FOR_MARKET_RANKING,
 } from '@/lib/metrics'
 import {
   type ReportData, type ReportSections, type ReportAttributionDimension, type ReportSafeTrade,
@@ -41,7 +41,7 @@ const SECTION_DEFS: { key: keyof ReportSections; label: string }[] = [
   { key: 'attribution', label: 'Attribution' },
   { key: 'contribution', label: 'Contribution Analysis' },
   { key: 'tradeStatistics', label: 'Trade Statistics' },
-  { key: 'bestWorst', label: 'Best / Worst Trades' },
+  { key: 'bestWorst', label: 'Best / Worst Performance' },
   { key: 'methodology', label: 'Methodology' },
 ]
 
@@ -144,9 +144,16 @@ export function ReportBuilder({
       contribution[dim] = rows
     }
 
-    const { best: bestTrades, worst: worstTrades } = bestWorstTrades(trades, 10)
+    const { best: bestTrades } = bestWorstTrades(trades, 10)
     const best = bestTrades.map(toReportSafeTrade)
-    const worst = worstTrades.map(toReportSafeTrade)
+
+    // Independent of the attribution-dimension checkboxes above -- this is a fixed part
+    // of the Best/Worst section, not a Contribution/Attribution breakdown choice. Not
+    // subject to the trade-level anonymity gate below: aggregated, min-sample-size rows
+    // carry materially less re-identification risk than a specific trade.
+    const marketAttribution = attributionBy(trades, dimensionFn('market'))
+    const bestMarkets = rankAttribution(marketAttribution, MIN_TRADES_FOR_MARKET_RANKING, 'best')
+    const worstMarkets = rankAttribution(marketAttribution, MIN_TRADES_FOR_MARKET_RANKING, 'worst')
 
     const data: ReportData = {
       universe: {
@@ -169,7 +176,9 @@ export function ReportBuilder({
       contribution,
       tradeStats: computeTradeStatistics(trades, pubs),
       distribution: resultDistribution(trades),
-      bestWorst: allowTradeLevelSections ? { best, worst } : null,
+      bestWorst: allowTradeLevelSections ? { best } : null,
+      bestMarkets,
+      worstMarkets,
       distinctAnalystCount: distinctAnalysts,
       compliance: {
         logoPresent: true,

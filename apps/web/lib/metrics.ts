@@ -324,6 +324,23 @@ export function attributionBy(trades: MetricsTrade[], dimension: (t: MetricsTrad
     .sort((a, b) => b.totalR - a.totalR)
 }
 
+// Shared by the interactive dashboard and the PDF report so both rank markets under
+// the identical threshold -- one authoritative number, not three copies.
+export const MIN_TRADES_FOR_MARKET_RANKING = 20
+
+// Ranks already-grouped attribution rows (e.g. by market) by Total R, applying a
+// minimum-sample floor so single-trade groups can't dominate a "best/worst" list --
+// a market's worst possible single trade is capped at -1R, so raw trade-level
+// worst-performer lists are meaningless; ranking by aggregate Total R per market
+// with a real sample size is what actually surfaces where performance is won or lost.
+export function rankAttribution(rows: AttributionRow[], minTrades: number, direction: 'best' | 'worst', n = 10): AttributionRow[] {
+  const qualifying = rows.filter(r => r.trades >= minTrades)
+  const sorted = direction === 'best'
+    ? qualifying.sort((a, b) => b.totalR - a.totalR)
+    : qualifying.sort((a, b) => a.totalR - b.totalR)
+  return sorted.slice(0, n)
+}
+
 export interface DistributionBucket {
   label: string
   rangeStart: number

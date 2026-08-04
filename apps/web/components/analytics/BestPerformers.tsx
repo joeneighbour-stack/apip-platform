@@ -1,4 +1,4 @@
-interface InternalBestWorstTrade {
+interface InternalBestTrade {
   date: string
   symbol: string
   analystName: string
@@ -7,28 +7,23 @@ interface InternalBestWorstTrade {
 }
 
 interface Props {
-  best: InternalBestWorstTrade[]
-  worst: InternalBestWorstTrade[]
+  best: InternalBestTrade[]
 }
 
 // Internal-only -- includes the analyst column. The report path never imports this
-// component; it has its own ReportBestWorstTable operating on ReportSafeTrade (no
+// component; it has its own ReportBestPerformers operating on ReportSafeTrade (no
 // analyst field exists on that type at all), so there is no shared code path that
 // could leak an analyst name into a report.
-export function BestWorstTrades({ best, worst }: Props) {
-  if (best.length === 0 && worst.length === 0) return null
-  return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-      <BestWorstTable title="Best Performers" rows={best} />
-      <BestWorstTable title="Worst Performers" rows={worst} />
-    </div>
-  )
-}
-
-function BestWorstTable({ title, rows }: { title: string; rows: InternalBestWorstTrade[] }) {
+//
+// No "Worst Performers" equivalent exists here deliberately: the worst a single
+// trade can be is -1R (capped), so every stop-out ranks equally -- an individual-
+// trade worst-performer list carries no analytical signal. Worst Performing Markets
+// (aggregate Total R, min sample size) replaces it below.
+export function BestPerformers({ best }: Props) {
+  if (best.length === 0) return null
   return (
     <div className="space-y-2">
-      <p className="text-xs font-medium text-muted-foreground">{title}</p>
+      <p className="text-xs font-medium text-muted-foreground">Best Performers</p>
       <div className="rounded-lg border border-border overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-muted/50">
@@ -39,7 +34,7 @@ function BestWorstTable({ title, rows }: { title: string; rows: InternalBestWors
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {rows.map((r, i) => (
+            {best.map((r, i) => (
               <tr key={i}>
                 <td className="px-3 py-2 text-xs text-muted-foreground">{r.date}</td>
                 <td className="px-3 py-2 text-xs font-medium">{r.symbol}</td>
