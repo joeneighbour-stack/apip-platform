@@ -23,6 +23,7 @@ interface ActualTrade {
   triggered: boolean
   published_at?: string
   analyst_id?: string
+  source_system?: string
 }
 interface TeamPerformanceGridProps {
   analysts: Analyst[]
@@ -96,8 +97,7 @@ export function TeamPerformanceGrid({
 
   const activePeriodStart = period === 'LAST_MONTH' ? lastMonthStart : currentMonthStart
 
-  // Filter trades by period. lastWeekStart/lastWeekEnd come from the server (page.tsx) so
-  // this range always matches the one used to fetch lastWeekPublications.
+  // Filter trades by period
   const periodTrades = period === 'LAST_WEEK'
     ? actualTrades.filter(t => t.published_at && t.published_at.slice(0, 10) >= lastWeekStart && t.published_at.slice(0, 10) <= lastWeekEnd)
     : actualTrades
@@ -110,7 +110,7 @@ export function TeamPerformanceGrid({
     byName.get(row.kpi_name)!.push(row)
   }
 
-  // Team aggregate for current/last month from KPIs
+  // Team aggregate
   const teamAgg: Record<string, number[]> = {}
   const weekTeamAgg: Record<string, number[]> = {}
 
@@ -129,7 +129,6 @@ export function TeamPerformanceGrid({
       }
     }
   } else {
-    // Last week: compute from raw trades per analyst
     const byAnalyst = new Map<string, ActualTrade[]>()
     for (const t of periodTrades) {
       if (!t.analyst_id) continue
@@ -144,8 +143,7 @@ export function TeamPerformanceGrid({
       const winRate = triggered.length > 0 ? wins.length / triggered.length : null
       const lwPubTotal = lastWeekPublications.filter(p => p.analyst_id === analyst.analyst_id).length
       const trigRate = lwPubTotal > 0 ? triggered.length / lwPubTotal : null
-
-      if (totalR !== 0 || triggered.length > 0) {
+      if (triggered.length > 0) {
         if (!weekTeamAgg['total_return_r']) weekTeamAgg['total_return_r'] = []
         weekTeamAgg['total_return_r'].push(totalR)
         if (winRate !== null) {
@@ -282,7 +280,7 @@ export function TeamPerformanceGrid({
               {analysts.map(analyst => {
                 let analystKpis: { col: typeof KPI_COLS[0], val: number | null, kpiValue: any, hit: boolean | null }[]
                 let hasData = false
-                let returnTrend = trendData(analyst.analyst_id, 'total_return_r')
+                const returnTrend = trendData(analyst.analyst_id, 'total_return_r')
 
                 if (period === 'LAST_WEEK') {
                   const trades = periodTrades.filter(t => t.analyst_id === analyst.analyst_id)
