@@ -44,6 +44,10 @@ interface Props {
   shadowOutcomes: ShadowOutcome[]
   actualTrades: ActualTrade[]
   actualPublications: ActualPublication[]
+  // Rendered between "Since Platform Launch" and "Shadow Outcomes" -- the Analyst vs Shadow
+  // Breakdown grid lives in its own component (own data fetch, own client state) but needs to
+  // appear in the middle of this panel's section order, not after it.
+  breakdownSlot?: React.ReactNode
 }
 
 const STATUS_STYLES: Record<string, string> = {
@@ -87,7 +91,7 @@ function monthLabel(dateStr: string) {
   return d.toLocaleString('en-GB', { day: 'numeric', month: 'short' })
 }
 
-export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades, actualPublications }: Props) {
+export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades, actualPublications, breakdownSlot }: Props) {
   // Live prices for TRIGGERED shadow trades
   const triggeredSymbols = [...new Set(shadowOutcomes
     .filter(o => o.trade_outcome_status === 'TRIGGERED')
@@ -361,6 +365,8 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades, actualPubl
           </div>
         </div>
       </section>
+
+      {breakdownSlot}
 
       {/* Shadow outcomes table */}
       <section className="space-y-3">

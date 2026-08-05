@@ -312,10 +312,7 @@ export default async function ShadowMonitoringPage() {
         shadowOutcomes={sorted}
         actualTrades={actualTrades ?? []}
         actualPublications={rawActualPublications}
-      />
-      <AnalystShadowBreakdown
-        rows={breakdownRows}
-        analysts={breakdownAnalysts}
+        breakdownSlot={<AnalystShadowBreakdown rows={breakdownRows} analysts={breakdownAnalysts} />}
       />
     </div>
   )
