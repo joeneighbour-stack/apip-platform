@@ -21,18 +21,14 @@ interface Props {
   analysts: AnalystOption[]
 }
 
-const STATUS_STYLES: Record<string, string> = {
-  TARGET_HIT:    'bg-green-100 text-green-800',
-  STOP_HIT:      'bg-red-100 text-red-800',
-  EXPIRY:        'bg-muted text-muted-foreground',
-  TRIGGERED:     'bg-blue-50 text-blue-700',
-  NOT_TRIGGERED: 'bg-slate-100 text-slate-600',
-}
-
 const SHADOW_TRIGGERED_STATUSES = ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED', 'CLOSED_PROFIT', 'CLOSED_LOSS']
 
 function fmtR(r: number): string {
   return `${r > 0 ? '+' : ''}${r.toFixed(2)}R`
+}
+
+function rClass(r: number): string {
+  return r >= 0 ? 'text-green-700' : 'text-red-700'
 }
 
 function DirectionBadge({ direction }: { direction: string | null }) {
@@ -41,6 +37,25 @@ function DirectionBadge({ direction }: { direction: string | null }) {
     <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
       direction === 'BUY' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
     }`}>{direction}</span>
+  )
+}
+
+function Chip({ label, value, valueClassName }: { label: string; value: React.ReactNode; valueClassName?: string }) {
+  return (
+    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-border bg-muted/30 text-xs whitespace-nowrap">
+      <span className="text-muted-foreground">{label}</span>
+      <span className={`font-semibold tabular-nums ${valueClassName ?? ''}`}>{value}</span>
+    </div>
+  )
+}
+
+function StatBox({ label, value, valueClassName, sublabel }: { label: string; value: React.ReactNode; valueClassName?: string; sublabel?: string }) {
+  return (
+    <div className="rounded-lg border border-border bg-card p-4">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className={`text-xl font-semibold mt-1 tabular-nums ${valueClassName ?? ''}`}>{value}</p>
+      {sublabel && <p className="text-xs text-muted-foreground mt-0.5">{sublabel}</p>}
+    </div>
   )
 }
 
@@ -84,20 +99,26 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
     <section className="space-y-3">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h2 className="text-sm font-medium">Analyst vs Shadow Breakdown</h2>
-        <div className="flex items-center gap-3 flex-wrap">
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          <div className="flex items-center gap-1.5">
             <input type="date" value={fromDate} max={toDate}
               onChange={e => setFromDate(e.target.value)}
-              className="px-2 py-1 rounded-md border border-border bg-background text-xs" />
-            <span>to</span>
+              className="text-xs px-2.5 py-1.5 rounded-md border border-border bg-background" />
+            <span className="text-xs text-muted-foreground">to</span>
             <input type="date" value={toDate} min={fromDate} max={todayIso()}
               onChange={e => setToDate(e.target.value)}
-              className="px-2 py-1 rounded-md border border-border bg-background text-xs" />
+              className="text-xs px-2.5 py-1.5 rounded-md border border-border bg-background" />
           </div>
-          <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
-            <input type="checkbox" checked={bothSidesOnly} onChange={e => setBothSidesOnly(e.target.checked)} />
+          <button
+            onClick={() => setBothSidesOnly(v => !v)}
+            className={`text-xs px-2.5 py-1.5 rounded-md border transition-colors ${
+              bothSidesOnly
+                ? 'bg-foreground text-background border-foreground'
+                : 'border-border text-muted-foreground hover:text-foreground'
+            }`}
+          >
             Both sides only
-          </label>
+          </button>
         </div>
       </div>
       <p className="text-xs text-muted-foreground">
@@ -125,91 +146,81 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
           const edge = analystTotalR - shadowTotalR
 
           return (
-            <div key={analyst.analyst_id} className="rounded-lg border border-border overflow-hidden">
+            <div key={analyst.analyst_id} className="rounded-lg border border-border bg-card overflow-hidden">
               <button
                 onClick={() => toggle(analyst.analyst_id)}
-                className="w-full flex items-center justify-between px-4 py-3 bg-card hover:bg-muted/30 transition-colors text-left"
+                className="w-full flex items-center justify-between gap-4 px-4 py-3 hover:bg-muted/30 transition-colors text-left"
               >
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 shrink-0">
                   <span className={`text-xs text-muted-foreground transition-transform inline-block ${isOpen ? 'rotate-90' : ''}`}>▶</span>
-                  <span className="text-sm font-medium">{analyst.display_name}</span>
+                  <span className="text-sm font-bold">{analyst.display_name}</span>
                 </div>
-                <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap justify-end">
-                  <span>Matched setups: <span className="font-medium text-foreground">{analystRows.length}</span></span>
-                  <span>Triggered &mdash; analyst <span className="font-medium text-foreground">{analystTriggeredRows.length} of {analystRows.length}</span>, shadow <span className="font-medium text-foreground">{shadowTriggeredRows.length} of {analystRows.length}</span></span>
-                  <span>Win rate &mdash; analyst <span className="font-medium text-foreground">{analystWinRate !== null ? `${Math.round(analystWinRate * 100)}%` : '—'}</span> vs shadow <span className="font-medium text-foreground">{shadowWinRate !== null ? `${Math.round(shadowWinRate * 100)}%` : '—'}</span></span>
-                  <span>Total R &mdash; analyst <span className={`font-medium ${analystTotalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmtR(analystTotalR)}</span> vs shadow <span className={`font-medium ${shadowTotalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmtR(shadowTotalR)}</span></span>
-                  <span>Edge <span className={`font-medium ${edge >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmtR(edge)}</span></span>
+                <div className="flex items-center gap-2 flex-wrap justify-end">
+                  <Chip label="Matched" value={analystRows.length} />
+                  <Chip label="Analyst R" value={fmtR(analystTotalR)} valueClassName={rClass(analystTotalR)} />
+                  <Chip label="Shadow R" value={fmtR(shadowTotalR)} valueClassName={rClass(shadowTotalR)} />
+                  <Chip label="Edge" value={fmtR(edge)} valueClassName={rClass(edge)} />
+                  <Chip
+                    label="Win Rate"
+                    value={
+                      <>
+                        {analystWinRate !== null ? `${Math.round(analystWinRate * 100)}%` : '—'}
+                        <span className="text-muted-foreground font-normal"> / </span>
+                        {shadowWinRate !== null ? `${Math.round(shadowWinRate * 100)}%` : '—'}
+                      </>
+                    }
+                  />
                 </div>
               </button>
 
               {isOpen && (
-                <div className="overflow-x-auto border-t border-border">
-                  <table className="w-full text-sm">
-                    <thead className="bg-muted/50">
-                      <tr>
-                        {['Date', 'Market', 'Analyst', 'Shadow', 'Edge'].map(h => (
-                          <th key={h} className="text-left px-3 py-2.5 text-xs font-medium text-muted-foreground whitespace-nowrap">{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {analystRows.length === 0 ? (
+                <div className="border-t border-border p-4 space-y-4">
+                  <div className="grid grid-cols-4 gap-3">
+                    <StatBox label="Matched Setups" value={analystRows.length} />
+                    <StatBox label="Analyst Triggered" value={`${analystTriggeredRows.length} of ${analystRows.length}`} />
+                    <StatBox label="Shadow Triggered" value={`${shadowTriggeredRows.length} of ${analystRows.length}`} />
+                    <StatBox label="Edge" value={fmtR(edge)} valueClassName={rClass(edge)} sublabel="Analyst minus shadow" />
+                  </div>
+
+                  <div className="rounded-lg border border-border overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-muted/50">
                         <tr>
-                          <td colSpan={5} className="px-4 py-6 text-center text-xs text-muted-foreground">
-                            No matched setups for the selected period.
-                          </td>
+                          {['Date', 'Market', 'Analyst Dir', 'Analyst R', 'Shadow Dir', 'Shadow R', 'Edge'].map(h => (
+                            <th key={h} className="text-left px-3 py-2.5 text-xs font-medium text-muted-foreground whitespace-nowrap">{h}</th>
+                          ))}
                         </tr>
-                      ) : [...analystRows].sort((a, b) => b.date.localeCompare(a.date)).map((r, i) => {
-                        const edgeR = r.analystR !== null && r.shadowR !== null ? r.analystR - r.shadowR : null
-                        return (
-                          <tr key={`${r.date}-${r.symbol}-${i}`} className="hover:bg-muted/30">
-                            <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">{r.date}</td>
-                            <td className="px-3 py-2 text-xs font-medium whitespace-nowrap">{r.symbol}</td>
-                            <td className="px-3 py-2 text-xs whitespace-nowrap">
-                              <div className="flex items-center gap-1.5">
-                                <DirectionBadge direction={r.analystDirection} />
-                                {r.analystTriggered ? (
-                                  r.analystR !== null ? (
-                                    <span className={`font-medium tabular-nums ${r.analystR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                                      {fmtR(r.analystR)}
-                                    </span>
-                                  ) : (
-                                    <span className="text-muted-foreground">Triggered</span>
-                                  )
-                                ) : (
-                                  <span className="text-muted-foreground">Not triggered</span>
-                                )}
-                              </div>
-                            </td>
-                            <td className="px-3 py-2 text-xs whitespace-nowrap">
-                              <div className="flex items-center gap-1.5">
-                                <DirectionBadge direction={r.shadowDirection} />
-                                {r.shadowR !== null ? (
-                                  <span className={`font-medium tabular-nums ${r.shadowR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                                    {fmtR(r.shadowR)}
-                                  </span>
-                                ) : (
-                                  <span className={`font-medium px-2 py-0.5 rounded-full ${
-                                    STATUS_STYLES[r.shadowStatus] ?? 'bg-muted text-muted-foreground'
-                                  }`}>
-                                    {r.shadowStatus.replace(/_/g, ' ')}
-                                  </span>
-                                )}
-                              </div>
-                            </td>
-                            <td className="px-3 py-2 text-xs tabular-nums font-medium">
-                              {edgeR !== null ? (
-                                <span className={edgeR >= 0 ? 'text-green-700' : 'text-red-700'}>{fmtR(edgeR)}</span>
-                              ) : (
-                                <span className="text-muted-foreground">—</span>
-                              )}
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {analystRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} className="px-4 py-6 text-center text-xs text-muted-foreground">
+                              No matched setups for the selected period.
                             </td>
                           </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
+                        ) : [...analystRows].sort((a, b) => b.date.localeCompare(a.date)).map((r, i) => {
+                          const edgeR = r.analystR !== null && r.shadowR !== null ? r.analystR - r.shadowR : null
+                          return (
+                            <tr key={`${r.date}-${r.symbol}-${i}`} className={`hover:bg-muted/30 ${i % 2 === 1 ? 'bg-muted/20' : ''}`}>
+                              <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">{r.date}</td>
+                              <td className="px-3 py-2 text-xs font-medium whitespace-nowrap">{r.symbol}</td>
+                              <td className="px-3 py-2 text-xs whitespace-nowrap"><DirectionBadge direction={r.analystDirection} /></td>
+                              <td className="px-3 py-2 text-xs tabular-nums font-medium whitespace-nowrap">
+                                {r.analystR !== null ? <span className={rClass(r.analystR)}>{fmtR(r.analystR)}</span> : <span className="text-muted-foreground">—</span>}
+                              </td>
+                              <td className="px-3 py-2 text-xs whitespace-nowrap"><DirectionBadge direction={r.shadowDirection} /></td>
+                              <td className="px-3 py-2 text-xs tabular-nums font-medium whitespace-nowrap">
+                                {r.shadowR !== null ? <span className={rClass(r.shadowR)}>{fmtR(r.shadowR)}</span> : <span className="text-muted-foreground">—</span>}
+                              </td>
+                              <td className="px-3 py-2 text-xs tabular-nums font-medium whitespace-nowrap">
+                                {edgeR !== null ? <span className={rClass(edgeR)}>{fmtR(edgeR)}</span> : <span className="text-muted-foreground">—</span>}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
             </div>
