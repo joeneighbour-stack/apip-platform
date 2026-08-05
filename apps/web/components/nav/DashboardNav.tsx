@@ -27,7 +27,7 @@ interface NavProps {
 export function DashboardNav({ role, displayName }: NavProps) {
   const visibleItems = NAV_ITEMS.filter(item => item.roles.includes(role))
   return (
-    <nav className="flex items-center justify-between px-6 py-3 border-b border-border bg-card">
+    <nav className="flex items-center justify-between px-6 py-3 border-b border-border bg-card print:hidden">
       <div className="flex items-center gap-8">
         <span className="font-semibold text-sm tracking-tight text-foreground">APIP</span>
         <div className="flex items-center gap-1">
