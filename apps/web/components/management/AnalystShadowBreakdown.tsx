@@ -31,6 +31,28 @@ function rClass(r: number): string {
   return r >= 0 ? 'text-green-700' : 'text-red-700'
 }
 
+// "45 of 122" hides how good/bad that ratio actually is at a glance -- the percentage is the
+// number that matters, with the raw count kept alongside for anyone who wants to verify it.
+function fmtPctCount(count: number, total: number): string {
+  if (total === 0) return '—'
+  return `${Math.round(count / total * 100)}% (${count}/${total})`
+}
+
+function fmtPct(count: number, total: number): string {
+  if (total === 0) return '—'
+  return `${Math.round(count / total * 100)}%`
+}
+
+// Resolved (both sides have a result) comparisons are the ones worth looking at first --
+// rows where only one side triggered, or neither did, carry no Edge and are pushed down.
+function resolutionTier(r: BreakdownRow): number {
+  const hasAnalyst = r.analystR !== null
+  const hasShadow = r.shadowR !== null
+  if (hasAnalyst && hasShadow) return 2
+  if (hasAnalyst || hasShadow) return 1
+  return 0
+}
+
 function DirectionBadge({ direction }: { direction: string | null }) {
   if (!direction) return <span className="text-muted-foreground">—</span>
   return (
@@ -127,6 +149,14 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
         match &mdash; the two sides can disagree on the trade.
       </p>
 
+      <div className="space-y-1 pt-1">
+        <h3 className="text-sm font-semibold">Analyst vs Shadow &mdash; Head to Head</h3>
+        <p className="text-xs text-muted-foreground">
+          How each analyst performs on markets they covered, compared directly against the shadow system&apos;s
+          setup for the same market on the same day.
+        </p>
+      </div>
+
       <div className="space-y-2">
         {analysts.map(analyst => {
           const analystRows = byAnalyst.get(analyst.analyst_id) ?? []
@@ -145,6 +175,9 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
 
           const edge = analystTotalR - shadowTotalR
 
+          const analystTriggerPct = fmtPct(analystTriggeredRows.length, analystRows.length)
+          const shadowTriggerPct = fmtPct(shadowTriggeredRows.length, analystRows.length)
+
           return (
             <div key={analyst.analyst_id} className="rounded-lg border border-border bg-card overflow-hidden">
               <button
@@ -157,15 +190,18 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
                 </div>
                 <div className="flex items-center gap-2 flex-wrap justify-end">
                   <Chip label="Matched" value={analystRows.length} />
+                  <Chip label="Trigger%" value={`${analystTriggerPct} / ${shadowTriggerPct}`} />
                   <Chip label="Analyst R" value={fmtR(analystTotalR)} valueClassName={rClass(analystTotalR)} />
                   <Chip label="Shadow R" value={fmtR(shadowTotalR)} valueClassName={rClass(shadowTotalR)} />
-                  <Chip label="Edge" value={fmtR(edge)} valueClassName={rClass(edge)} />
+                  <Chip label="Analyst Edge" value={fmtR(edge)} valueClassName={rClass(edge)} />
                   <Chip
-                    label="Win Rate"
+                    label="Win Rate:"
                     value={
                       <>
+                        <span className="text-muted-foreground font-normal">Analyst</span>{' '}
                         {analystWinRate !== null ? `${Math.round(analystWinRate * 100)}%` : '—'}
                         <span className="text-muted-foreground font-normal"> / </span>
+                        <span className="text-muted-foreground font-normal">Shadow</span>{' '}
                         {shadowWinRate !== null ? `${Math.round(shadowWinRate * 100)}%` : '—'}
                       </>
                     }
@@ -177,18 +213,34 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
                 <div className="border-t border-border p-4 space-y-4">
                   <div className="grid grid-cols-4 gap-3">
                     <StatBox label="Matched Setups" value={analystRows.length} />
-                    <StatBox label="Analyst Triggered" value={`${analystTriggeredRows.length} of ${analystRows.length}`} />
-                    <StatBox label="Shadow Triggered" value={`${shadowTriggeredRows.length} of ${analystRows.length}`} />
-                    <StatBox label="Edge" value={fmtR(edge)} valueClassName={rClass(edge)} sublabel="Analyst minus shadow" />
+                    <StatBox label="Analyst Triggered" value={fmtPctCount(analystTriggeredRows.length, analystRows.length)} />
+                    <StatBox label="Shadow Triggered" value={fmtPctCount(shadowTriggeredRows.length, analystRows.length)} />
+                    <StatBox
+                      label="Analyst Edge"
+                      value={fmtR(edge)}
+                      valueClassName={rClass(edge)}
+                      sublabel="Analyst R minus Shadow R — positive means analyst outperformed shadow"
+                    />
                   </div>
+
+                  <p className="text-xs text-muted-foreground">
+                    <span className="font-medium text-foreground">—</span> = trade not yet resolved or did not trigger.
+                    Edge is only shown when both sides have a result.
+                  </p>
 
                   <div className="rounded-lg border border-border overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead className="bg-muted/50">
                         <tr>
-                          {['Date', 'Market', 'Analyst Dir', 'Analyst R', 'Shadow Dir', 'Shadow R', 'Edge'].map(h => (
+                          {['Date', 'Market', 'Analyst Dir', 'Analyst R', 'Shadow Dir', 'Shadow R'].map(h => (
                             <th key={h} className="text-left px-3 py-2.5 text-xs font-medium text-muted-foreground whitespace-nowrap">{h}</th>
                           ))}
+                          <th
+                            className="text-left px-3 py-2.5 text-xs font-medium text-muted-foreground whitespace-nowrap"
+                            title="Analyst R minus Shadow R — positive means analyst outperformed shadow"
+                          >
+                            Edge (+ = analyst wins)
+                          </th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-border">
@@ -198,7 +250,11 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
                               No matched setups for the selected period.
                             </td>
                           </tr>
-                        ) : [...analystRows].sort((a, b) => b.date.localeCompare(a.date)).map((r, i) => {
+                        ) : [...analystRows].sort((a, b) => {
+                          const dateCompare = b.date.localeCompare(a.date)
+                          if (dateCompare !== 0) return dateCompare
+                          return resolutionTier(b) - resolutionTier(a)
+                        }).map((r, i) => {
                           const edgeR = r.analystR !== null && r.shadowR !== null ? r.analystR - r.shadowR : null
                           return (
                             <tr key={`${r.date}-${r.symbol}-${i}`} className={`hover:bg-muted/30 ${i % 2 === 1 ? 'bg-muted/20' : ''}`}>
