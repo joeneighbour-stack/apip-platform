@@ -2,8 +2,10 @@ import { getCurrentUser } from '@/lib/auth'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { CoverageStrip } from '@/components/analyst/workspace/CoverageStrip'
-import { entryDistanceLanguage, parseGuidanceRange, atrDistanceFromEntry } from '@/lib/workspaceUtils'
-import type { WorkspaceRow, RegimeInfo, EventRiskItem, HistoricalEdge } from '@/components/analyst/workspace/types'
+import { entryDistanceLanguage, parseGuidanceRange, atrDistanceFromEntry, marketCurrencies } from '@/lib/workspaceUtils'
+import type { WorkspaceRow, RegimeInfo, EventRiskItem, HistoricalEdge, PriceBar } from '@/components/analyst/workspace/types'
+
+const EVENT_CAP = 4
 
 function SessionStatus() {
   const now = new Date()
@@ -76,6 +78,14 @@ export default async function AnalystWorkspacePage() {
 
   const marketIds = recommendations.map((r: any) => r.opportunity?.market?.market_id).filter(Boolean)
 
+  const marketMetaById = new Map<string, { symbol: string; assetClass: string | null }>()
+  for (const rec of recommendations as any[]) {
+    const market = rec.opportunity?.market
+    if (market?.market_id && !marketMetaById.has(market.market_id)) {
+      marketMetaById.set(market.market_id, { symbol: market.symbol, assetClass: market.asset_class ?? null })
+    }
+  }
+
   // market_event_risk: raw table (risk_score, analyst_warning) is internal-only per RLS
   // (migrations/002_rls.sql -- analysts are meant to consume event risk through
   // market_event_risk_analyst_view, which drops risk_score). This build surfaces
@@ -93,10 +103,18 @@ export default async function AnalystWorkspacePage() {
         .eq('event_risk_status', 'HIGH_RISK')
     : { data: [] }
 
+  // risk_score is a fixed categorical value keyed off event_risk_status, not a
+  // continuous per-event score (verified live: WATCH rows are always 0.5,
+  // HIGH_RISK rows always 0.9) -- every row here reads 9.0/10 because this
+  // fetch already filters to HIGH_RISK only, not because of a join-key bug.
   const todayEventsByMarket = new Map<string, EventRiskItem[]>()
   for (const er of (eventRisks ?? []) as any[]) {
     const event = er.event
     if (!event || event.event_time_uk?.slice(0, 10) !== today) continue
+    const meta = marketMetaById.get(er.market_id)
+    const currencies = meta ? marketCurrencies(meta.symbol, meta.assetClass) : []
+    const isRelevant = event.impact === 'HIGH' || (event.currency && currencies.includes(event.currency))
+    if (!isRelevant) continue
     if (!todayEventsByMarket.has(er.market_id)) todayEventsByMarket.set(er.market_id, [])
     const existing = todayEventsByMarket.get(er.market_id)!
     if (!existing.find(e => e.eventName === event.event_name)) {
@@ -112,16 +130,24 @@ export default async function AnalystWorkspacePage() {
       })
     }
   }
+  for (const items of todayEventsByMarket.values()) {
+    items.sort((a, b) => a.eventTimeUk.localeCompare(b.eventTimeUk))
+  }
 
   // market_regime_state is internal-only per RLS (ADMIN/MANAGER/RESEARCH) --
-  // adminDb required. Two most recent rows per market so the detail card can
-  // describe volatility as expanding/contracting vs. the prior reading.
+  // adminDb required. No date window here: the regime batch job doesn't write a
+  // row for every market every day (some markets have gaps of several days, a
+  // few never have enough bar history for EMA200 at all), so a recent-window
+  // filter was silently dropping markets whose last real update happened to
+  // fall just outside it. Ordering by captured_at desc + taking the first two
+  // rows per market (below) always gets the true latest reading regardless of
+  // how old it is, and "no regime data" is only ever shown for markets with
+  // zero rows in the table's full history.
   const { data: regimeRows } = marketIds.length > 0
     ? await adminDb
         .from('market_regime_state')
         .select('market_id, trend_state, volatility_state, regime_confidence, derived_from, captured_at')
         .in('market_id', marketIds)
-        .gte('captured_at', sevenDaysAgo + 'T00:00:00Z')
         .order('captured_at', { ascending: false })
     : { data: [] }
 
@@ -169,6 +195,26 @@ export default async function AnalystWorkspacePage() {
   const priorDayByMarket = new Map<string, any>()
   for (const row of (priorDayRows ?? []) as any[]) {
     if (!priorDayByMarket.has(row.market_id)) priorDayByMarket.set(row.market_id, row)
+  }
+
+  // 30-day OHLC for the detail card's price chart.
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
+  const { data: priceHistoryRows } = marketIds.length > 0
+    ? await supabase
+        .from('market_state_daily')
+        .select('market_id, date, open, high, low, close')
+        .in('market_id', marketIds)
+        .gte('date', thirtyDaysAgo)
+        .order('date', { ascending: true })
+    : { data: [] }
+
+  const priceHistoryByMarket = new Map<string, PriceBar[]>()
+  for (const row of (priceHistoryRows ?? []) as any[]) {
+    if (!priceHistoryByMarket.has(row.market_id)) priceHistoryByMarket.set(row.market_id, [])
+    priceHistoryByMarket.get(row.market_id)!.push({
+      date: row.date,
+      open: Number(row.open), high: Number(row.high), low: Number(row.low), close: Number(row.close),
+    })
   }
 
   // market_state_intraday is internal-only per RLS -- adminDb, used only for the
@@ -300,13 +346,21 @@ export default async function AnalystWorkspacePage() {
 
     const riskParsed = parseGuidanceRange(rec.risk_range)
     const targetParsed = parseGuidanceRange(rec.target_range)
+    const riskMid = riskParsed ? (riskParsed[0] + riskParsed[1]) / 2 : null
+    const targetMid = targetParsed ? (targetParsed[0] + targetParsed[1]) / 2 : null
 
-    const currentPrice = marketId ? currentPriceByMarket.get(marketId) ?? null : null
+    // Live intraday price is the real "current price"; entry_range_low and
+    // yesterday's close are fallbacks per spec, in that priority order, for
+    // markets/sessions where a fresh intraday snapshot isn't available.
+    const currentPrice = marketId
+      ? currentPriceByMarket.get(marketId) ?? entryLow ?? (priorDay?.close != null ? Number(priorDay.close) : null)
+      : null
     const yTrade = marketId ? yesterdayTradeByMarket.get(marketId) : null
 
     const triggerProbability = rec.trigger_probability != null ? Number(rec.trigger_probability) : null
     const expectedR = rec.expected_r != null ? Number(rec.expected_r) : null
     const hasEventRisk = marketId ? todayEventsByMarket.has(marketId) : false
+    const allEventItems = marketId ? todayEventsByMarket.get(marketId) ?? [] : []
 
     return {
       recommendationId: rec.recommendation_id,
@@ -320,6 +374,7 @@ export default async function AnalystWorkspacePage() {
       targetRange: rec.target_range || null,
       riskAtrDistance: atrDistanceFromEntry(entryMid, riskParsed, atr14),
       targetAtrDistance: atrDistanceFromEntry(entryMid, targetParsed, atr14),
+      riskMid, targetMid,
       triggerProbability,
       expectedR,
       validityStatus: validity,
@@ -327,7 +382,10 @@ export default async function AnalystWorkspacePage() {
       isDoNotUse, isEntryPassed, isStale,
       regime: marketId ? regimeByMarket.get(marketId) ?? null : null,
       hasHighImpactEventToday: hasEventRisk,
-      eventRiskItems: marketId ? todayEventsByMarket.get(marketId) ?? [] : [],
+      eventRiskItems: allEventItems.slice(0, EVENT_CAP),
+      eventRiskOverflowCount: Math.max(0, allEventItems.length - EVENT_CAP),
+      currentPrice,
+      priceHistory: marketId ? priceHistoryByMarket.get(marketId) ?? [] : [],
       previousDay: priorDay ? {
         date: priorDay.date,
         open: Number(priorDay.open), high: Number(priorDay.high),
@@ -380,10 +438,10 @@ export default async function AnalystWorkspacePage() {
           )}
           {closedYesterday.length > 0 && (
             <div className={`rounded-lg border px-4 py-3 text-center min-w-[80px] ${yesterdayR >= 0 ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}>
-              <p className={`text-2xl font-semibold ${yesterdayR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+              <p className={`text-xs mb-0.5 ${yesterdayR >= 0 ? 'text-green-600' : 'text-red-600'}`}>Yesterday</p>
+              <p className={`text-2xl font-semibold tabular-nums ${yesterdayR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                 {yesterdayR > 0 ? '+' : ''}{yesterdayR.toFixed(1)}R
               </p>
-              <p className={`text-xs mt-0.5 ${yesterdayR >= 0 ? 'text-green-600' : 'text-red-600'}`}>Yesterday</p>
             </div>
           )}
         </div>

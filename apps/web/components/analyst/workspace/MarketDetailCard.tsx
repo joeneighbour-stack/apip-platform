@@ -2,10 +2,12 @@
 import { useState } from 'react'
 import { MarketNews } from '@/components/analyst/MarketNews'
 import { ZoneLadder } from './ZoneLadder'
+import { PriceChart } from './PriceChart'
 import { formatR, formatPercent } from '@/lib/format'
 import {
-  trendArrow, trendLabelFull, emaStackString, directionalPersistenceLabel,
-  atrPercentileLabel, volatilityTrend, weekdayDateLabel, fxPipCount, zoneLabel,
+  emaStackString, directionalPersistenceLabel,
+  volatilityTrend, weekdayDateLabel, fxPipCount, zoneLabel,
+  regimeTrendLabelWithAdx, regimeVolatilityLabel, confidenceBadgeLabel,
 } from '@/lib/workspaceUtils'
 import type { WorkspaceRow } from './types'
 
@@ -51,6 +53,20 @@ export function MarketDetailCard({ row }: Props) {
           entryHigh={row.entryHigh}
           displayPrecision={row.displayPrecision}
           distanceLanguage={row.distanceLanguage}
+          currentPrice={row.currentPrice}
+        />
+      </section>
+
+      {/* Price chart (30 days) */}
+      <section>
+        <h3 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Price (30 Days)</h3>
+        <PriceChart
+          data={row.priceHistory}
+          entryLow={row.entryLow}
+          entryHigh={row.entryHigh}
+          stopMid={row.riskMid}
+          targetMid={row.targetMid}
+          displayPrecision={row.displayPrecision}
         />
       </section>
 
@@ -99,17 +115,22 @@ export function MarketDetailCard({ row }: Props) {
         {row.regime ? (
           <div className="text-xs space-y-1 tabular-nums">
             <p>
-              <span className="font-medium text-foreground">{trendArrow(row.regime.trendState)} {trendLabelFull(row.regime.trendState).toUpperCase()}</span>
-              <span className="text-muted-foreground">{'  '}ADX: <span className="text-foreground">{row.regime.adx14?.toFixed(1) ?? '—'}</span></span>
-              <span className="text-muted-foreground">{'  '}Confidence: <span className="text-foreground">{row.regime.confidence ?? '—'}</span></span>
+              <span className="text-muted-foreground">Trend: </span>
+              <span className="font-medium text-foreground">{regimeTrendLabelWithAdx(row.regime.trendState, row.regime.adx14)}</span>
+              <span className={`ml-2 inline-block px-1.5 py-0.5 rounded-full text-[10px] border ${
+                row.regime.confidence === 'HIGH' ? 'bg-green-50 border-green-200 text-green-800'
+                  : row.regime.confidence === 'MEDIUM' ? 'bg-amber-50 border-amber-200 text-amber-800'
+                  : 'bg-muted border-border text-muted-foreground'
+              }`}>
+                {confidenceBadgeLabel(row.regime.confidence)}
+              </span>
             </p>
             <p className="text-muted-foreground">
               EMA Stack: <span className="text-foreground">{emaStackString(row.regime.ema20, row.regime.ema50, row.regime.ema200)}</span>
               {'  '}Persistence: <span className="text-foreground">{directionalPersistenceLabel(row.regime.directionalPersistence)}</span>
             </p>
             <p className="text-muted-foreground">
-              Volatility: <span className="text-foreground">{row.regime.volatilityState ?? '—'}</span>
-              {'  '}ATR Percentile: <span className="text-foreground">{atrPercentileLabel(row.regime.atrPercentile)}</span>
+              Volatility: <span className="text-foreground">{regimeVolatilityLabel(row.regime.atrPercentile)}</span>
               {volTrend && volTrend !== 'flat' && (
                 <span className={volTrend === 'expanding' ? 'text-amber-600' : 'text-muted-foreground'}> ({volTrend} vs. yesterday)</span>
               )}
@@ -207,6 +228,9 @@ export function MarketDetailCard({ row }: Props) {
                 )}
               </div>
             ))}
+            {row.eventRiskOverflowCount > 0 && (
+              <p className="text-[11px] text-muted-foreground">and {row.eventRiskOverflowCount} more event{row.eventRiskOverflowCount === 1 ? '' : 's'}</p>
+            )}
           </div>
         )}
       </section>

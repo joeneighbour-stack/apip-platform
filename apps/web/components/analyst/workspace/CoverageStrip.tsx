@@ -2,8 +2,8 @@
 import { Fragment, useState } from 'react'
 import { MarketDetailCard } from './MarketDetailCard'
 import {
-  zoneShortLabel, zoneProximityClass, ZONE_PROXIMITY_TEXT_CLASS,
-  trendArrow, estimateSessionEnd, countdownLabel,
+  zonePlainLabel, zoneProximityClass, ZONE_PROXIMITY_TEXT_CLASS,
+  regimeTrendLabel, confidenceBadgeLabel, estimateSessionEnd, countdownLabel,
 } from '@/lib/workspaceUtils'
 import type { WorkspaceRow } from './types'
 
@@ -59,8 +59,8 @@ export function CoverageStrip({ rows }: Props) {
                         {row.direction ?? '—'}
                       </span>
                     </td>
-                    <td className={`py-2 px-3 font-medium ${ZONE_PROXIMITY_TEXT_CLASS[proximity]}`}>
-                      {zoneShortLabel(row.currentZone)} → {zoneShortLabel(row.preferredZone)}
+                    <td className={`py-2 px-3 font-medium whitespace-nowrap ${ZONE_PROXIMITY_TEXT_CLASS[proximity]}`}>
+                      {zonePlainLabel(row.currentZone)} → {zonePlainLabel(row.preferredZone)}
                     </td>
                     <td className="py-2 px-3 text-muted-foreground">
                       {row.entryLow != null && row.entryHigh != null
@@ -71,17 +71,17 @@ export function CoverageStrip({ rows }: Props) {
                     <td className={`py-2 px-3 font-medium ${(row.expectedR ?? 0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                       {row.expectedR != null ? `${row.expectedR > 0 ? '+' : ''}${row.expectedR.toFixed(2)}R` : '—'}
                     </td>
-                    <td className="py-2 px-3">
+                    <td className="py-2 px-3 whitespace-nowrap">
                       {row.regime ? (
                         <span>
-                          {trendArrow(row.regime.trendState)} ADX {row.regime.adx14?.toFixed(0) ?? '—'}
+                          {regimeTrendLabel(row.regime.trendState, row.regime.adx14, true)}
                           {row.regime.confidence && (
                             <span className={`ml-1.5 inline-block px-1.5 py-0.5 rounded-full text-[10px] border ${
                               row.regime.confidence === 'HIGH' ? 'bg-green-50 border-green-200 text-green-800'
                                 : row.regime.confidence === 'MEDIUM' ? 'bg-amber-50 border-amber-200 text-amber-800'
                                 : 'bg-muted border-border text-muted-foreground'
                             }`}>
-                              {row.regime.confidence}
+                              {confidenceBadgeLabel(row.regime.confidence)}
                             </span>
                           )}
                         </span>

@@ -82,6 +82,77 @@ export function trendLabelFull(state: string | null): string {
   }
 }
 
+/**
+ * Plain-English trend description derived from trend_state + ADX14, per spec:
+ * ADX < 15 is always "Ranging" regardless of direction; TRENDING_UP/DOWN with
+ * ADX >= 25 is "Strong", 15-25 is "Weak". RANGE/MIXED states with ADX >= 15
+ * have no reliable directional bias, so they also read as "Ranging".
+ */
+export function regimeTrendLabel(trendState: string | null, adx14: number | null, short = false): string {
+  if (adx14 == null || trendState == null) return '—'
+  if (adx14 < 15) return 'Ranging'
+  const strength = adx14 >= 25 ? 'Strong' : 'Weak'
+  if (trendState === 'TRENDING_UP') return short ? `${strength} Up` : `${strength} Uptrend`
+  if (trendState === 'TRENDING_DOWN') return short ? `${strength} Down` : `${strength} Downtrend`
+  return 'Ranging'
+}
+
+export function regimeTrendLabelWithAdx(trendState: string | null, adx14: number | null): string {
+  const label = regimeTrendLabel(trendState, adx14)
+  if (label === '—' || adx14 == null) return label
+  return `${label} (ADX ${adx14.toFixed(0)})`
+}
+
+/** Volatility description derived from ATR percentile, per spec:
+ *  >70th = Expanding, 30-70th = Normal, <30th = Contracting. */
+export function regimeVolatilityLabel(atrPercentile: number | null): string {
+  if (atrPercentile == null) return '—'
+  const state = atrPercentile > 70 ? 'Expanding' : atrPercentile < 30 ? 'Contracting' : 'Normal'
+  return `${state} (${atrPercentileLabel(atrPercentile)})`
+}
+
+export function confidenceBadgeLabel(confidence: string | null): string {
+  switch (confidence) {
+    case 'HIGH': return 'HIGH'
+    case 'MEDIUM': return 'MED'
+    case 'LOW': return 'LOW'
+    default: return '—'
+  }
+}
+
+/**
+ * Plain-English zone label -- direction-independent. A SELL analyst entering
+ * at Zone 4 sees the same word ("Stretched") a BUY analyst would see for the
+ * same zone; direction only changes which zone happens to be preferred/starred,
+ * not the vocabulary used to describe each zone.
+ */
+export function zonePlainLabel(zone: string | null): string {
+  switch (zone) {
+    case 'TOO_DEEP': return 'Extreme Low'
+    case 'ZONE_1': return 'Deep Value'
+    case 'ZONE_2': return 'Value'
+    case 'ZONE_3': return 'Fair Value'
+    case 'ZONE_4': return 'Stretched'
+    case 'TOO_HIGH': return 'Extreme High'
+    default: return '—'
+  }
+}
+
+/** Currency codes implied by a 6-letter FX symbol (e.g. "EURUSD" -> ["EUR","USD"]).
+ *  Returns [] for non-FX symbols/asset classes, where currency-based event
+ *  filtering doesn't apply and callers should fall back to impact-only filtering. */
+export function marketCurrencies(symbol: string, assetClass: string | null): string[] {
+  if (assetClass !== 'FX') return []
+  const clean = symbol.replace(/[^A-Za-z]/g, '')
+  if (clean.length !== 6) return []
+  return [clean.slice(0, 3).toUpperCase(), clean.slice(3, 6).toUpperCase()]
+}
+
+/** "05 Aug" -- compact chart axis label, no year/weekday. */
+export function chartDateLabel(dateStr: string): string {
+  return new Date(dateStr + 'T12:00:00Z').toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
+}
+
 /** "20 > 50 > 200" / "20 < 50 < 200" / mixed comparisons, from raw EMA values. */
 export function emaStackString(ema20: number | null, ema50: number | null, ema200: number | null): string {
   if (ema20 == null || ema50 == null || ema200 == null) return '—'

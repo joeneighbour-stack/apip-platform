@@ -45,6 +45,14 @@ export interface HistoricalEdge {
   quality: string | null
 }
 
+export interface PriceBar {
+  date: string
+  open: number
+  high: number
+  low: number
+  close: number
+}
+
 export interface WorkspaceRow {
   recommendationId: string
   symbol: string
@@ -58,6 +66,8 @@ export interface WorkspaceRow {
   targetRange: string | null
   riskAtrDistance: number | null
   targetAtrDistance: number | null
+  riskMid: number | null
+  targetMid: number | null
   triggerProbability: number | null
   expectedR: number | null
   validityStatus: string
@@ -68,6 +78,7 @@ export interface WorkspaceRow {
   regime: RegimeInfo | null
   hasHighImpactEventToday: boolean
   eventRiskItems: EventRiskItem[]
+  eventRiskOverflowCount: number
   previousDay: PreviousDaySummary | null
   yesterdayTradeOutcome: YesterdayTradeOutcome | null
   historicalEdge: HistoricalEdge
@@ -79,4 +90,6 @@ export interface WorkspaceRow {
   distanceLanguage: string | null
   sessionEndIso: string
   priorityScore: number
+  currentPrice: number | null
+  priceHistory: PriceBar[]
 }
