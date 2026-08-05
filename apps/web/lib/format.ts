@@ -17,7 +17,7 @@ export function formatDate(dateStr: string): string {
 }
 
 export function formatDateShort(dateStr: string): string {
-  return new Date(dateStr + 'T12:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+  return new Date(dateStr + 'T12:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' })
 }
 
 export function positivityClass(value: number | null): string {
