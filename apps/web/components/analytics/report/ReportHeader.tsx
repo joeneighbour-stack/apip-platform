@@ -25,7 +25,6 @@ export function ReportHeader({ universe }: Props) {
         <p className="text-[12pt] font-semibold">{universe.title}</p>
         <p className="text-[9pt] text-black/70">{universe.subtitle}</p>
         <p className="text-[9pt] text-black/70">{universe.periodLabel}</p>
-        {universe.filterSummary && <p className="text-[8pt] text-black/60 mt-0.5">{universe.filterSummary}</p>}
       </div>
     </header>
   )

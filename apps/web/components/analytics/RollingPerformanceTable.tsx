@@ -8,7 +8,7 @@ interface Props {
 export function RollingPerformanceTable({ rows }: Props) {
   return (
     <div className="space-y-2">
-      <p className="text-xs font-medium text-muted-foreground">Rolling Performance</p>
+      <p className="text-xs font-medium text-muted-foreground print:uppercase print:tracking-wide">Rolling Performance</p>
       <div className="rounded-lg border border-border overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-muted/50">
@@ -19,8 +19,8 @@ export function RollingPerformanceTable({ rows }: Props) {
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {rows.map(row => (
-              <tr key={row.label} className="hover:bg-muted/30 transition-colors">
+            {rows.map((row, i) => (
+              <tr key={row.label} className={`hover:bg-muted/30 transition-colors ${i % 2 === 1 ? 'print:bg-black/[0.03]' : ''}`}>
                 <td className="px-4 py-2.5 font-medium">{row.label}</td>
                 {row.insufficientData ? (
                   <td colSpan={5} className="px-4 py-2.5 text-xs text-muted-foreground">Insufficient data</td>

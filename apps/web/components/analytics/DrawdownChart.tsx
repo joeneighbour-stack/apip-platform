@@ -15,7 +15,7 @@ export function DrawdownChart({ data }: Props) {
   if (data.length === 0) return null
   return (
     <div className="rounded-lg border border-border bg-card p-4 space-y-3">
-      <p className="text-xs font-medium text-muted-foreground">Drawdown (R)</p>
+      <p className="text-xs font-medium text-muted-foreground print:uppercase print:tracking-wide">Drawdown (R)</p>
       <div className="h-32 print:h-28">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data} syncId="performance" margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>

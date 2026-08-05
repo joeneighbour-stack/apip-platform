@@ -29,12 +29,12 @@ export function TradeStatistics({ stats, distribution }: Props) {
   return (
     <div className="space-y-4">
       <div className="space-y-2">
-        <p className="text-xs font-medium text-muted-foreground">Trade Statistics</p>
+        <p className="text-xs font-medium text-muted-foreground print:uppercase print:tracking-wide">Trade Statistics</p>
         <div className="rounded-lg border border-border overflow-hidden">
           <table className="w-full text-sm">
             <tbody className="divide-y divide-border">
-              {ROWS.map(r => (
-                <tr key={r.key}>
+              {ROWS.map((r, i) => (
+                <tr key={r.key} className={i % 2 === 1 ? 'print:bg-black/[0.03]' : ''}>
                   <td className="px-4 py-2 text-muted-foreground">{r.label}</td>
                   <td className="px-4 py-2 text-right tabular-nums font-medium">{r.fmt(stats[r.key])}</td>
                 </tr>
@@ -45,7 +45,7 @@ export function TradeStatistics({ stats, distribution }: Props) {
       </div>
       {distribution.length > 0 && (
         <div className="rounded-lg border border-border bg-card p-4 space-y-3">
-          <p className="text-xs font-medium text-muted-foreground">Winner / Loser Distribution</p>
+          <p className="text-xs font-medium text-muted-foreground print:uppercase print:tracking-wide">Winner / Loser Distribution</p>
           <div className="h-40">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={distribution} margin={{ top: 4, right: 8, left: 0, bottom: 20 }}>

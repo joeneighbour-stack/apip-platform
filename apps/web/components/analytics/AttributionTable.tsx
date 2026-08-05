@@ -26,7 +26,7 @@ export function AttributionTable({ title, rows, minTrades = 0, entityLabel = 'Ro
     : ['', 'Trades', 'Win %', 'Total R', 'Avg R', 'Profit Factor']
   return (
     <div className="space-y-2">
-      <p className="text-xs font-medium text-muted-foreground">{title}</p>
+      <p className="text-xs font-medium text-muted-foreground print:uppercase print:tracking-wide">{title}</p>
       {visible.length === 0 ? (
         <p className="text-xs text-muted-foreground">Insufficient data.</p>
       ) : (
@@ -41,8 +41,8 @@ export function AttributionTable({ title, rows, minTrades = 0, entityLabel = 'Ro
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {visible.map(row => (
-                  <tr key={row.key} className="hover:bg-muted/30 transition-colors">
+                {visible.map((row, i) => (
+                  <tr key={row.key} className={`hover:bg-muted/30 transition-colors ${i % 2 === 1 ? 'print:bg-black/[0.03]' : ''}`}>
                     <td className="px-4 py-2.5 font-medium">{row.label}</td>
                     <td className="px-4 py-2.5 tabular-nums text-muted-foreground">{row.trades.toLocaleString()}</td>
                     <td className="px-4 py-2.5 tabular-nums">{formatPercent(row.winRate)}</td>

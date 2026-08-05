@@ -20,7 +20,7 @@ export function CumulativePerformanceChart({ data }: Props) {
   }
   return (
     <div className="rounded-lg border border-border bg-card p-4 space-y-3">
-      <p className="text-xs font-medium text-muted-foreground">Cumulative Performance (R)</p>
+      <p className="text-xs font-medium text-muted-foreground print:uppercase print:tracking-wide">Cumulative Performance (R)</p>
       <div className="h-64 print:h-56">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data} syncId="performance" margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>

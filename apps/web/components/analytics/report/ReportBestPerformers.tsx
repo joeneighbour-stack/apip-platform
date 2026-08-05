@@ -24,7 +24,7 @@ export function ReportBestPerformers({ best }: Props) {
         </thead>
         <tbody>
           {best.map((r, i) => (
-            <tr key={i} className="border-b border-black/5">
+            <tr key={i} className={`border-b border-black/5 ${i % 2 === 1 ? 'bg-black/[0.03]' : ''}`}>
               <td className="py-1">{r.date}</td>
               <td className="py-1 font-medium">{r.symbol}</td>
               <td className="py-1">{r.direction}</td>

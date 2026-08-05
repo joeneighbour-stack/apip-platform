@@ -29,7 +29,7 @@
 @media print {
   @page {
     size: A4;
-    margin: 16mm 14mm;
+    margin: 2cm;
   }
   html, body {
     background: white !important;

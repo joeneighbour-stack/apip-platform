@@ -21,7 +21,7 @@ export function ContributionChart({ title, rows, topN = 10, bottomN = 5 }: Props
 
   return (
     <div className="rounded-lg border border-border bg-card p-4 space-y-3">
-      <p className="text-xs font-medium text-muted-foreground">
+      <p className="text-xs font-medium text-muted-foreground print:uppercase print:tracking-wide">
         {title}{truncated ? ` — Top ${topN} Contributors / Bottom ${bottomN} Detractors` : ''}
       </p>
       <div style={{ height }}>
