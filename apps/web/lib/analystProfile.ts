@@ -33,6 +33,7 @@ export async function getAnalystProfileData(
   mode: 'full' | 'kpi-only' = 'full'
 ): Promise<AnalystProfileData> {
   const supabase = await createClient()
+  const adminDb = createAdminClient()
 
   const now = new Date()
   const monthStart = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`
@@ -62,7 +63,59 @@ export async function getAnalystProfileData(
     .gte('period_start', historyFloor)
     .order('period_start', { ascending: true })
 
-  const kpis = ((kpiTrend as any[]) ?? []).filter((k: any) => k.period_start === monthStart)
+  // The current, still-in-progress month's executive_kpis row is written by a weekly
+  // batch job (calculateKpis.ts), so it can be missing entirely, or present but stale/
+  // partial (e.g. total_return_r computed before this week's trades, no triggered_rate
+  // row yet at all -- confirmed against production: 2026-08 had total_return_r/
+  // max_drawdown/win_rate but no triggered_rate row). total_return_r/win_rate/
+  // triggered_rate for the current month are therefore always computed live from
+  // actual_trades + analyst_publications here and override whatever executive_kpis has --
+  // the same "This Month is always live, never read from the KPI table" rule
+  // management/performance/page.tsx's TeamPerformanceGrid uses for its own This Month
+  // view. max_drawdown (and alignment_rate, which has no live equivalent) are left
+  // exactly as executive_kpis has them for the current month, present or not -- a
+  // missing one doesn't block the others, it just reads as "--" downstream.
+  const { data: monthTradesRaw } = await supabase
+    .from('actual_trades')
+    .select('result_r, triggered, published_at, source_system')
+    .eq('analyst_id', analystId)
+    .in('source_system', ['ACUITY_PERFORMANCE_API', 'MANUAL_BACKFILL'])
+    .gte('published_at', monthStart)
+
+  const monthTrades = (monthTradesRaw as any[]) ?? []
+  const monthTriggered = monthTrades.filter((t: any) => t.triggered && t.result_r !== null)
+  const monthWins = monthTriggered.filter((t: any) => (t.result_r ?? 0) > 0)
+  const liveTotalR = monthTriggered.reduce((s: number, t: any) => s + (t.result_r ?? 0), 0)
+  const liveWinRate = monthTriggered.length > 0 ? monthWins.length / monthTriggered.length : null
+
+  // analyst_publications has no ANALYST self-select RLS policy (only ADMIN/RESEARCH and
+  // MANAGER-scoped -- migrations/018_publication_rls.sql), same reason
+  // /api/analytics/publications uses the service-role client for ANALYST callers.
+  const { data: monthPubs } = await adminDb
+    .from('analyst_publications')
+    .select('reconciliation_status')
+    .eq('analyst_id', analystId)
+    .eq('source_system', 'ACUITY_PERFORMANCE_API')
+    .gte('published_at', monthStart)
+
+  const pubTotal = (monthPubs ?? []).length
+  const apiTriggered = monthTriggered.filter((t: any) => t.source_system === 'ACUITY_PERFORMANCE_API')
+  const liveTrigRate = pubTotal > 0 ? apiTriggered.length / pubTotal : null
+
+  const liveRows = [
+    { kpi_name: 'total_return_r', kpi_value: { value: liveTotalR, unit: 'R', trade_count: monthTriggered.length }, period_start: monthStart, period_end: null },
+    ...(liveWinRate !== null ? [{ kpi_name: 'win_rate', kpi_value: { value: liveWinRate, unit: 'rate', wins: monthWins.length, triggered: monthTriggered.length }, period_start: monthStart, period_end: null }] : []),
+    ...(liveTrigRate !== null ? [{ kpi_name: 'triggered_rate', kpi_value: { value: liveTrigRate, unit: 'rate', triggered: apiTriggered.length, total_setups: pubTotal }, period_start: monthStart, period_end: null }] : []),
+  ]
+
+  const baseKpiTrend = (kpiTrend as any[]) ?? []
+  const staleCurrentMonthMetrics = new Set(['total_return_r', 'win_rate', 'triggered_rate'])
+  const mergedKpiTrend = [
+    ...baseKpiTrend.filter((k: any) => !(k.period_start === monthStart && staleCurrentMonthMetrics.has(k.kpi_name))),
+    ...liveRows,
+  ].sort((a, b) => a.period_start.localeCompare(b.period_start))
+
+  const kpis = mergedKpiTrend.filter((k: any) => k.period_start === monthStart)
 
   // Current month stats from KPIs
   const currentMonthKpi = kpis.find((k: any) => k.kpi_name === 'total_return_r')
@@ -75,13 +128,12 @@ export async function getAnalystProfileData(
     return {
       analyst: analyst as any,
       recommendations: [], eventsByMarket: new Map(),
-      kpis, kpiTrend: (kpiTrend as any[]) ?? [],
+      kpis, kpiTrend: mergedKpiTrend,
       monthR, monthTradeCount, winRate,
       allTrades: [], recentTradesWithDetails: [], reviews: [], disputesByTradeId: new Map(),
     }
   }
 
-  const adminDb = createAdminClient()
   const today = new Date().toISOString().slice(0, 10)
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
@@ -198,7 +250,7 @@ export async function getAnalystProfileData(
     recommendations,
     eventsByMarket,
     kpis,
-    kpiTrend: (kpiTrend as any[]) ?? [],
+    kpiTrend: mergedKpiTrend,
     monthR,
     monthTradeCount,
     winRate,
