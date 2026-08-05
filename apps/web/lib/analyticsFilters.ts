@@ -99,7 +99,7 @@ export function filterPublications(
   pubs: MetricsPublication[], filters: AnalyticsFilterState, range: DateRange,
   assetClassByMarketId: Map<string, string>
 ): MetricsPublication[] {
-  return pubs.filter(p => {
+  return (pubs ?? []).filter(p => {
     const d = p.published_at.slice(0, 10)
     if (d < range.start || d > range.end) return false
     if (filters.product === 'PATTERN' || filters.product === 'AI') return false

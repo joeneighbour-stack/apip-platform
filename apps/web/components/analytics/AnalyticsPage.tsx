@@ -89,8 +89,10 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
       fetch(`/api/analytics/trades?from=${SINCE_INCEPTION_FLOOR}${analystParam}`).then(r => r.json()),
       fetch(`/api/analytics/publications?from=${SINCE_INCEPTION_FLOOR}${analystParam}`).then(r => r.json()),
     ]).then(([tradeRows, pubRows]) => {
-      setTrades(normaliseTrades(tradeRows))
-      setPubs(pubRows ?? [])
+      // A failed fetch (e.g. a 403 Forbidden body like { error: 'Forbidden' }) is truthy and
+      // not null/undefined, so `?? []` alone doesn't catch it -- Array.isArray does.
+      setTrades(normaliseTrades(Array.isArray(tradeRows) ? tradeRows : []))
+      setPubs(Array.isArray(pubRows) ? pubRows : [])
       setRawDataLoaded(true)
     })
   }
