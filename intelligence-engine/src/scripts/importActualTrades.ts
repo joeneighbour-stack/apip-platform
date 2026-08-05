@@ -134,6 +134,13 @@ async function main() {
   // Hard floor -- manual backfill is source of truth before this date
   const MIN_API_DATE = '2026-06-19'
 
+  // Distinct from MIN_API_DATE above: the webhook feed existed (and could be synced)
+  // from MIN_API_DATE, but wasn't authoritative until the live feed fully took over --
+  // the one-time MANUAL_BACKFILL upload is the complete, correct history for every date
+  // before LIVE_API_START, so a same-day API row before it is dropped in favour of
+  // backfill during dedup below rather than treated as a genuine additional trade.
+  const LIVE_API_START = '2026-08-01'
+
   const syncDaysBackEnv = process.env.SYNC_DAYS_BACK
   const syncDaysBack = syncDaysBackEnv ? Number(syncDaysBackEnv) : null
 
@@ -353,9 +360,15 @@ async function main() {
 
     // Skip trades that already exist as MANUAL_BACKFILL for this analyst/market/
     // direction/day -- inserting an API-sourced row alongside it would double-count
-    // the same real trade in every downstream R calculation.
-    const dedupKey = `${analystId}::${marketId}::${direction}::${String(t.PublicationDate).slice(0, 10)}`
-    if (backfillKeys.has(dedupKey)) { skippedBackfill++; continue }
+    // the same real trade in every downstream R calculation. MANUAL_BACKFILL is only
+    // authoritative before the live feed took over (LIVE_API_START) -- from that date
+    // onward the API is primary, so a same-day backfill row (e.g. a manual correction
+    // entered via the admin trade-entry form) must not suppress a genuine live-feed
+    // trade; both are allowed to coexist and calculateKpis.ts's own per-day
+    // source-preference dedup resolves any real overlap at aggregation time.
+    const tradeDate = String(t.PublicationDate).slice(0, 10)
+    const dedupKey = `${analystId}::${marketId}::${direction}::${tradeDate}`
+    if (tradeDate < LIVE_API_START && backfillKeys.has(dedupKey)) { skippedBackfill++; continue }
 
     tradeRows.push({
       source_system: 'ACUITY_PERFORMANCE_API',

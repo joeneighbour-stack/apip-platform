@@ -151,24 +151,38 @@ async function main() {
   }
   console.log(`\nLoaded ${allTrades.length} trades\n`)
 
-  // Dedup: for each analyst+date, prefer API triggered trades over MANUAL_BACKFILL --
-  // same per-day source-preference rule as TeamPerformanceGrid.tsx's preferApiPerDay().
-  // Without this, a date covered by both a MANUAL_BACKFILL import and the
-  // ACUITY_PERFORMANCE_API webhook feed double-counts that day's return (confirmed:
-  // Ian Coleman's July 2026 summed both sources to +15.95R against the two sources'
-  // real individual totals of ~+7.92R backfill and ~+8.02R API).
+  // Dedup: MANUAL_BACKFILL is the authoritative, complete history for every date before
+  // the live feed took over -- any ACUITY_PERFORMANCE_API row before LIVE_API_START is
+  // either a duplicate of a backfill trade or an incomplete/incorrect webhook capture, so
+  // it's dropped outright rather than merged (confirmed: Ian Coleman's July 2026 summed
+  // both sources to +15.95R against backfill's real +7.84R for that month). From
+  // LIVE_API_START onwards the live feed is primary: a triggered API row wins, and
+  // MANUAL_BACKFILL is kept only to fill days the API has no triggered trade for that
+  // day -- same per-day source-preference rule as TeamPerformanceGrid.tsx's
+  // preferApiPerDay(), just scoped to the live-feed era instead of applied everywhere.
+  const LIVE_API_START = '2026-08-01'
   const dedupedTrades: any[] = []
   const apiKeySet = new Set(
     allTrades
-      .filter(t => t.source_system === 'ACUITY_PERFORMANCE_API' && t.triggered && t.result_r !== null)
+      .filter(t => t.source_system === 'ACUITY_PERFORMANCE_API' && t.triggered && t.result_r !== null && t.published_at.slice(0, 10) >= LIVE_API_START)
       .map(t => `${t.analyst_id}::${t.published_at.slice(0, 10)}`)
   )
   for (const t of allTrades) {
-    const key = `${t.analyst_id}::${t.published_at.slice(0, 10)}`
-    if (t.source_system === 'MANUAL_BACKFILL' && apiKeySet.has(key)) continue
+    const tradeDate = t.published_at.slice(0, 10)
+    if (tradeDate < LIVE_API_START) {
+      // Before the live feed: MANUAL_BACKFILL is authoritative, skip any API trades
+      if (t.source_system === 'ACUITY_PERFORMANCE_API') continue
+    } else {
+      // From the live feed onwards: prefer API, skip MANUAL_BACKFILL only if a triggered
+      // API trade exists for the same analyst+date
+      if (t.source_system === 'MANUAL_BACKFILL') {
+        const key = `${t.analyst_id}::${tradeDate}`
+        if (apiKeySet.has(key)) continue
+      }
+    }
     dedupedTrades.push(t)
   }
-  console.log(`Deduped ${allTrades.length - dedupedTrades.length} MANUAL_BACKFILL rows shadowed by a triggered API trade on the same day\n`)
+  console.log(`Deduped ${allTrades.length - dedupedTrades.length} trades (MANUAL_BACKFILL authoritative before ${LIVE_API_START}, API-shadowed backfill dropped from ${LIVE_API_START} onward)\n`)
 
   const kpiRows: any[] = []
 
