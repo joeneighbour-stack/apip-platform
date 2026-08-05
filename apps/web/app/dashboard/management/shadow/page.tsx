@@ -78,9 +78,12 @@ export default async function ShadowMonitoringPage() {
 
   // Same source-preference rule as TeamPerformanceGrid.tsx's preferApiPerDay(): API wins over
   // backfill for a given analyst+day when both exist, backfill is kept where API has a gap.
+  // Only a *triggered* API row counts as covering that day -- an untriggered published setup
+  // isn't the same event as a MANUAL_BACKFILL row recording a real executed trade, and treating
+  // it as coverage was discarding real backfill trades on days where the API setup never fired.
   const apiDatesByAnalyst = new Map<string, Set<string>>()
   for (const t of rawActualTrades) {
-    if (t.source_system === 'ACUITY_PERFORMANCE_API' && t.analyst_id && t.published_at) {
+    if (t.source_system === 'ACUITY_PERFORMANCE_API' && t.triggered && t.analyst_id && t.published_at) {
       const date = t.published_at.slice(0, 10)
       if (!apiDatesByAnalyst.has(t.analyst_id)) apiDatesByAnalyst.set(t.analyst_id, new Set())
       apiDatesByAnalyst.get(t.analyst_id)!.add(date)

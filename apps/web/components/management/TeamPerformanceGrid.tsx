@@ -89,10 +89,17 @@ const KPI_COLS = [
 // a date that still has real backfill-sourced trades -- a blanket "API only" filter (the
 // previous fix for the overlap problem) silently zeroes out those weeks instead. This picks
 // the correct source per analyst+day rather than a single global rule.
+//
+// A day only counts as "API-covered" if the API row actually triggered -- most published
+// API setups never trigger (triggered=false, result_r=null), and those aren't the same
+// event as a MANUAL_BACKFILL row recording a real executed trade. Marking a day covered off
+// an untriggered API row was discarding every real backfill trade for that day (confirmed:
+// 132 of 136 API rows for 2026-07-27..07-31 were untriggered, so this was zeroing out 77 real
+// backfill trades down to the 4 API rows that did trigger).
 function preferApiPerDay(trades: ActualTrade[]): ActualTrade[] {
   const apiDatesByAnalyst = new Map<string, Set<string>>()
   for (const t of trades) {
-    if (t.source_system === 'ACUITY_PERFORMANCE_API' && t.analyst_id && t.published_at) {
+    if (t.source_system === 'ACUITY_PERFORMANCE_API' && t.triggered && t.analyst_id && t.published_at) {
       const date = t.published_at.slice(0, 10)
       if (!apiDatesByAnalyst.has(t.analyst_id)) apiDatesByAnalyst.set(t.analyst_id, new Set())
       apiDatesByAnalyst.get(t.analyst_id)!.add(date)
