@@ -1,0 +1,39 @@
+# ============================================================================
+# APIP Intelligence Engine -- Import Watchdog
+# ============================================================================
+# Safety net for the 07:30/08:30 UTC scheduled imports in engine-daily.yml --
+# GitHub Actions schedules are best-effort and can silently get skipped under
+# platform load. Runs at 09:00 UTC (after both scheduled attempts should have
+# completed) and checks Supabase directly for today's ACUITY_PERFORMANCE_API
+# trades; only runs the import itself if neither prior attempt landed data.
+# ============================================================================
+name: Import Watchdog
+
+on:
+  schedule:
+    - cron: '0 9 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  check-and-import:
+    name: Check Import Ran Today
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: intelligence-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: intelligence-engine/package-lock.json
+      - run: npm ci
+      - name: Check and import if missed
+        run: npx tsx src/scripts/importActualTrades.ts
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          N8N_WEBHOOK_USERNAME: ${{ secrets.N8N_WEBHOOK_USERNAME }}
+          N8N_WEBHOOK_PASSWORD: ${{ secrets.N8N_WEBHOOK_PASSWORD }}
+          WATCHDOG_MODE: 'true'

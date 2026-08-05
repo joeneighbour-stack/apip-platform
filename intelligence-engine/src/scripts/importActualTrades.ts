@@ -109,6 +109,27 @@ async function main() {
   console.log(`\n=== APIP Actual Trade Importer ===`)
   console.log(`Mode: ${isDryRun ? 'DRY RUN' : 'LIVE'}`)
 
+  // ── Watchdog mode ────────────────────────────────────────────────────────
+  // Run by import-watchdog.yml as a third chance after the 07:30/08:30 scheduled
+  // imports, in case GitHub Actions silently skipped both. Safe to run even if a
+  // scheduled import already succeeded: skip the (slow, rate-limited) webhook
+  // fetch entirely if today's ACUITY_PERFORMANCE_API trades are already present.
+  if (process.env.WATCHDOG_MODE === 'true') {
+    const today = new Date().toISOString().slice(0, 10)
+    const { data: todayTrades } = await db
+      .from('actual_trades')
+      .select('trade_id')
+      .eq('source_system', 'ACUITY_PERFORMANCE_API')
+      .gte('published_at', today)
+      .limit(1)
+
+    if (todayTrades && todayTrades.length > 0) {
+      console.log(`Import already ran today, skipping`)
+      process.exit(0)
+    }
+    console.log(`Watchdog: no ACUITY_PERFORMANCE_API trades found for ${today} -- proceeding with import`)
+  }
+
   // ── Determine sync window ────────────────────────────────────────────────
   // Hard floor -- manual backfill is source of truth before this date
   const MIN_API_DATE = '2026-06-19'
