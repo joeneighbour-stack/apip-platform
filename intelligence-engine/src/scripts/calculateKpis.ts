@@ -88,6 +88,7 @@ async function main() {
       .select('analyst_id, published_at, reconciliation_status')
       .eq('source_system', 'ACUITY_PERFORMANCE_API')
       .gte('published_at', windowStart)
+      .order('published_at', { ascending: true })
       .range(pubPage * 1000, pubPage * 1000 + 999)
     if (!pubBatch?.length) { pubHasMore = false } else {
       allPubRows.push(...pubBatch)
@@ -137,6 +138,7 @@ async function main() {
     const { data, error } = await db.from('actual_trades')
       .select('analyst_id, market_id, direction, result_r, triggered, published_at')
       .gte('published_at', windowStart)
+      .order('published_at', { ascending: true })
       .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
 
     if (error) { console.error(`\nPagination error: ${error.message}`); break }
