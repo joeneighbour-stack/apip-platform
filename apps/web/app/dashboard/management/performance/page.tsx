@@ -92,15 +92,24 @@ export default async function ManagementPerformancePage() {
     .eq('source_system', 'ACUITY_PERFORMANCE_API')
     .gte('published_at', monthStart)
 
-  // Admin client bypasses RLS to read INTERNAL_ONLY shadow KPIs
-  const { data: shadowKpiRows } = await adminDb
-    .from('executive_kpis')
-    .select('kpi_name, kpi_value, period_start')
-    .eq('kpi_visibility', 'INTERNAL_ONLY')
-    .gte('period_start', thirtyySixMonthsAgo)
-    .order('period_start', { ascending: true })
-
-  const shadowKpiData = (shadowKpiRows ?? []) as { kpi_name: string; kpi_value: any; period_start: string }[]
+  // Live 30-day shadow performance for the "Shadow System Performance" tiles + trend --
+  // replaces the old executive_kpis(kpi_visibility='INTERNAL_ONLY') read, which showed the
+  // current month's tile as 0R whenever calculateShadowKpis.ts's weekly batch hadn't
+  // captured this month's closed shadow trades yet. Computed directly from
+  // shadow_trade_outcomes, the same source ShadowMonitoringPanel.tsx already reads
+  // successfully -- adminDb since this is management-only data with no analyst-facing RLS
+  // grant. Filtered to the last 30 days here in JS rather than via a nested-column DB
+  // filter (shadow_trade.generated_at), since the full history is only a few hundred rows.
+  const { data: shadowOutcomesAll } = await adminDb
+    .from('shadow_trade_outcomes')
+    .select(`
+      trade_outcome_status,
+      result_r,
+      shadow_trade:shadow_trade_id ( rr, generated_at )
+    `)
+  const shadowOutcomesRecent = ((shadowOutcomesAll ?? []) as any[]).filter(o =>
+    o.shadow_trade?.generated_at && o.shadow_trade.generated_at.slice(0, 10) >= thirtyDaysAgo
+  )
 
   const analystKpis = (kpiData as any[]) ?? []
   const analystIdsWithData = new Set(analystKpis.map((k: any) => k.analyst_id).filter(Boolean))
@@ -127,7 +136,7 @@ export default async function ManagementPerformancePage() {
         lastMonthStart={lastMonthStart}
         shadowOutcomes={(shadowOutcomes as any[]) ?? []}
         actualTrades={(actualTrades as any[]) ?? []}
-        shadowKpiData={shadowKpiData}
+        shadowOutcomesRecent={shadowOutcomesRecent}
         lastWeekPublications={(lastWeekPubs as any[]) ?? []}
         lastWeekStart={lwStart}
         lastWeekEnd={lwEnd}

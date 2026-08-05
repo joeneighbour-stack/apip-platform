@@ -1,6 +1,7 @@
 'use client'
 import { useState } from 'react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Cell } from 'recharts'
+import { formatDateShort } from '@/lib/format'
 
 interface Analyst {
   analyst_id: string
@@ -16,7 +17,7 @@ interface KpiRow {
 interface ShadowOutcome {
   trade_outcome_status: string
   result_r: number | null
-  shadow_trade: { rr: number } | null
+  shadow_trade: { rr: number; generated_at?: string } | null
 }
 interface ActualTrade {
   result_r: number | null
@@ -32,7 +33,10 @@ interface TeamPerformanceGridProps {
   lastMonthStart: string
   shadowOutcomes: ShadowOutcome[]
   actualTrades: ActualTrade[]
-  shadowKpiData: { kpi_name: string; kpi_value: any; period_start: string }[]
+  // Last 30 days of shadow_trade_outcomes, live -- feeds the "Shadow System Performance"
+  // tiles + trend below, in place of the old executive_kpis(kpi_visibility='INTERNAL_ONLY')
+  // read (which showed the current month as 0R until the shadow KPI batch caught up).
+  shadowOutcomesRecent: ShadowOutcome[]
   lastWeekPublications?: { analyst_id: string; reconciliation_status: string }[]
   lastWeekStart: string
   lastWeekEnd: string
@@ -135,7 +139,7 @@ function shadowResultR(outcome: ShadowOutcome): number | null {
 }
 
 export function TeamPerformanceGrid({
-  analysts, kpiData, currentMonthStart, lastMonthStart, shadowOutcomes, actualTrades, shadowKpiData,
+  analysts, kpiData, currentMonthStart, lastMonthStart, shadowOutcomes, actualTrades, shadowOutcomesRecent,
   lastWeekPublications = [], lastWeekStart, lastWeekEnd, thisMonthPublications = []
 }: TeamPerformanceGridProps) {
   const [period, setPeriod] = useState<Period>('THIS_MONTH')
@@ -240,10 +244,60 @@ export function TeamPerformanceGrid({
   const shadowTriggerRate = shadowOutcomesSafe.length > 0 ? shadowTriggered.length / shadowOutcomesSafe.length : null
   const shadowTotalR = shadowTriggered.reduce((s, o) => s + (shadowResultR(o) ?? 0), 0)
 
-  const shadowKpiDataSafe = shadowKpiData ?? []
-  const shadowReturnTrend = shadowKpiDataSafe.length > 0
-    ? shadowKpiDataSafe.filter(k => k.kpi_name === 'total_return_r').map(k => ({ month: monthLabel(k.period_start), value: k.kpi_value?.value ?? 0 }))
-    : [{ month: 'Jul 26', value: 0 }]
+  // Shadow System Performance (last 30 days) -- live from shadow_trade_outcomes, same status
+  // membership as the Shadow Benchmark card above and ShadowMonitoringPanel.tsx, in place of
+  // the old executive_kpis(kpi_visibility='INTERNAL_ONLY') read (that showed 0R for the
+  // current month whenever the shadow KPI batch hadn't run yet that month).
+  const shadowRecentSafe = shadowOutcomesRecent ?? []
+  const shadowRecentTriggered = shadowRecentSafe.filter(o =>
+    ['TARGET_HIT', 'STOP_HIT', 'CLOSED_PROFIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)
+  )
+  const shadowRecentWins = shadowRecentSafe.filter(o =>
+    o.trade_outcome_status === 'TARGET_HIT' ||
+    o.trade_outcome_status === 'CLOSED_PROFIT' ||
+    (o.result_r !== null && Number(o.result_r) > 0)
+  )
+  const shadowRecentWinRate = shadowRecentTriggered.length > 0 ? shadowRecentWins.length / shadowRecentTriggered.length : null
+  const shadowRecentTriggerRate = shadowRecentSafe.length > 0 ? shadowRecentTriggered.length / shadowRecentSafe.length : null
+  const shadowRecentTotalR = shadowRecentTriggered.reduce((s, o) => s + (shadowResultR(o) ?? 0), 0)
+
+  // Max drawdown over the same 30-day triggered sequence, ordered by date -- same
+  // peak-to-trough method as lib/metrics.ts's maxDrawdown(), inlined here for the
+  // ShadowOutcome shape rather than MetricsTrade.
+  const shadowRecentSorted = [...shadowRecentTriggered].sort((a, b) =>
+    (a.shadow_trade?.generated_at ?? '').localeCompare(b.shadow_trade?.generated_at ?? '')
+  )
+  let shadowRecentEquity = 0, shadowRecentPeak = 0, shadowRecentDrawdown = 0
+  for (const o of shadowRecentSorted) {
+    shadowRecentEquity += shadowResultR(o) ?? 0
+    if (shadowRecentEquity > shadowRecentPeak) shadowRecentPeak = shadowRecentEquity
+    else if (shadowRecentEquity - shadowRecentPeak < shadowRecentDrawdown) shadowRecentDrawdown = shadowRecentEquity - shadowRecentPeak
+  }
+
+  const shadowRecentTiles: Record<string, number | null> = {
+    total_return_r: shadowRecentTotalR,
+    win_rate: shadowRecentWinRate,
+    triggered_rate: shadowRecentTriggerRate,
+    max_drawdown: shadowRecentDrawdown,
+  }
+
+  // Daily cumulative R trend for the last 30 days -- replaces the old monthly
+  // executive_kpis trend, since the live calculation only has this rolling window to draw
+  // from rather than multiple months of pre-aggregated history.
+  const shadowReturnTrend = (() => {
+    const byDate = new Map<string, number>()
+    for (const o of shadowRecentTriggered) {
+      const date = o.shadow_trade?.generated_at?.slice(0, 10)
+      if (!date) continue
+      byDate.set(date, (byDate.get(date) ?? 0) + (shadowResultR(o) ?? 0))
+    }
+    const sortedDates = [...byDate.keys()].sort()
+    let cumulative = 0
+    return sortedDates.map(date => {
+      cumulative += byDate.get(date) ?? 0
+      return { month: formatDateShort(date), value: cumulative }
+    })
+  })()
 
   // Actual summary (30 days)
   const actualTriggered = actualTrades.filter(t => t.triggered && t.result_r !== null)
@@ -529,17 +583,16 @@ export function TeamPerformanceGrid({
         </div>
       </section>
 
-      {/* Shadow System Monthly Performance */}
-      {shadowReturnTrend.length > 0 && (
+      {/* Shadow System Performance (last 30 days) */}
+      {shadowRecentSafe.length > 0 && (
         <section className="space-y-3">
           <div>
-            <h2 className="text-sm font-medium">Shadow System Performance</h2>
+            <h2 className="text-sm font-medium">Shadow System Performance <span className="text-xs font-normal text-muted-foreground">(Last 30 Days)</span></h2>
             <p className="text-xs text-muted-foreground mt-0.5">Internal benchmark &mdash; not visible to analysts</p>
           </div>
           <div className="grid grid-cols-4 gap-3">
             {(['total_return_r', 'win_rate', 'triggered_rate', 'max_drawdown'] as const).map(kpiName => {
-              const latestKpi = shadowKpiDataSafe.filter(k => k.kpi_name === kpiName).at(-1)
-              const value = latestKpi ? (latestKpi.kpi_value?.value ?? null) : null
+              const value = shadowRecentTiles[kpiName] ?? null
               return (
                 <div key={kpiName} className="rounded-lg border border-border bg-card p-3 space-y-1">
                   <p className="text-xs text-muted-foreground">
@@ -557,7 +610,7 @@ export function TeamPerformanceGrid({
             })}
           </div>
           <div className="rounded-lg border border-border bg-card p-4">
-            <p className="text-xs text-muted-foreground mb-3">Monthly Return (R) &mdash; Shadow System</p>
+            <p className="text-xs text-muted-foreground mb-3">Daily Return (R) &mdash; Shadow System (Last 30 Days)</p>
             <div className="h-32">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={shadowReturnTrend} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
