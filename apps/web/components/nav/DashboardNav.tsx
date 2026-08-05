@@ -9,7 +9,7 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { href: '/dashboard/analyst',                label: 'My Workspace',       roles: ['ANALYST'] },
-  { href: '/dashboard/analyst/performance', label: 'My Performance', roles: ['ANALYST'] },
+  { href: '/dashboard/analyst/performance', label: 'Performance', roles: ['ANALYST'] },
   { href: '/dashboard/analyst/monitor', label: 'My Monitor', roles: ['ANALYST'] },
   { href: '/dashboard/analyst/availability',   label: 'My Availability',    roles: ['ANALYST'] },
   { href: '/dashboard/management',             label: 'Management',         roles: ['MANAGER', 'ADMIN'] },
