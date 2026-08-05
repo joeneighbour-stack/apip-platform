@@ -1,5 +1,5 @@
 'use client'
-import { useState, useMemo } from 'react'
+import { useState, useMemo, Fragment } from 'react'
 
 interface BreakdownRow {
   analystId: string
@@ -31,13 +31,6 @@ function rClass(r: number): string {
   return r >= 0 ? 'text-green-700' : 'text-red-700'
 }
 
-// "45 of 122" hides how good/bad that ratio actually is at a glance -- the percentage is the
-// number that matters, with the raw count kept alongside for anyone who wants to verify it.
-function fmtPctCount(count: number, total: number): string {
-  if (total === 0) return '—'
-  return `${Math.round(count / total * 100)}% (${count}/${total})`
-}
-
 function fmtPct(count: number, total: number): string {
   if (total === 0) return '—'
   return `${Math.round(count / total * 100)}%`
@@ -62,16 +55,7 @@ function DirectionBadge({ direction }: { direction: string | null }) {
   )
 }
 
-function Chip({ label, value, valueClassName }: { label: string; value: React.ReactNode; valueClassName?: string }) {
-  return (
-    <div className="flex items-center gap-1 px-2 py-1 rounded bg-muted text-xs whitespace-nowrap">
-      <span className="text-muted-foreground">{label}</span>
-      <span className={`font-semibold tabular-nums ${valueClassName ?? ''}`}>{value}</span>
-    </div>
-  )
-}
-
-// Shared by the summary table and each analyst's own card -- same numbers, two views.
+// Shared by every summary row -- one source of truth for the headline numbers.
 function computeAnalystStats(analystRows: BreakdownRow[]) {
   const analystTriggeredRows = analystRows.filter(r => r.analystTriggered)
   const shadowTriggeredRows = analystRows.filter(r => SHADOW_TRIGGERED_STATUSES.includes(r.shadowStatus))
@@ -88,22 +72,11 @@ function computeAnalystStats(analystRows: BreakdownRow[]) {
 
   return {
     matched: analystRows.length,
-    analystTriggeredRows, shadowTriggeredRows,
     analystWinRate, shadowWinRate,
     analystTotalR, shadowTotalR, edge,
     analystTriggerPct: fmtPct(analystTriggeredRows.length, analystRows.length),
     shadowTriggerPct: fmtPct(shadowTriggeredRows.length, analystRows.length),
   }
-}
-
-function StatBox({ label, value, valueClassName, sublabel }: { label: string; value: React.ReactNode; valueClassName?: string; sublabel?: string }) {
-  return (
-    <div className="rounded-lg border border-border bg-card p-4">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className={`text-xl font-semibold mt-1 tabular-nums ${valueClassName ?? ''}`}>{value}</p>
-      {sublabel && <p className="text-xs text-muted-foreground mt-0.5">{sublabel}</p>}
-    </div>
-  )
 }
 
 function todayIso() { return new Date().toISOString().slice(0, 10) }
@@ -113,7 +86,7 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
   const [fromDate, setFromDate] = useState(daysAgoIso(30))
   const [toDate, setToDate] = useState(todayIso())
   const [bothSidesOnly, setBothSidesOnly] = useState(false)
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [expandedAnalystId, setExpandedAnalystId] = useState<string | null>(null)
 
   const filteredRows = useMemo(() => {
     return rows.filter(r => {
@@ -134,16 +107,11 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
   }, [filteredRows, analysts])
 
   function toggle(analystId: string) {
-    setExpanded(prev => {
-      const next = new Set(prev)
-      if (next.has(analystId)) next.delete(analystId)
-      else next.add(analystId)
-      return next
-    })
+    setExpandedAnalystId(prev => (prev === analystId ? null : analystId))
   }
 
   // At-a-glance view across all analysts, ranked by who's beating the shadow system by the
-  // widest margin -- lets management scan the whole team without expanding every card.
+  // widest margin -- lets management scan the whole team, then expand one row for detail.
   const summaryRows = useMemo(() => {
     return analysts
       .map(a => ({ analyst: a, stats: computeAnalystStats(byAnalyst.get(a.analyst_id) ?? []) }))
@@ -180,7 +148,7 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
         <h3 className="text-sm font-semibold">Analyst vs Shadow &mdash; Head to Head</h3>
         <p className="text-xs text-muted-foreground">
           How each analyst performs on markets they covered, compared directly against the shadow system&apos;s
-          setup for the same market on the same day.
+          setup for the same market on the same day. Click a row for the per-trade breakdown.
         </p>
       </div>
 
@@ -194,127 +162,100 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {summaryRows.map(({ analyst, stats }, i) => (
-              <tr key={analyst.analyst_id} className={`hover:bg-muted/30 ${i % 2 === 1 ? 'bg-muted/20' : ''}`}>
-                <td className="px-4 py-2 text-xs font-medium whitespace-nowrap">{analyst.display_name}</td>
-                <td className="px-4 py-2 text-xs tabular-nums whitespace-nowrap">{stats.matched}</td>
-                <td className="px-4 py-2 text-xs tabular-nums whitespace-nowrap">{stats.analystTriggerPct} / {stats.shadowTriggerPct}</td>
-                <td className={`px-4 py-2 text-xs tabular-nums font-medium whitespace-nowrap ${rClass(stats.analystTotalR)}`}>{fmtR(stats.analystTotalR)}</td>
-                <td className={`px-4 py-2 text-xs tabular-nums font-medium whitespace-nowrap ${rClass(stats.shadowTotalR)}`}>{fmtR(stats.shadowTotalR)}</td>
-                <td className={`px-4 py-2 text-xs tabular-nums font-medium whitespace-nowrap ${rClass(stats.edge)}`}>{fmtR(stats.edge)}</td>
-                <td className="px-4 py-2 text-xs tabular-nums whitespace-nowrap">
-                  {stats.analystWinRate !== null ? `${Math.round(stats.analystWinRate * 100)}%` : '—'}
-                  {' / '}
-                  {stats.shadowWinRate !== null ? `${Math.round(stats.shadowWinRate * 100)}%` : '—'}
-                </td>
-              </tr>
-            ))}
+            {summaryRows.map(({ analyst, stats }, i) => {
+              const isOpen = expandedAnalystId === analyst.analyst_id
+              const analystRows = byAnalyst.get(analyst.analyst_id) ?? []
+              const sortedRows = [...analystRows].sort((a, b) => {
+                const dateCompare = b.date.localeCompare(a.date)
+                if (dateCompare !== 0) return dateCompare
+                return resolutionTier(b) - resolutionTier(a)
+              })
+
+              return (
+                <Fragment key={analyst.analyst_id}>
+                  <tr
+                    onClick={() => toggle(analyst.analyst_id)}
+                    className={`cursor-pointer hover:bg-muted/30 transition-colors ${
+                      isOpen ? 'bg-muted/40' : i % 2 === 1 ? 'bg-muted/20' : ''
+                    }`}
+                  >
+                    <td className="px-4 py-2 text-xs font-medium whitespace-nowrap">
+                      <span className={`inline-block mr-1.5 text-muted-foreground transition-transform ${isOpen ? 'rotate-90' : ''}`}>▶</span>
+                      {analyst.display_name}
+                    </td>
+                    <td className="px-4 py-2 text-xs tabular-nums whitespace-nowrap">{stats.matched}</td>
+                    <td className="px-4 py-2 text-xs tabular-nums whitespace-nowrap">{stats.analystTriggerPct} / {stats.shadowTriggerPct}</td>
+                    <td className={`px-4 py-2 text-xs tabular-nums font-medium whitespace-nowrap ${rClass(stats.analystTotalR)}`}>{fmtR(stats.analystTotalR)}</td>
+                    <td className={`px-4 py-2 text-xs tabular-nums font-medium whitespace-nowrap ${rClass(stats.shadowTotalR)}`}>{fmtR(stats.shadowTotalR)}</td>
+                    <td className={`px-4 py-2 text-xs tabular-nums font-medium whitespace-nowrap ${rClass(stats.edge)}`}>{fmtR(stats.edge)}</td>
+                    <td className="px-4 py-2 text-xs tabular-nums whitespace-nowrap">
+                      {stats.analystWinRate !== null ? `${Math.round(stats.analystWinRate * 100)}%` : '—'}
+                      {' / '}
+                      {stats.shadowWinRate !== null ? `${Math.round(stats.shadowWinRate * 100)}%` : '—'}
+                    </td>
+                  </tr>
+                  {isOpen && (
+                    <tr>
+                      <td colSpan={7} className="p-0 bg-muted/10 border-t border-border">
+                        <div className="p-4 space-y-3">
+                          <p className="text-xs text-muted-foreground">
+                            <span className="font-medium text-foreground">—</span> = trade not yet resolved or did not trigger.
+                            Edge is only shown when both sides have a result.
+                          </p>
+                          <div className="rounded-lg border border-border overflow-x-auto bg-card">
+                            <table className="w-full text-sm">
+                              <thead className="bg-muted/50">
+                                <tr>
+                                  {['Date', 'Market', 'Analyst Dir', 'Analyst R', 'Shadow Dir', 'Shadow R'].map(h => (
+                                    <th key={h} className="text-left px-3 py-2.5 text-xs font-medium text-muted-foreground whitespace-nowrap">{h}</th>
+                                  ))}
+                                  <th
+                                    className="text-left px-3 py-2.5 text-xs font-medium text-muted-foreground whitespace-nowrap"
+                                    title="Analyst R minus Shadow R — positive means analyst outperformed shadow"
+                                  >
+                                    Edge (+ = analyst wins)
+                                  </th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-border">
+                                {sortedRows.length === 0 ? (
+                                  <tr>
+                                    <td colSpan={7} className="px-4 py-6 text-center text-xs text-muted-foreground">
+                                      No matched setups for the selected period.
+                                    </td>
+                                  </tr>
+                                ) : sortedRows.map((r, j) => {
+                                  const edgeR = r.analystR !== null && r.shadowR !== null ? r.analystR - r.shadowR : null
+                                  return (
+                                    <tr key={`${r.date}-${r.symbol}-${j}`} className={`hover:bg-muted/30 ${j % 2 === 1 ? 'bg-muted/20' : ''}`}>
+                                      <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">{r.date}</td>
+                                      <td className="px-3 py-2 text-xs font-medium whitespace-nowrap">{r.symbol}</td>
+                                      <td className="px-3 py-2 text-xs whitespace-nowrap"><DirectionBadge direction={r.analystDirection} /></td>
+                                      <td className="px-3 py-2 text-xs tabular-nums font-medium whitespace-nowrap">
+                                        {r.analystR !== null ? <span className={rClass(r.analystR)}>{fmtR(r.analystR)}</span> : <span className="text-muted-foreground">—</span>}
+                                      </td>
+                                      <td className="px-3 py-2 text-xs whitespace-nowrap"><DirectionBadge direction={r.shadowDirection} /></td>
+                                      <td className="px-3 py-2 text-xs tabular-nums font-medium whitespace-nowrap">
+                                        {r.shadowR !== null ? <span className={rClass(r.shadowR)}>{fmtR(r.shadowR)}</span> : <span className="text-muted-foreground">—</span>}
+                                      </td>
+                                      <td className="px-3 py-2 text-xs tabular-nums font-medium whitespace-nowrap">
+                                        {edgeR !== null ? <span className={rClass(edgeR)}>{fmtR(edgeR)}</span> : <span className="text-muted-foreground">—</span>}
+                                      </td>
+                                    </tr>
+                                  )
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              )
+            })}
           </tbody>
         </table>
-      </div>
-
-      <div className="space-y-2">
-        {analysts.map(analyst => {
-          const analystRows = byAnalyst.get(analyst.analyst_id) ?? []
-          const isOpen = expanded.has(analyst.analyst_id)
-          const {
-            analystTriggeredRows, shadowTriggeredRows,
-            analystTotalR, shadowTotalR, edge,
-            analystTriggerPct, shadowTriggerPct,
-          } = computeAnalystStats(analystRows)
-
-          return (
-            <div key={analyst.analyst_id} className="rounded-lg border border-border bg-card overflow-hidden">
-              <button
-                onClick={() => toggle(analyst.analyst_id)}
-                className="w-full flex items-center justify-between gap-4 px-4 py-3 hover:bg-muted/30 transition-colors text-left"
-              >
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className={`text-xs text-muted-foreground transition-transform inline-block ${isOpen ? 'rotate-90' : ''}`}>▶</span>
-                  <span className="text-sm font-medium">{analyst.display_name}</span>
-                </div>
-                <div className="flex items-center gap-1.5 flex-nowrap justify-end">
-                  <Chip label="Matched" value={analystRows.length} />
-                  <Chip label="Trigger%" value={`${analystTriggerPct} / ${shadowTriggerPct}`} />
-                  <Chip label="Analyst R" value={fmtR(analystTotalR)} valueClassName={rClass(analystTotalR)} />
-                  <Chip label="Shadow R" value={fmtR(shadowTotalR)} valueClassName={rClass(shadowTotalR)} />
-                  <Chip label="Analyst Edge" value={fmtR(edge)} valueClassName={rClass(edge)} />
-                </div>
-              </button>
-
-              {isOpen && (
-                <div className="border-t border-border p-4 space-y-4">
-                  <div className="grid grid-cols-4 gap-3">
-                    <StatBox label="Matched Setups" value={analystRows.length} />
-                    <StatBox label="Analyst Triggered" value={fmtPctCount(analystTriggeredRows.length, analystRows.length)} />
-                    <StatBox label="Shadow Triggered" value={fmtPctCount(shadowTriggeredRows.length, analystRows.length)} />
-                    <StatBox
-                      label="Analyst Edge"
-                      value={fmtR(edge)}
-                      valueClassName={rClass(edge)}
-                      sublabel="Analyst R minus Shadow R — positive means analyst outperformed shadow"
-                    />
-                  </div>
-
-                  <p className="text-xs text-muted-foreground">
-                    <span className="font-medium text-foreground">—</span> = trade not yet resolved or did not trigger.
-                    Edge is only shown when both sides have a result.
-                  </p>
-
-                  <div className="rounded-lg border border-border overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead className="bg-muted/50">
-                        <tr>
-                          {['Date', 'Market', 'Analyst Dir', 'Analyst R', 'Shadow Dir', 'Shadow R'].map(h => (
-                            <th key={h} className="text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">{h}</th>
-                          ))}
-                          <th
-                            className="text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap"
-                            title="Analyst R minus Shadow R — positive means analyst outperformed shadow"
-                          >
-                            Edge (+ = analyst wins)
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border">
-                        {analystRows.length === 0 ? (
-                          <tr>
-                            <td colSpan={7} className="px-4 py-6 text-center text-xs text-muted-foreground">
-                              No matched setups for the selected period.
-                            </td>
-                          </tr>
-                        ) : [...analystRows].sort((a, b) => {
-                          const dateCompare = b.date.localeCompare(a.date)
-                          if (dateCompare !== 0) return dateCompare
-                          return resolutionTier(b) - resolutionTier(a)
-                        }).map((r, i) => {
-                          const edgeR = r.analystR !== null && r.shadowR !== null ? r.analystR - r.shadowR : null
-                          return (
-                            <tr key={`${r.date}-${r.symbol}-${i}`} className={`hover:bg-muted/30 ${i % 2 === 1 ? 'bg-muted/20' : ''}`}>
-                              <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">{r.date}</td>
-                              <td className="px-3 py-2 text-xs font-medium whitespace-nowrap">{r.symbol}</td>
-                              <td className="px-3 py-2 text-xs whitespace-nowrap"><DirectionBadge direction={r.analystDirection} /></td>
-                              <td className="px-3 py-2 text-xs tabular-nums font-medium whitespace-nowrap">
-                                {r.analystR !== null ? <span className={rClass(r.analystR)}>{fmtR(r.analystR)}</span> : <span className="text-muted-foreground">—</span>}
-                              </td>
-                              <td className="px-3 py-2 text-xs whitespace-nowrap"><DirectionBadge direction={r.shadowDirection} /></td>
-                              <td className="px-3 py-2 text-xs tabular-nums font-medium whitespace-nowrap">
-                                {r.shadowR !== null ? <span className={rClass(r.shadowR)}>{fmtR(r.shadowR)}</span> : <span className="text-muted-foreground">—</span>}
-                              </td>
-                              <td className="px-3 py-2 text-xs tabular-nums font-medium whitespace-nowrap">
-                                {edgeR !== null ? <span className={rClass(edgeR)}>{fmtR(edgeR)}</span> : <span className="text-muted-foreground">—</span>}
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
-          )
-        })}
       </div>
     </section>
   )
