@@ -2,6 +2,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { ShadowMonitoringPanel } from '@/components/management/ShadowMonitoringPanel'
+import { AnalystShadowBreakdown } from '@/components/management/AnalystShadowBreakdown'
 
 export default async function ShadowMonitoringPage() {
   const user = await getCurrentUser()
@@ -131,6 +132,157 @@ export default async function ShadowMonitoringPage() {
     return dateB.localeCompare(dateA)
   })
 
+  // ── Analyst vs Shadow Breakdown ──────────────────────────────────────────
+  // Per-analyst, per-market/day comparison: for every shadow setup, did THIS
+  // analyst publish a matching recommendation (same market_id + direction +
+  // calendar date)? adminDb throughout, deliberately -- analyst_publications
+  // and actual_trades RLS scope MANAGER to only their own managed analysts
+  // (migrations/018_publication_rls.sql, 002_rls.sql), and this breakdown
+  // must show every active analyst regardless of which manager is viewing.
+  const { data: breakdownAnalystsRaw } = await adminDb
+    .from('analysts')
+    .select('analyst_id, display_name')
+    .eq('active', true)
+    .order('display_name')
+  const breakdownAnalysts = (breakdownAnalystsRaw as any[]) ?? []
+
+  const breakdownShadowRaw: any[] = []
+  {
+    const PAGE_SIZE = 1000
+    let page = 0
+    let hasMore = true
+    while (hasMore) {
+      const { data } = await adminDb
+        .from('shadow_trade_outcomes')
+        .select(`
+          shadow_outcome_id,
+          trade_outcome_status,
+          result_r,
+          shadow_trade:shadow_trade_id (
+            rr, direction, generated_at,
+            opportunity:opportunity_id (
+              market_id,
+              market:market_id ( symbol )
+            )
+          )
+        `)
+        .order('shadow_outcome_id', { ascending: true })
+        .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
+      if (!data?.length) { hasMore = false } else {
+        breakdownShadowRaw.push(...data)
+        hasMore = data.length === PAGE_SIZE
+        page++
+      }
+    }
+  }
+
+  const breakdownPublications: any[] = []
+  {
+    const PAGE_SIZE = 1000
+    let page = 0
+    let hasMore = true
+    while (hasMore) {
+      const { data } = await adminDb
+        .from('analyst_publications')
+        .select('analyst_id, market_id, direction, published_at, effective_triggered')
+        .eq('source_system', 'ACUITY_PERFORMANCE_API')
+        .gte('published_at', shadowStartDate)
+        .order('publication_id', { ascending: true })
+        .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
+      if (!data?.length) { hasMore = false } else {
+        breakdownPublications.push(...data)
+        hasMore = data.length === PAGE_SIZE
+        page++
+      }
+    }
+  }
+
+  const breakdownActualTrades: any[] = []
+  {
+    const PAGE_SIZE = 1000
+    let page = 0
+    let hasMore = true
+    while (hasMore) {
+      const { data } = await adminDb
+        .from('actual_trades')
+        .select('analyst_id, market_id, direction, published_at, result_r, triggered, source_system')
+        .in('source_system', ['ACUITY_PERFORMANCE_API', 'MANUAL_BACKFILL'])
+        .gte('published_at', shadowStartDate)
+        .order('trade_id', { ascending: true })
+        .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
+      if (!data?.length) { hasMore = false } else {
+        breakdownActualTrades.push(...data)
+        hasMore = data.length === PAGE_SIZE
+        page++
+      }
+    }
+  }
+
+  const breakdownKey = (analystId: string, marketId: string, direction: string, date: string) =>
+    `${analystId}::${marketId}::${direction}::${date}`
+
+  // Publications carry effective_triggered but not a result -- a WEBHOOK_TRUE row has no
+  // matched_trade_id (see migrations/015_publication_reconciliation.sql), so the R value for
+  // a triggered publication has to come from a separate join to actual_trades on
+  // analyst_id+market_id+direction+date. Same API-preferred, triggered-only source rule as
+  // preferApiPerDay() above, scoped down to the exact match key instead of just date.
+  const breakdownApiTriggeredKeys = new Set<string>()
+  for (const t of breakdownActualTrades) {
+    if (t.source_system === 'ACUITY_PERFORMANCE_API' && t.triggered && t.analyst_id && t.market_id && t.direction && t.published_at) {
+      breakdownApiTriggeredKeys.add(breakdownKey(t.analyst_id, t.market_id, t.direction, t.published_at.slice(0, 10)))
+    }
+  }
+  const breakdownResultByKey = new Map<string, number | null>()
+  for (const t of breakdownActualTrades) {
+    if (!t.triggered || !t.analyst_id || !t.market_id || !t.direction || !t.published_at) continue
+    const key = breakdownKey(t.analyst_id, t.market_id, t.direction, t.published_at.slice(0, 10))
+    if (t.source_system === 'MANUAL_BACKFILL' && breakdownApiTriggeredKeys.has(key)) continue
+    breakdownResultByKey.set(key, t.result_r)
+  }
+
+  const breakdownPubByKey = new Map<string, { effective_triggered: boolean }>()
+  for (const p of breakdownPublications) {
+    if (!p.analyst_id || !p.market_id || !p.direction || !p.published_at) continue
+    breakdownPubByKey.set(breakdownKey(p.analyst_id, p.market_id, p.direction, p.published_at.slice(0, 10)), p)
+  }
+
+  // Shadow trades aren't analyst-specific -- every active analyst is compared against the
+  // same universe of shadow setups, with "no publication" being the expected/common result
+  // for markets that analyst wasn't assigned that day.
+  const breakdownRows: {
+    date: string; symbol: string; direction: string
+    shadowStatus: string; shadowR: number | null
+    analystId: string; hasPublication: boolean
+    analystTriggered: boolean | null; analystR: number | null
+  }[] = []
+  for (const outcome of breakdownShadowRaw) {
+    const st = outcome.shadow_trade
+    const opp = st?.opportunity
+    const marketId = opp?.market_id
+    const symbol = opp?.market?.symbol
+    const direction = st?.direction
+    const date = st?.generated_at?.slice(0, 10)
+    if (!marketId || !symbol || !direction || !date) continue
+    const shadowR = outcome.result_r !== null ? Number(outcome.result_r)
+      : outcome.trade_outcome_status === 'TARGET_HIT' ? Number(st.rr)
+      : outcome.trade_outcome_status === 'STOP_HIT' ? -1
+      : null
+
+    for (const analyst of breakdownAnalysts) {
+      const key = breakdownKey(analyst.analyst_id, marketId, direction, date)
+      const pub = breakdownPubByKey.get(key)
+      breakdownRows.push({
+        date, symbol, direction,
+        shadowStatus: outcome.trade_outcome_status,
+        shadowR,
+        analystId: analyst.analyst_id,
+        hasPublication: !!pub,
+        analystTriggered: pub ? pub.effective_triggered : null,
+        analystR: pub?.effective_triggered ? breakdownResultByKey.get(key) ?? null : null,
+      })
+    }
+  }
+
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
@@ -149,6 +301,10 @@ export default async function ShadowMonitoringPage() {
         shadowOutcomes={sorted}
         actualTrades={actualTrades ?? []}
         actualPublications={rawActualPublications}
+      />
+      <AnalystShadowBreakdown
+        rows={breakdownRows}
+        analysts={breakdownAnalysts}
       />
     </div>
   )
