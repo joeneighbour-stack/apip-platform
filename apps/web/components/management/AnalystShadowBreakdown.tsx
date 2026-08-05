@@ -2,15 +2,15 @@
 import { useState, useMemo } from 'react'
 
 interface BreakdownRow {
+  analystId: string
   date: string
   symbol: string
-  direction: string
+  analystDirection: string
+  analystTriggered: boolean
+  analystR: number | null
+  shadowDirection: string | null
   shadowStatus: string
   shadowR: number | null
-  analystId: string
-  hasPublication: boolean
-  analystTriggered: boolean | null
-  analystR: number | null
 }
 interface AnalystOption {
   analyst_id: string
@@ -33,6 +33,15 @@ const SHADOW_TRIGGERED_STATUSES = ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED', 'CLOSE
 
 function fmtR(r: number): string {
   return `${r > 0 ? '+' : ''}${r.toFixed(2)}R`
+}
+
+function DirectionBadge({ direction }: { direction: string | null }) {
+  if (!direction) return <span className="text-muted-foreground">—</span>
+  return (
+    <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
+      direction === 'BUY' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+    }`}>{direction}</span>
+  )
 }
 
 function todayIso() { return new Date().toISOString().slice(0, 10) }
@@ -92,7 +101,9 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
         </div>
       </div>
       <p className="text-xs text-muted-foreground">
-        Per-analyst comparison: for each shadow setup, the analyst&apos;s own publication for the same market, direction and date, if any.
+        Per-analyst comparison, scoped to the analyst&apos;s own coverage: markets the analyst published on where
+        the shadow system also generated a setup for the same market and date. Direction is not part of the
+        match &mdash; the two sides can disagree on the trade.
       </p>
 
       <div className="space-y-2">
@@ -100,17 +111,18 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
           const analystRows = byAnalyst.get(analyst.analyst_id) ?? []
           const isOpen = expanded.has(analyst.analyst_id)
 
-          const shadowTriggered = analystRows.filter(r => SHADOW_TRIGGERED_STATUSES.includes(r.shadowStatus))
-          const shadowWins = analystRows.filter(r => r.shadowR !== null && r.shadowR > 0)
-          const shadowWinRate = shadowTriggered.length > 0 ? shadowWins.length / shadowTriggered.length : null
-          const shadowTotalR = analystRows.reduce((s, r) => s + (r.shadowR ?? 0), 0)
+          const analystTriggeredRows = analystRows.filter(r => r.analystTriggered)
+          const shadowTriggeredRows = analystRows.filter(r => SHADOW_TRIGGERED_STATUSES.includes(r.shadowStatus))
 
-          const analystTriggeredRows = analystRows.filter(r => r.analystTriggered === true)
-          const analystWins = analystRows.filter(r => r.analystR !== null && r.analystR > 0)
+          const analystWins = analystTriggeredRows.filter(r => r.analystR !== null && r.analystR > 0)
           const analystWinRate = analystTriggeredRows.length > 0 ? analystWins.length / analystTriggeredRows.length : null
           const analystTotalR = analystRows.reduce((s, r) => s + (r.analystR ?? 0), 0)
 
-          const edge = shadowTotalR - analystTotalR
+          const shadowWins = shadowTriggeredRows.filter(r => r.shadowR !== null && r.shadowR > 0)
+          const shadowWinRate = shadowTriggeredRows.length > 0 ? shadowWins.length / shadowTriggeredRows.length : null
+          const shadowTotalR = analystRows.reduce((s, r) => s + (r.shadowR ?? 0), 0)
+
+          const edge = analystTotalR - shadowTotalR
 
           return (
             <div key={analyst.analyst_id} className="rounded-lg border border-border overflow-hidden">
@@ -123,9 +135,10 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
                   <span className="text-sm font-medium">{analyst.display_name}</span>
                 </div>
                 <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap justify-end">
-                  <span>Markets compared: <span className="font-medium text-foreground">{analystRows.length}</span></span>
-                  <span>Win rate &mdash; shadow <span className="font-medium text-foreground">{shadowWinRate !== null ? `${Math.round(shadowWinRate * 100)}%` : '—'}</span> vs analyst <span className="font-medium text-foreground">{analystWinRate !== null ? `${Math.round(analystWinRate * 100)}%` : '—'}</span></span>
-                  <span>Total R &mdash; shadow <span className={`font-medium ${shadowTotalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmtR(shadowTotalR)}</span> vs analyst <span className={`font-medium ${analystTotalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmtR(analystTotalR)}</span></span>
+                  <span>Matched setups: <span className="font-medium text-foreground">{analystRows.length}</span></span>
+                  <span>Triggered &mdash; analyst <span className="font-medium text-foreground">{analystTriggeredRows.length} of {analystRows.length}</span>, shadow <span className="font-medium text-foreground">{shadowTriggeredRows.length} of {analystRows.length}</span></span>
+                  <span>Win rate &mdash; analyst <span className="font-medium text-foreground">{analystWinRate !== null ? `${Math.round(analystWinRate * 100)}%` : '—'}</span> vs shadow <span className="font-medium text-foreground">{shadowWinRate !== null ? `${Math.round(shadowWinRate * 100)}%` : '—'}</span></span>
+                  <span>Total R &mdash; analyst <span className={`font-medium ${analystTotalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmtR(analystTotalR)}</span> vs shadow <span className={`font-medium ${shadowTotalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmtR(shadowTotalR)}</span></span>
                   <span>Edge <span className={`font-medium ${edge >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmtR(edge)}</span></span>
                 </div>
               </button>
@@ -135,7 +148,7 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
                   <table className="w-full text-sm">
                     <thead className="bg-muted/50">
                       <tr>
-                        {['Date', 'Market', 'Direction', 'Shadow Result', 'Analyst Result', 'Edge'].map(h => (
+                        {['Date', 'Market', 'Analyst', 'Shadow', 'Edge'].map(h => (
                           <th key={h} className="text-left px-3 py-2.5 text-xs font-medium text-muted-foreground whitespace-nowrap">{h}</th>
                         ))}
                       </tr>
@@ -143,45 +156,47 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
                     <tbody className="divide-y divide-border">
                       {analystRows.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="px-4 py-6 text-center text-xs text-muted-foreground">
-                            No comparisons for the selected period.
+                          <td colSpan={5} className="px-4 py-6 text-center text-xs text-muted-foreground">
+                            No matched setups for the selected period.
                           </td>
                         </tr>
                       ) : [...analystRows].sort((a, b) => b.date.localeCompare(a.date)).map((r, i) => {
-                        const edgeR = r.shadowR !== null && r.analystR !== null ? r.shadowR - r.analystR : null
+                        const edgeR = r.analystR !== null && r.shadowR !== null ? r.analystR - r.shadowR : null
                         return (
-                          <tr key={`${r.date}-${r.symbol}-${r.direction}-${i}`} className="hover:bg-muted/30">
+                          <tr key={`${r.date}-${r.symbol}-${i}`} className="hover:bg-muted/30">
                             <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">{r.date}</td>
                             <td className="px-3 py-2 text-xs font-medium whitespace-nowrap">{r.symbol}</td>
-                            <td className="px-3 py-2">
-                              <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
-                                r.direction === 'BUY' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                              }`}>{r.direction}</span>
+                            <td className="px-3 py-2 text-xs whitespace-nowrap">
+                              <div className="flex items-center gap-1.5">
+                                <DirectionBadge direction={r.analystDirection} />
+                                {r.analystTriggered ? (
+                                  r.analystR !== null ? (
+                                    <span className={`font-medium tabular-nums ${r.analystR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                                      {fmtR(r.analystR)}
+                                    </span>
+                                  ) : (
+                                    <span className="text-muted-foreground">Triggered</span>
+                                  )
+                                ) : (
+                                  <span className="text-muted-foreground">Not triggered</span>
+                                )}
+                              </div>
                             </td>
                             <td className="px-3 py-2 text-xs whitespace-nowrap">
-                              <span className={`font-medium px-2 py-0.5 rounded-full ${
-                                STATUS_STYLES[r.shadowStatus] ?? 'bg-muted text-muted-foreground'
-                              }`}>
-                                {r.shadowStatus.replace(/_/g, ' ')}
-                              </span>
-                              {r.shadowR !== null && (
-                                <span className={`ml-1.5 tabular-nums font-medium ${r.shadowR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                                  {fmtR(r.shadowR)}
-                                </span>
-                              )}
-                            </td>
-                            <td className="px-3 py-2 text-xs whitespace-nowrap">
-                              {!r.hasPublication ? (
-                                <span className="text-muted-foreground">No publication</span>
-                              ) : r.analystTriggered === false ? (
-                                <span className="text-muted-foreground">Not Triggered</span>
-                              ) : r.analystR !== null ? (
-                                <span className={`font-medium tabular-nums ${r.analystR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                                  Triggered ({fmtR(r.analystR)})
-                                </span>
-                              ) : (
-                                <span className="text-muted-foreground">Triggered</span>
-                              )}
+                              <div className="flex items-center gap-1.5">
+                                <DirectionBadge direction={r.shadowDirection} />
+                                {r.shadowR !== null ? (
+                                  <span className={`font-medium tabular-nums ${r.shadowR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                                    {fmtR(r.shadowR)}
+                                  </span>
+                                ) : (
+                                  <span className={`font-medium px-2 py-0.5 rounded-full ${
+                                    STATUS_STYLES[r.shadowStatus] ?? 'bg-muted text-muted-foreground'
+                                  }`}>
+                                    {r.shadowStatus.replace(/_/g, ' ')}
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="px-3 py-2 text-xs tabular-nums font-medium">
                               {edgeR !== null ? (
