@@ -136,7 +136,7 @@ async function main() {
   process.stdout.write('Loading trades')
   while (hasMore) {
     const { data, error } = await db.from('actual_trades')
-      .select('analyst_id, market_id, direction, result_r, triggered, published_at')
+      .select('analyst_id, market_id, direction, result_r, triggered, published_at, source_system')
       .gte('published_at', windowStart)
       .order('published_at', { ascending: true })
       .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
@@ -151,10 +151,29 @@ async function main() {
   }
   console.log(`\nLoaded ${allTrades.length} trades\n`)
 
+  // Dedup: for each analyst+date, prefer API triggered trades over MANUAL_BACKFILL --
+  // same per-day source-preference rule as TeamPerformanceGrid.tsx's preferApiPerDay().
+  // Without this, a date covered by both a MANUAL_BACKFILL import and the
+  // ACUITY_PERFORMANCE_API webhook feed double-counts that day's return (confirmed:
+  // Ian Coleman's July 2026 summed both sources to +15.95R against the two sources'
+  // real individual totals of ~+7.92R backfill and ~+8.02R API).
+  const dedupedTrades: any[] = []
+  const apiKeySet = new Set(
+    allTrades
+      .filter(t => t.source_system === 'ACUITY_PERFORMANCE_API' && t.triggered && t.result_r !== null)
+      .map(t => `${t.analyst_id}::${t.published_at.slice(0, 10)}`)
+  )
+  for (const t of allTrades) {
+    const key = `${t.analyst_id}::${t.published_at.slice(0, 10)}`
+    if (t.source_system === 'MANUAL_BACKFILL' && apiKeySet.has(key)) continue
+    dedupedTrades.push(t)
+  }
+  console.log(`Deduped ${allTrades.length - dedupedTrades.length} MANUAL_BACKFILL rows shadowed by a triggered API trade on the same day\n`)
+
   const kpiRows: any[] = []
 
   for (const analyst of analysts) {
-    const analystTrades = allTrades.filter(t => t.analyst_id === analyst.analyst_id)
+    const analystTrades = dedupedTrades.filter(t => t.analyst_id === analyst.analyst_id)
     const monthlyRows: any[] = []
 
     for (const { start, end } of months) {
