@@ -24,10 +24,17 @@ const TARGETS: Record<string, { target: number; direction: 'above' | 'below'; fo
   max_drawdown:    { target: -10,  direction: 'above', format: v => `${v.toFixed(2)}R`,                    label: 'Limit: >-10R' },
 }
 
+// Compare against the same rounded precision the tile/table actually displays
+// (Math.round(value*100) for rate-based KPIs) -- otherwise a value like 0.3488 that *displays*
+// as "35%" (rounds up) can fail a raw >= 0.35 check and read as "Missed targets" right next to a
+// badge showing 35%, which looks like a contradiction. Same fix as TeamPerformanceGrid.tsx's
+// isOnTarget() -- the target thresholds must agree between the two views.
 function isOnTarget(kpiName: string, value: number): boolean {
   const t = TARGETS[kpiName]
   if (!t) return true
-  return t.direction === 'above' ? value >= t.target : value <= t.target
+  const isRate = kpiName === 'win_rate' || kpiName === 'triggered_rate'
+  const compareValue = isRate ? Math.round(value * 100) / 100 : value
+  return t.direction === 'above' ? compareValue >= t.target : compareValue <= t.target
 }
 
 function monthLabel(period_start: string) {
@@ -35,10 +42,17 @@ function monthLabel(period_start: string) {
   return date.toLocaleString('en-GB', { month: 'short', year: '2-digit' })
 }
 
+// A triggered_rate row with a zero numerator (kpi_value.triggered === 0) isn't a meaningful
+// "0%" signal -- it's indistinguishable from no data yet, so it displays the same as a missing
+// row ("--"), not "0%". Same rule as TeamPerformanceGrid.tsx's getValue().
 function getValue(kpi: Kpi | undefined): number | null {
   if (!kpi) return null
   const v = kpi.kpi_value
-  return typeof v === 'object' ? (v.value ?? null) : Number(v)
+  if (typeof v === 'object') {
+    if (kpi.kpi_name === 'triggered_rate' && v?.triggered === 0) return null
+    return v.value ?? null
+  }
+  return Number(v)
 }
 
 function trendData(allKpis: Kpi[], name: string, limitMonths = 12) {

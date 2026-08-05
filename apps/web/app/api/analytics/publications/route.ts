@@ -14,7 +14,7 @@ export async function GET(req: Request) {
 
   const { data: appUser } = await supabase
     .from('app_users')
-    .select('role')
+    .select('role, analyst_id')
     .eq('auth_user_id', user.id)
     .single()
 

@@ -100,7 +100,10 @@ export async function getAnalystProfileData(
 
   const pubTotal = (monthPubs ?? []).length
   const apiTriggered = monthTriggered.filter((t: any) => t.source_system === 'ACUITY_PERFORMANCE_API')
-  const liveTrigRate = pubTotal > 0 ? apiTriggered.length / pubTotal : null
+  // A zero numerator (nothing triggered yet this month) isn't a meaningful "0%" signal, same
+  // rule as KpiSummary.tsx/TeamPerformanceGrid.tsx's getValue() -- it reads as no data ("--"),
+  // not as "missing every target".
+  const liveTrigRate = pubTotal > 0 && apiTriggered.length > 0 ? apiTriggered.length / pubTotal : null
 
   const liveRows = [
     { kpi_name: 'total_return_r', kpi_value: { value: liveTotalR, unit: 'R', trade_count: monthTriggered.length }, period_start: monthStart, period_end: null },
