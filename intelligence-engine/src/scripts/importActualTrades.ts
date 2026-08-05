@@ -68,7 +68,7 @@ const SYMBOL_OVERRIDES: Record<string, string> = {
   'PALLADIUM':            'Palladium',
   'NATGAS':               'Natural Gas',
   'NATURAL GAS':          'Natural Gas',
-  'NATURAL GAS.1':        'Natural Gas',
+  'NATURAL GAS.1':        'SKIP',
   'BRENT':                'Brent',
   'XRP':                  'Ripple',
   // Equities not in APIP market universe -- will be skipped
@@ -536,6 +536,7 @@ const invokedDirectly = process.argv[1] !== undefined &&
 if (invokedDirectly) {
   main().catch(err => { console.error('Fatal:', err); process.exit(1) })
 }
+
 
 
 
