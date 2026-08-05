@@ -11,6 +11,11 @@ interface Props {
   subtitle: string
   backHref?: string
   backLabel?: string
+  // 'kpi-only' renders just the KPI tiles + monthly history table (KpiSummary) -- used by
+  // the analyst's own My KPIs tab, which has dedicated pages elsewhere for recommendations
+  // (My Workspace), the trade log (My Monitor), and performance breakdown (the My
+  // Performance tab), so showing them again here would just be duplication.
+  mode?: 'full' | 'kpi-only'
 }
 
 function validityLabel(status: string | null): { label: string; color: string } | null {
@@ -36,8 +41,8 @@ function stripBoilerplate(note: string | null): string {
 // and the analyst's own "My KPIs" tab (/dashboard/analyst/performance) -- same layout, same
 // data, same queries (see lib/analystProfile.ts) regardless of who's viewing. subtitle/backHref
 // are the only things that differ between the two callers.
-export async function AnalystProfileContent({ analystId, subtitle, backHref, backLabel = 'Back' }: Props) {
-  const data = await getAnalystProfileData(analystId)
+export async function AnalystProfileContent({ analystId, subtitle, backHref, backLabel = 'Back', mode = 'full' }: Props) {
+  const data = await getAnalystProfileData(analystId, mode)
   if (!data.analyst) notFound()
 
   const {
@@ -45,6 +50,10 @@ export async function AnalystProfileContent({ analystId, subtitle, backHref, bac
     monthR, monthTradeCount, winRate, allTrades, recentTradesWithDetails,
     reviews, disputesByTradeId,
   } = data
+
+  if (mode === 'kpi-only') {
+    return <KpiSummary kpis={kpis} kpiTrend={kpiTrend} />
+  }
 
   return (
     <div className="space-y-8">

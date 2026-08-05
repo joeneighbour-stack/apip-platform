@@ -45,6 +45,7 @@ export default async function AnalystPerformancePage() {
             <AnalystProfileContent
               analystId={user.analystId}
               subtitle="Your performance profile"
+              mode="kpi-only"
             />
           }
           analyticsProps={{

@@ -15,24 +15,30 @@ export interface AnalystProfileData {
   disputesByTradeId: Map<string, { trade_id: string; status: string; dispute_type: string }>
 }
 
-// Shared by the management analyst-profile page (any analyst) and the analyst's own
-// "My KPIs" tab (their own analyst_id) -- same queries either way. RLS already grants a
-// MANAGER access to any analyst's actual_trades/executive_kpis/post_trade_reviews/
-// trade_disputes rows and grants an ANALYST access to their own (migrations/002_rls.sql,
-// 035_post_trade_reviews_rls.sql), so no caller-role branching is needed here -- only
-// coaching_recommendations and market_event_risk need the service-role client, same as
-// the original management page did, since analysts have no direct RLS grant on those.
-export async function getAnalystProfileData(analystId: string): Promise<AnalystProfileData> {
+// Shared by the management analyst-profile page (any analyst, mode='full') and the
+// analyst's own "My KPIs" tab (their own analyst_id, mode='kpi-only') -- same queries
+// either way. RLS already grants a MANAGER access to any analyst's actual_trades/
+// executive_kpis/post_trade_reviews/trade_disputes rows and grants an ANALYST access to
+// their own (migrations/002_rls.sql, 035_post_trade_reviews_rls.sql), so no caller-role
+// branching is needed here -- only coaching_recommendations and market_event_risk need
+// the service-role client, same as the original management page did, since analysts have
+// no direct RLS grant on those.
+//
+// mode='kpi-only' skips every query the KPI tiles/history table don't need (today's
+// recommendations + event risk, the full trade history pagination, reviews, disputes) --
+// the My KPIs tab has no use for any of that, and the full trade-history fetch in
+// particular is the most expensive query in here.
+export async function getAnalystProfileData(
+  analystId: string,
+  mode: 'full' | 'kpi-only' = 'full'
+): Promise<AnalystProfileData> {
   const supabase = await createClient()
-  const adminDb = createAdminClient()
 
-  const today = new Date().toISOString().slice(0, 10)
   const now = new Date()
   const monthStart = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`
   // Full history floor -- the KPI backfill and actual_trades import both cover back to
   // 2017, and "All Time Trades" / KPI History are meant to show the whole thing.
   const historyFloor = '2015-01-01'
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
   const { data: analyst } = await supabase
     .from('analysts')
@@ -47,6 +53,37 @@ export async function getAnalystProfileData(analystId: string): Promise<AnalystP
       allTrades: [], recentTradesWithDetails: [], reviews: [], disputesByTradeId: new Map(),
     }
   }
+
+  // KPI trend (always fetched -- needed by both modes)
+  const { data: kpiTrend } = await supabase
+    .from('executive_kpis')
+    .select('kpi_name, kpi_value, period_start, period_end')
+    .eq('analyst_id', analystId)
+    .gte('period_start', historyFloor)
+    .order('period_start', { ascending: true })
+
+  const kpis = ((kpiTrend as any[]) ?? []).filter((k: any) => k.period_start === monthStart)
+
+  // Current month stats from KPIs
+  const currentMonthKpi = kpis.find((k: any) => k.kpi_name === 'total_return_r')
+  const monthR = currentMonthKpi ? Number(currentMonthKpi.kpi_value?.value ?? 0) : 0
+  const monthTradeCount = currentMonthKpi ? Number(currentMonthKpi.kpi_value?.trade_count ?? 0) : 0
+  const winRateKpi = kpis.find((k: any) => k.kpi_name === 'win_rate')
+  const winRate = winRateKpi ? Math.round(Number(winRateKpi.kpi_value?.value ?? 0) * 100) : null
+
+  if (mode === 'kpi-only') {
+    return {
+      analyst: analyst as any,
+      recommendations: [], eventsByMarket: new Map(),
+      kpis, kpiTrend: (kpiTrend as any[]) ?? [],
+      monthR, monthTradeCount, winRate,
+      allTrades: [], recentTradesWithDetails: [], reviews: [], disputesByTradeId: new Map(),
+    }
+  }
+
+  const adminDb = createAdminClient()
+  const today = new Date().toISOString().slice(0, 10)
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
   // Today's recommendations via adminDb (bypass RLS)
   const { data: allRecs } = await adminDb
@@ -93,23 +130,6 @@ export async function getAnalystProfileData(analystId: string): Promise<AnalystP
     if (!eventsByMarket.has(er.market_id)) eventsByMarket.set(er.market_id, [])
     eventsByMarket.get(er.market_id)!.push(event.event_name)
   }
-
-  // KPI trend
-  const { data: kpiTrend } = await supabase
-    .from('executive_kpis')
-    .select('kpi_name, kpi_value, period_start, period_end')
-    .eq('analyst_id', analystId)
-    .gte('period_start', historyFloor)
-    .order('period_start', { ascending: true })
-
-  const kpis = ((kpiTrend as any[]) ?? []).filter((k: any) => k.period_start === monthStart)
-
-  // Current month stats from KPIs
-  const currentMonthKpi = kpis.find((k: any) => k.kpi_name === 'total_return_r')
-  const monthR = currentMonthKpi ? Number(currentMonthKpi.kpi_value?.value ?? 0) : 0
-  const monthTradeCount = currentMonthKpi ? Number(currentMonthKpi.kpi_value?.trade_count ?? 0) : 0
-  const winRateKpi = kpis.find((k: any) => k.kpi_name === 'win_rate')
-  const winRate = winRateKpi ? Math.round(Number(winRateKpi.kpi_value?.value ?? 0) * 100) : null
 
   // All trades for breakdown
   const allTrades: any[] = []
