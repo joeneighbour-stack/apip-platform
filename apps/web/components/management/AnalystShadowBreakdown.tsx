@@ -64,11 +64,36 @@ function DirectionBadge({ direction }: { direction: string | null }) {
 
 function Chip({ label, value, valueClassName }: { label: string; value: React.ReactNode; valueClassName?: string }) {
   return (
-    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-border bg-muted/30 text-xs whitespace-nowrap">
+    <div className="flex items-center gap-1 px-2 py-1 rounded bg-muted text-xs whitespace-nowrap">
       <span className="text-muted-foreground">{label}</span>
       <span className={`font-semibold tabular-nums ${valueClassName ?? ''}`}>{value}</span>
     </div>
   )
+}
+
+// Shared by the summary table and each analyst's own card -- same numbers, two views.
+function computeAnalystStats(analystRows: BreakdownRow[]) {
+  const analystTriggeredRows = analystRows.filter(r => r.analystTriggered)
+  const shadowTriggeredRows = analystRows.filter(r => SHADOW_TRIGGERED_STATUSES.includes(r.shadowStatus))
+
+  const analystWins = analystTriggeredRows.filter(r => r.analystR !== null && r.analystR > 0)
+  const analystWinRate = analystTriggeredRows.length > 0 ? analystWins.length / analystTriggeredRows.length : null
+  const analystTotalR = analystRows.reduce((s, r) => s + (r.analystR ?? 0), 0)
+
+  const shadowWins = shadowTriggeredRows.filter(r => r.shadowR !== null && r.shadowR > 0)
+  const shadowWinRate = shadowTriggeredRows.length > 0 ? shadowWins.length / shadowTriggeredRows.length : null
+  const shadowTotalR = analystRows.reduce((s, r) => s + (r.shadowR ?? 0), 0)
+
+  const edge = analystTotalR - shadowTotalR
+
+  return {
+    matched: analystRows.length,
+    analystTriggeredRows, shadowTriggeredRows,
+    analystWinRate, shadowWinRate,
+    analystTotalR, shadowTotalR, edge,
+    analystTriggerPct: fmtPct(analystTriggeredRows.length, analystRows.length),
+    shadowTriggerPct: fmtPct(shadowTriggeredRows.length, analystRows.length),
+  }
 }
 
 function StatBox({ label, value, valueClassName, sublabel }: { label: string; value: React.ReactNode; valueClassName?: string; sublabel?: string }) {
@@ -117,6 +142,14 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
     })
   }
 
+  // At-a-glance view across all analysts, ranked by who's beating the shadow system by the
+  // widest margin -- lets management scan the whole team without expanding every card.
+  const summaryRows = useMemo(() => {
+    return analysts
+      .map(a => ({ analyst: a, stats: computeAnalystStats(byAnalyst.get(a.analyst_id) ?? []) }))
+      .sort((a, b) => b.stats.edge - a.stats.edge)
+  }, [analysts, byAnalyst])
+
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -143,12 +176,6 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
           </button>
         </div>
       </div>
-      <p className="text-xs text-muted-foreground">
-        Per-analyst comparison, scoped to the analyst&apos;s own coverage: markets the analyst published on where
-        the shadow system also generated a setup for the same market and date. Direction is not part of the
-        match &mdash; the two sides can disagree on the trade.
-      </p>
-
       <div className="space-y-1 pt-1">
         <h3 className="text-sm font-semibold">Analyst vs Shadow &mdash; Head to Head</h3>
         <p className="text-xs text-muted-foreground">
@@ -157,26 +184,44 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
         </p>
       </div>
 
+      <div className="rounded-lg border border-border overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/50">
+            <tr>
+              {['Analyst', 'Matched', 'Trigger% (A/S)', 'Analyst R', 'Shadow R', 'Analyst Edge', 'Win Rate (A/S)'].map(h => (
+                <th key={h} className="text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {summaryRows.map(({ analyst, stats }, i) => (
+              <tr key={analyst.analyst_id} className={`hover:bg-muted/30 ${i % 2 === 1 ? 'bg-muted/20' : ''}`}>
+                <td className="px-4 py-2 text-xs font-medium whitespace-nowrap">{analyst.display_name}</td>
+                <td className="px-4 py-2 text-xs tabular-nums whitespace-nowrap">{stats.matched}</td>
+                <td className="px-4 py-2 text-xs tabular-nums whitespace-nowrap">{stats.analystTriggerPct} / {stats.shadowTriggerPct}</td>
+                <td className={`px-4 py-2 text-xs tabular-nums font-medium whitespace-nowrap ${rClass(stats.analystTotalR)}`}>{fmtR(stats.analystTotalR)}</td>
+                <td className={`px-4 py-2 text-xs tabular-nums font-medium whitespace-nowrap ${rClass(stats.shadowTotalR)}`}>{fmtR(stats.shadowTotalR)}</td>
+                <td className={`px-4 py-2 text-xs tabular-nums font-medium whitespace-nowrap ${rClass(stats.edge)}`}>{fmtR(stats.edge)}</td>
+                <td className="px-4 py-2 text-xs tabular-nums whitespace-nowrap">
+                  {stats.analystWinRate !== null ? `${Math.round(stats.analystWinRate * 100)}%` : '—'}
+                  {' / '}
+                  {stats.shadowWinRate !== null ? `${Math.round(stats.shadowWinRate * 100)}%` : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
       <div className="space-y-2">
         {analysts.map(analyst => {
           const analystRows = byAnalyst.get(analyst.analyst_id) ?? []
           const isOpen = expanded.has(analyst.analyst_id)
-
-          const analystTriggeredRows = analystRows.filter(r => r.analystTriggered)
-          const shadowTriggeredRows = analystRows.filter(r => SHADOW_TRIGGERED_STATUSES.includes(r.shadowStatus))
-
-          const analystWins = analystTriggeredRows.filter(r => r.analystR !== null && r.analystR > 0)
-          const analystWinRate = analystTriggeredRows.length > 0 ? analystWins.length / analystTriggeredRows.length : null
-          const analystTotalR = analystRows.reduce((s, r) => s + (r.analystR ?? 0), 0)
-
-          const shadowWins = shadowTriggeredRows.filter(r => r.shadowR !== null && r.shadowR > 0)
-          const shadowWinRate = shadowTriggeredRows.length > 0 ? shadowWins.length / shadowTriggeredRows.length : null
-          const shadowTotalR = analystRows.reduce((s, r) => s + (r.shadowR ?? 0), 0)
-
-          const edge = analystTotalR - shadowTotalR
-
-          const analystTriggerPct = fmtPct(analystTriggeredRows.length, analystRows.length)
-          const shadowTriggerPct = fmtPct(shadowTriggeredRows.length, analystRows.length)
+          const {
+            analystTriggeredRows, shadowTriggeredRows,
+            analystTotalR, shadowTotalR, edge,
+            analystTriggerPct, shadowTriggerPct,
+          } = computeAnalystStats(analystRows)
 
           return (
             <div key={analyst.analyst_id} className="rounded-lg border border-border bg-card overflow-hidden">
@@ -186,26 +231,14 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
               >
                 <div className="flex items-center gap-2 shrink-0">
                   <span className={`text-xs text-muted-foreground transition-transform inline-block ${isOpen ? 'rotate-90' : ''}`}>▶</span>
-                  <span className="text-sm font-bold">{analyst.display_name}</span>
+                  <span className="text-sm font-medium">{analyst.display_name}</span>
                 </div>
-                <div className="flex items-center gap-2 flex-wrap justify-end">
+                <div className="flex items-center gap-1.5 flex-nowrap justify-end">
                   <Chip label="Matched" value={analystRows.length} />
                   <Chip label="Trigger%" value={`${analystTriggerPct} / ${shadowTriggerPct}`} />
                   <Chip label="Analyst R" value={fmtR(analystTotalR)} valueClassName={rClass(analystTotalR)} />
                   <Chip label="Shadow R" value={fmtR(shadowTotalR)} valueClassName={rClass(shadowTotalR)} />
                   <Chip label="Analyst Edge" value={fmtR(edge)} valueClassName={rClass(edge)} />
-                  <Chip
-                    label="Win Rate:"
-                    value={
-                      <>
-                        <span className="text-muted-foreground font-normal">Analyst</span>{' '}
-                        {analystWinRate !== null ? `${Math.round(analystWinRate * 100)}%` : '—'}
-                        <span className="text-muted-foreground font-normal"> / </span>
-                        <span className="text-muted-foreground font-normal">Shadow</span>{' '}
-                        {shadowWinRate !== null ? `${Math.round(shadowWinRate * 100)}%` : '—'}
-                      </>
-                    }
-                  />
                 </div>
               </button>
 
@@ -233,10 +266,10 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
                       <thead className="bg-muted/50">
                         <tr>
                           {['Date', 'Market', 'Analyst Dir', 'Analyst R', 'Shadow Dir', 'Shadow R'].map(h => (
-                            <th key={h} className="text-left px-3 py-2.5 text-xs font-medium text-muted-foreground whitespace-nowrap">{h}</th>
+                            <th key={h} className="text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">{h}</th>
                           ))}
                           <th
-                            className="text-left px-3 py-2.5 text-xs font-medium text-muted-foreground whitespace-nowrap"
+                            className="text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap"
                             title="Analyst R minus Shadow R — positive means analyst outperformed shadow"
                           >
                             Edge (+ = analyst wins)
