@@ -2,6 +2,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { TeamPerformanceGrid } from '@/components/management/TeamPerformanceGrid'
+import { getShadowBreakdownData } from '@/lib/shadowBreakdown'
 
 export default async function ManagementPerformancePage() {
   const user = await getCurrentUser()
@@ -115,6 +116,69 @@ export default async function ManagementPerformancePage() {
   const analystIdsWithData = new Set(analystKpis.map((k: any) => k.analyst_id).filter(Boolean))
   const analystsWithData = ((analysts as any[]) ?? []).filter((a: any) => analystIdsWithData.has(a.analyst_id))
 
+  // "Shadow vs Actual -- Since Platform Launch" -- shared with the Shadow Monitoring page so
+  // both show identical numbers. shadowStartDate/analysts/rows come from the same source;
+  // actualTrades/actualPublications are re-fetched here (rather than returned from
+  // getShadowBreakdownData) mirroring shadow/page.tsx's exact fetch + preferApiPerDay dedupe,
+  // since ShadowSinceLaunchStats needs the raw trade/publication rows, not the breakdown rows.
+  const { shadowStartDate, analysts: shadowBreakdownAnalysts, rows: shadowBreakdownRows } = await getShadowBreakdownData()
+
+  const rawSinceLaunchTrades: any[] = []
+  {
+    const PAGE_SIZE = 1000
+    let page = 0
+    let hasMore = true
+    while (hasMore) {
+      const { data } = await supabase
+        .from('actual_trades')
+        .select('result_r, triggered, published_at, analyst_id, source_system')
+        .in('source_system', ['ACUITY_PERFORMANCE_API', 'MANUAL_BACKFILL'])
+        .gte('published_at', shadowStartDate)
+        .order('trade_id', { ascending: true })
+        .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
+      if (!data?.length) { hasMore = false } else {
+        rawSinceLaunchTrades.push(...data)
+        hasMore = data.length === PAGE_SIZE
+        page++
+      }
+    }
+  }
+  const sinceLaunchApiDatesByAnalyst = new Map<string, Set<string>>()
+  for (const t of rawSinceLaunchTrades) {
+    if (t.source_system === 'ACUITY_PERFORMANCE_API' && t.triggered && t.analyst_id && t.published_at) {
+      const date = t.published_at.slice(0, 10)
+      if (!sinceLaunchApiDatesByAnalyst.has(t.analyst_id)) sinceLaunchApiDatesByAnalyst.set(t.analyst_id, new Set())
+      sinceLaunchApiDatesByAnalyst.get(t.analyst_id)!.add(date)
+    }
+  }
+  const sinceLaunchActualTrades = rawSinceLaunchTrades.filter(t => {
+    if (t.source_system === 'ACUITY_PERFORMANCE_API') return true
+    if (!t.analyst_id || !t.published_at) return true
+    return !sinceLaunchApiDatesByAnalyst.get(t.analyst_id)?.has(t.published_at.slice(0, 10))
+  })
+
+  const sinceLaunchActualPublications: any[] = []
+  {
+    const PAGE_SIZE = 1000
+    let page = 0
+    let hasMore = true
+    while (hasMore) {
+      const { data } = await adminDb
+        .from('analyst_publications')
+        .select('published_at, reconciliation_status')
+        .eq('source_system', 'ACUITY_PERFORMANCE_API')
+        .gte('published_at', shadowStartDate)
+        .order('published_at', { ascending: false })
+        .order('publication_id', { ascending: false })
+        .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
+      if (!data?.length) { hasMore = false } else {
+        sinceLaunchActualPublications.push(...data)
+        hasMore = data.length === PAGE_SIZE
+        page++
+      }
+    }
+  }
+
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
@@ -141,6 +205,10 @@ export default async function ManagementPerformancePage() {
         lastWeekStart={lwStart}
         lastWeekEnd={lwEnd}
         thisMonthPublications={(thisMonthPubs as any[]) ?? []}
+        sinceLaunchActualTrades={sinceLaunchActualTrades}
+        sinceLaunchActualPublications={sinceLaunchActualPublications}
+        shadowBreakdownRows={shadowBreakdownRows}
+        shadowBreakdownAnalysts={shadowBreakdownAnalysts}
       />
     </div>
   )

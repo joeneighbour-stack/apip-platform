@@ -52,7 +52,37 @@ export async function AnalystProfileContent({ analystId, subtitle, backHref, bac
   } = data
 
   if (mode === 'kpi-only') {
-    return <KpiSummary kpis={kpis} kpiTrend={kpiTrend} />
+    // backHref is only ever passed by the management caller (the analyst's own "My KPIs"
+    // tab omits it, since that page already has its own header) -- used here as the signal
+    // for whether this needs its own header, rather than a separate boolean prop.
+    if (!backHref) {
+      return <KpiSummary kpis={kpis} kpiTrend={kpiTrend} />
+    }
+    return (
+      <div className="space-y-4">
+        <div className="flex items-start justify-between">
+          <div>
+            <div className="flex items-center gap-3">
+              <h1 className="text-xl font-semibold">{analyst.display_name}</h1>
+              {!analyst.active && (
+                <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">Inactive</span>
+              )}
+            </div>
+            <p className="text-sm text-muted-foreground mt-1">{subtitle}</p>
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
+            <a href={`/dashboard/management/analyst/${analystId}/full`}
+              className="text-sm text-primary hover:underline">
+              Full profile &#8599;
+            </a>
+            <a href={backHref} className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+              &larr; {backLabel}
+            </a>
+          </div>
+        </div>
+        <KpiSummary kpis={kpis} kpiTrend={kpiTrend} />
+      </div>
+    )
   }
 
   return (

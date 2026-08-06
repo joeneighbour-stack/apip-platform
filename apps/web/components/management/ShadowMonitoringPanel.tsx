@@ -2,6 +2,7 @@
 import { useState, useMemo } from 'react'
 import { useLivePrices } from '@/hooks/useLivePrices'
 import { UnrealisedR } from '@/components/shared/UnrealisedR'
+import { ShadowSinceLaunchStats } from './ShadowSinceLaunchStats'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Legend } from 'recharts'
 
 interface ShadowOutcome {
@@ -159,36 +160,6 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades, actualPubl
   const totalAnalystR = dailyComparison.length > 0 ? dailyComparison[dailyComparison.length - 1]!.cumulativeAnalystR : 0
   const deltaR = totalShadowR - totalAnalystR
 
-  const triggered = shadowOutcomes.filter(o =>
-    ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED', 'CLOSED_PROFIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)
-  )
-  const resolved = shadowOutcomes.filter(o =>
-    ['TARGET_HIT', 'STOP_HIT', 'CLOSED_PROFIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)
-  )
-  const wins = shadowOutcomes.filter(o => ['TARGET_HIT', 'CLOSED_PROFIT'].includes(o.trade_outcome_status))
-  const shadowWinRate = triggered.length > 0 ? wins.length / triggered.length : null
-  const shadowTriggerRate = shadowOutcomes.length > 0 ? triggered.length / shadowOutcomes.length : null
-  const shadowTotalR = triggered.reduce((s, o) => s + (shadowResultR(o) ?? 0), 0)
-  const shadowAvgRr = triggered.length > 0
-    ? triggered.reduce((s, o) => s + (o.shadow_trade?.rr ?? 0), 0) / triggered.length
-    : null
-
-  // "Total setups" and "Triggered"/"Trigger rate" compare against the same universe the
-  // shadow side counts from (a recommendation, not an executed trade) -- analyst_publications,
-  // not actual_trades. Using trade rows here previously undercounted "setups" against shadow's
-  // 586, since a setup that never triggered has a publication but no actual_trades row at all.
-  // Triggered is read straight off reconciliation_status (WEBHOOK_TRUE), the same signal
-  // lib/metrics.ts's canonical triggerRate() and calculateKpis.ts use -- not a join to
-  // actual_trades, which is known to understate this (see lib/metrics.ts comment on
-  // triggerRate()). actualTrades (and its triggered/result_r fields) is still the only source
-  // for Win rate and Total R, since publications don't carry a financial result.
-  const actualTriggered = actualTrades.filter(t => t.triggered && t.result_r !== null)
-  const actualWins = actualTriggered.filter(t => (t.result_r ?? 0) > 0)
-  const actualWinRate = actualTriggered.length > 0 ? actualWins.length / actualTriggered.length : null
-  const actualTotalR = actualTriggered.reduce((s, t) => s + (t.result_r ?? 0), 0)
-  const actualPublicationsTriggered = actualPublications.filter(p => p.reconciliation_status === 'WEBHOOK_TRUE')
-  const actualTriggerRate = actualPublications.length > 0 ? actualPublicationsTriggered.length / actualPublications.length : null
-
   const byMarket = new Map<string, { symbol: string; assetClass: string; total: number; triggered: number; wins: number; totalR: number; avgRr: number; rrCount: number }>()
   for (const o of shadowOutcomes) {
     const st = o.shadow_trade
@@ -308,63 +279,11 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades, actualPubl
         )}
       </section>
 
-      {/* Standard summary */}
-      <section className="space-y-3">
-        <h2 className="text-sm font-medium">Shadow vs Actual &mdash; Since Platform Launch</h2>
-        <div className="grid grid-cols-3 gap-3">
-          <div className="rounded-lg border border-border bg-card p-4 space-y-2">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Shadow Benchmark</p>
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Total setups</span><span className="font-medium">{shadowOutcomes.length}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Resolved</span><span className="font-medium">{resolved.length}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger rate</span><span className="font-medium">{shadowTriggerRate !== null ? `${Math.round(shadowTriggerRate * 100)}%` : '—'}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate</span><span className="font-medium">{shadowWinRate !== null ? `${Math.round(shadowWinRate * 100)}%` : '—'}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Avg RR</span><span className="font-medium">{shadowAvgRr !== null ? `${shadowAvgRr.toFixed(1)}:1` : '—'}</span></div>
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Total R</span>
-                <span className={`font-medium ${shadowTotalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                  {shadowTotalR > 0 ? '+' : ''}{shadowTotalR.toFixed(2)}R
-                </span>
-              </div>
-            </div>
-          </div>
-          <div className="rounded-lg border border-border bg-card p-4 space-y-2">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Analyst Actual (Since Shadow Launch)</p>
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Total setups</span><span className="font-medium">{actualPublications.length}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Triggered</span><span className="font-medium">{actualPublicationsTriggered.length}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger rate</span><span className="font-medium">{actualTriggerRate !== null ? `${Math.round(actualTriggerRate * 100)}%` : '—'}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate</span><span className="font-medium">{actualWinRate !== null ? `${Math.round(actualWinRate * 100)}%` : '—'}</span></div>
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Total R</span>
-                <span className={`font-medium ${actualTotalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                  {actualTotalR > 0 ? '+' : ''}{actualTotalR.toFixed(2)}R
-                </span>
-              </div>
-            </div>
-          </div>
-          <div className="rounded-lg border border-border bg-card p-4 space-y-2">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Delta (Shadow &minus; Actual)</p>
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate delta</span>
-                <span className="font-medium">
-                  {shadowWinRate !== null && actualWinRate !== null ? `${((shadowWinRate - actualWinRate) * 100).toFixed(1)}pp` : '—'}
-                </span>
-              </div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger delta</span>
-                <span className="font-medium">
-                  {shadowTriggerRate !== null && actualTriggerRate !== null ? `${((shadowTriggerRate - actualTriggerRate) * 100).toFixed(1)}pp` : '—'}
-                </span>
-              </div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Status</span>
-                <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-                  {triggered.length < 30 ? `Accumulating (${triggered.length}/30)` : 'Ready'}
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
+      <ShadowSinceLaunchStats
+        shadowOutcomes={shadowOutcomes}
+        actualTrades={actualTrades}
+        actualPublications={actualPublications}
+      />
 
       {breakdownSlot}
 

@@ -2,6 +2,9 @@
 import { useState } from 'react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Cell } from 'recharts'
 import { formatDateShort } from '@/lib/format'
+import { ShadowSinceLaunchStats } from './ShadowSinceLaunchStats'
+import { AnalystShadowBreakdown } from './AnalystShadowBreakdown'
+import type { ShadowBreakdownRow, ShadowBreakdownAnalyst } from '@/lib/shadowBreakdown'
 
 interface Analyst {
   analyst_id: string
@@ -41,6 +44,13 @@ interface TeamPerformanceGridProps {
   lastWeekStart: string
   lastWeekEnd: string
   thisMonthPublications?: { analyst_id: string; reconciliation_status: string }[]
+  // "Since Platform Launch" comparison -- same shadowStartDate-scoped fetches Shadow
+  // Monitoring uses, so the two pages agree. shadowOutcomes above is already unscoped/
+  // all-time and is reused as-is for this (shadow trading has no data before launch anyway).
+  sinceLaunchActualTrades: ActualTrade[]
+  sinceLaunchActualPublications: { reconciliation_status: string }[]
+  shadowBreakdownRows: ShadowBreakdownRow[]
+  shadowBreakdownAnalysts: ShadowBreakdownAnalyst[]
 }
 
 type Period = 'THIS_MONTH' | 'LAST_MONTH' | 'LAST_WEEK'
@@ -140,7 +150,8 @@ function shadowResultR(outcome: ShadowOutcome): number | null {
 
 export function TeamPerformanceGrid({
   analysts, kpiData, currentMonthStart, lastMonthStart, shadowOutcomes, actualTrades, shadowOutcomesRecent,
-  lastWeekPublications = [], lastWeekStart, lastWeekEnd, thisMonthPublications = []
+  lastWeekPublications = [], lastWeekStart, lastWeekEnd, thisMonthPublications = [],
+  sinceLaunchActualTrades, sinceLaunchActualPublications, shadowBreakdownRows, shadowBreakdownAnalysts
 }: TeamPerformanceGridProps) {
   const [period, setPeriod] = useState<Period>('THIS_MONTH')
 
@@ -230,20 +241,6 @@ export function TeamPerformanceGrid({
 
   const displayAgg = period === 'LAST_MONTH' ? teamAgg : liveTeamAgg
 
-  // Shadow summary
-  const shadowOutcomesSafe = shadowOutcomes ?? []
-  const shadowTriggered = shadowOutcomesSafe.filter(o =>
-    ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED', 'CLOSED_PROFIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)
-  )
-  const shadowWins = shadowOutcomesSafe.filter(o =>
-    o.trade_outcome_status === 'TARGET_HIT' ||
-    o.trade_outcome_status === 'CLOSED_PROFIT' ||
-    (o.result_r !== null && Number(o.result_r) > 0)
-  )
-  const shadowWinRate = shadowTriggered.length > 0 ? shadowWins.length / shadowTriggered.length : null
-  const shadowTriggerRate = shadowOutcomesSafe.length > 0 ? shadowTriggered.length / shadowOutcomesSafe.length : null
-  const shadowTotalR = shadowTriggered.reduce((s, o) => s + (shadowResultR(o) ?? 0), 0)
-
   // Shadow System Performance (last 30 days) -- live from shadow_trade_outcomes, same status
   // membership as the Shadow Benchmark card above and ShadowMonitoringPanel.tsx, in place of
   // the old executive_kpis(kpi_visibility='INTERNAL_ONLY') read (that showed 0R for the
@@ -298,13 +295,6 @@ export function TeamPerformanceGrid({
       return { month: formatDateShort(date), value: cumulative }
     })
   })()
-
-  // Actual summary (30 days)
-  const actualTriggered = actualTrades.filter(t => t.triggered && t.result_r !== null)
-  const actualWins = actualTriggered.filter(t => (t.result_r ?? 0) > 0)
-  const actualWinRate = actualTriggered.length > 0 ? actualWins.length / actualTriggered.length : null
-  const actualTriggerRate = actualTrades.length > 0 ? actualTriggered.length / actualTrades.length : null
-  const actualTotalR = actualTriggered.reduce((s, t) => s + (t.result_r ?? 0), 0)
 
   // Team long-term R trend
   const allMonths = [...new Set(kpiData
@@ -526,62 +516,13 @@ export function TeamPerformanceGrid({
         </section>
       )}
 
-      {/* Shadow vs Actual comparison */}
-      <section className="space-y-3">
-        <h2 className="text-sm font-medium">Shadow vs Actual Comparison</h2>
-        <div className="grid grid-cols-3 gap-3">
-          <div className="rounded-lg border border-border bg-card p-4 space-y-2">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Shadow Benchmark</p>
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Total setups</span><span className="font-medium">{shadowOutcomesSafe.length}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger rate</span><span className="font-medium">{shadowTriggerRate !== null ? `${Math.round(shadowTriggerRate * 100)}%` : '\u2014'}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate</span><span className="font-medium">{shadowWinRate !== null ? `${Math.round(shadowWinRate * 100)}%` : '\u2014'}</span></div>
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Total R</span>
-                <span className={`font-medium ${shadowTotalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                  {shadowTotalR > 0 ? '+' : ''}{shadowTotalR.toFixed(2)}R
-                </span>
-              </div>
-            </div>
-          </div>
-          <div className="rounded-lg border border-border bg-card p-4 space-y-2">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Analyst Actual (30 days)</p>
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Total setups</span><span className="font-medium">{actualTrades.length}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger rate</span><span className="font-medium">{actualTriggerRate !== null ? `${Math.round(actualTriggerRate * 100)}%` : '\u2014'}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate</span><span className="font-medium">{actualWinRate !== null ? `${Math.round(actualWinRate * 100)}%` : '\u2014'}</span></div>
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Total R</span>
-                <span className={`font-medium ${actualTotalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                  {actualTotalR > 0 ? '+' : ''}{actualTotalR.toFixed(2)}R
-                </span>
-              </div>
-            </div>
-          </div>
-          <div className="rounded-lg border border-border bg-card p-4 space-y-2">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Delta (Shadow &minus; Actual)</p>
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Win rate delta</span>
-                <span className="font-medium">
-                  {shadowWinRate !== null && actualWinRate !== null
-                    ? `${((shadowWinRate - actualWinRate) * 100).toFixed(1)}pp` : '\u2014'}
-                </span>
-              </div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trigger delta</span>
-                <span className="font-medium">
-                  {shadowTriggerRate !== null && actualTriggerRate !== null
-                    ? `${((shadowTriggerRate - actualTriggerRate) * 100).toFixed(1)}pp` : '\u2014'}
-                </span>
-              </div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Status</span>
-                <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-                  {shadowTriggered.length < 30 ? `Accumulating (${shadowTriggered.length}/30)` : 'Ready'}
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
+      {/* Shadow vs Actual -- Since Platform Launch (same component + data as Shadow Monitoring) */}
+      <ShadowSinceLaunchStats
+        shadowOutcomes={shadowOutcomes}
+        actualTrades={sinceLaunchActualTrades}
+        actualPublications={sinceLaunchActualPublications}
+      />
+      <AnalystShadowBreakdown rows={shadowBreakdownRows} analysts={shadowBreakdownAnalysts} />
 
       {/* Shadow System Performance (last 30 days) */}
       {shadowRecentSafe.length > 0 && (

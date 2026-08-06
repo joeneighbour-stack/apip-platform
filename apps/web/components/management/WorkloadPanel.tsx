@@ -70,7 +70,13 @@ export function WorkloadPanel({ allocations, availability }: WorkloadPanelProps)
                     'border-border bg-card hover:bg-muted/30'
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-1"><p className="text-xs text-muted-foreground truncate">{name}</p><Link href={`/dashboard/management/analyst/${analystId}`} onClick={e => e.stopPropagation()} className="text-xs text-primary hover:underline shrink-0">Profile</Link></div>
+                  <div className="flex items-center justify-between gap-1">
+                    <p className="text-xs text-muted-foreground truncate">{name}</p>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Link href={`/dashboard/management/analyst/${analystId}/workspace`} onClick={e => e.stopPropagation()} className="text-xs text-primary hover:underline">View</Link>
+                      <Link href={`/dashboard/management/analyst/${analystId}`} onClick={e => e.stopPropagation()} className="text-xs text-primary hover:underline">Profile</Link>
+                    </div>
+                  </div>
                   <p className="text-2xl font-semibold mt-1">{allocs.length}</p>
                   <p className="text-xs text-muted-foreground">
                     {cap !== null ? `of ${cap} max` : 'markets'}

@@ -15,9 +15,10 @@ export default async function AnalystProfilePage({ params }: PageProps) {
   return (
     <AnalystProfileContent
       analystId={analystId}
-      subtitle="Analyst profile — management view"
+      subtitle="KPI summary — management view"
       backHref="/dashboard/management"
       backLabel="Back to Management"
+      mode="kpi-only"
     />
   )
 }
