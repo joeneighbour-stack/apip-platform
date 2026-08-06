@@ -42,9 +42,9 @@ export default async function ManagementAnalystWorkspacePage({ params }: PagePro
             {' · '}Read-only management view
           </p>
         </div>
-        <a href={`/dashboard/management/analyst/${analystId}`}
+        <a href="/dashboard/management"
           className="text-sm text-muted-foreground hover:text-foreground transition-colors shrink-0">
-          &larr; Back to Profile
+          &larr; Back to Management
         </a>
       </div>
 

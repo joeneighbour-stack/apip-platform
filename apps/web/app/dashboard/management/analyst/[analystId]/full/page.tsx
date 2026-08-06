@@ -19,8 +19,8 @@ export default async function AnalystFullProfilePage({ params }: PageProps) {
     <AnalystProfileContent
       analystId={analystId}
       subtitle="Full analyst profile — management view"
-      backHref={`/dashboard/management/analyst/${analystId}`}
-      backLabel="Back to KPI Summary"
+      backHref="/dashboard/management"
+      backLabel="Back to Management"
       mode="full"
     />
   )
