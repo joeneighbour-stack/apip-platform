@@ -8,6 +8,7 @@ import {
   emaStackString, directionalPersistenceLabel,
   volatilityTrend, weekdayDateLabel, fxPipCount, zoneLabel,
   regimeTrendLabelWithAdx, regimeVolatilityLabel, confidenceBadgeLabel,
+  computeZoneBoundaries,
 } from '@/lib/workspaceUtils'
 import type { WorkspaceRow } from './types'
 
@@ -36,6 +37,7 @@ export function MarketDetailCard({ row }: Props) {
   const [coachingOpen, setCoachingOpen] = useState(false)
   const precision = row.displayPrecision ?? 4
   const volTrend = row.regime ? volatilityTrend(row.regime.atrPercentile, row.regime.priorAtrPercentile) : null
+  const zoneBoundaries = computeZoneBoundaries(row.priceHistory)
 
   return (
     <div className="border-t border-border bg-muted/20 p-5 space-y-5">
@@ -43,31 +45,37 @@ export function MarketDetailCard({ row }: Props) {
         <p className="text-xs font-medium text-red-700">Levels outdated — recommendation requires recalculation.</p>
       )}
 
-      {/* A. Zone ladder */}
+      {/* A. Zone ladder + price chart, sharing a vertical price scale */}
       <section>
-        <h3 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Zone</h3>
-        <ZoneLadder
-          currentZone={row.currentZone}
-          preferredZone={row.preferredZone}
-          entryLow={row.entryLow}
-          entryHigh={row.entryHigh}
-          displayPrecision={row.displayPrecision}
-          distanceLanguage={row.distanceLanguage}
-          currentPrice={row.currentPrice}
-        />
-      </section>
-
-      {/* Price chart (30 days) */}
-      <section>
-        <h3 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Price (30 Days)</h3>
-        <PriceChart
-          data={row.priceHistory}
-          entryLow={row.entryLow}
-          entryHigh={row.entryHigh}
-          stopMid={row.riskMid}
-          targetMid={row.targetMid}
-          displayPrecision={row.displayPrecision}
-        />
+        <h3 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Zone &amp; Price (30 Days)</h3>
+        <div className="flex gap-3 items-start">
+          <ZoneLadder
+            currentZone={row.currentZone}
+            preferredZone={row.preferredZone}
+            direction={row.direction}
+            entryLow={row.entryLow}
+            entryHigh={row.entryHigh}
+            displayPrecision={row.displayPrecision}
+            currentPrice={row.currentPrice}
+            currentPriceSource={row.currentPriceSource}
+            triggerProbability={row.triggerProbability}
+          />
+          <div className="flex-1 min-w-0">
+            <PriceChart
+              data={row.priceHistory}
+              direction={row.direction}
+              zoneBoundaries={zoneBoundaries}
+              entryLow={row.entryLow}
+              entryHigh={row.entryHigh}
+              stopMid={row.riskMid}
+              targetMid={row.targetMid}
+              displayPrecision={row.displayPrecision}
+            />
+          </div>
+        </div>
+        {row.distanceLanguage && (
+          <p className="text-xs text-muted-foreground mt-1.5">{row.distanceLanguage}</p>
+        )}
       </section>
 
       {/* B. Guidance levels */}

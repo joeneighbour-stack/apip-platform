@@ -349,12 +349,15 @@ export default async function AnalystWorkspacePage() {
     const riskMid = riskParsed ? (riskParsed[0] + riskParsed[1]) / 2 : null
     const targetMid = targetParsed ? (targetParsed[0] + targetParsed[1]) / 2 : null
 
-    // Live intraday price is the real "current price"; entry_range_low and
-    // yesterday's close are fallbacks per spec, in that priority order, for
-    // markets/sessions where a fresh intraday snapshot isn't available.
-    const currentPrice = marketId
-      ? currentPriceByMarket.get(marketId) ?? entryLow ?? (priorDay?.close != null ? Number(priorDay.close) : null)
-      : null
+    // Live intraday price is the real "current price"; yesterday's close is
+    // the fallback for markets/sessions without a fresh intraday snapshot --
+    // the zone ladder labels this fallback "Last close" so it's never mistaken
+    // for a live tick.
+    const liveIntradayPrice = marketId ? currentPriceByMarket.get(marketId) ?? null : null
+    const dailyClosePrice = priorDay?.close != null ? Number(priorDay.close) : null
+    const currentPrice = liveIntradayPrice ?? dailyClosePrice
+    const currentPriceSource: 'live' | 'close' | null =
+      liveIntradayPrice != null ? 'live' : dailyClosePrice != null ? 'close' : null
     const yTrade = marketId ? yesterdayTradeByMarket.get(marketId) : null
 
     const triggerProbability = rec.trigger_probability != null ? Number(rec.trigger_probability) : null
@@ -385,6 +388,7 @@ export default async function AnalystWorkspacePage() {
       eventRiskItems: allEventItems.slice(0, EVENT_CAP),
       eventRiskOverflowCount: Math.max(0, allEventItems.length - EVENT_CAP),
       currentPrice,
+      currentPriceSource,
       priceHistory: marketId ? priceHistoryByMarket.get(marketId) ?? [] : [],
       previousDay: priorDay ? {
         date: priorDay.date,

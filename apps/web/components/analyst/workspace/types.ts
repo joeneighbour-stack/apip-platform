@@ -91,5 +91,6 @@ export interface WorkspaceRow {
   sessionEndIso: string
   priorityScore: number
   currentPrice: number | null
+  currentPriceSource: 'live' | 'close' | null
   priceHistory: PriceBar[]
 }

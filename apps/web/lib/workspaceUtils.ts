@@ -138,6 +138,92 @@ export function zonePlainLabel(zone: string | null): string {
   }
 }
 
+export type ZoneSemanticColour = 'green' | 'amber' | 'red' | 'neutral' | 'muted'
+
+/**
+ * Direction-aware "is this zone a good or bad place to enter" classification,
+ * from the redesign spec's explicit per-zone table. For BUY, buying cheap
+ * (Zone 1/2) is the opportunity and buying stretched (Zone 4) is the danger;
+ * for SELL it's the mirror image. TOO_HIGH/TOO_DEEP are always 'muted'
+ * regardless of direction -- they sit outside the normal ATR band structure
+ * entirely (entryOptimizerService.zoneBounds() clamps them to Zone 1/4's own
+ * bounds rather than giving them a real band of their own), so they read as
+ * an extreme/degenerate state rather than a colour-coded opportunity even on
+ * the direction where the spec's per-zone table would otherwise call them
+ * green (SELL + TOO_HIGH) -- the later "Too High/Too Deep = bg-muted/30" rule
+ * is treated as the override for those two zones specifically.
+ */
+const ZONE_COLOUR_BY_DIRECTION: Record<'BUY' | 'SELL', Record<AtrZone, ZoneSemanticColour>> = {
+  BUY: {
+    TOO_HIGH: 'muted',
+    ZONE_4: 'amber',
+    ZONE_3: 'neutral',
+    ZONE_2: 'green',
+    ZONE_1: 'green',
+    TOO_DEEP: 'muted',
+  },
+  SELL: {
+    TOO_HIGH: 'muted',
+    ZONE_4: 'green',
+    ZONE_3: 'neutral',
+    ZONE_2: 'amber',
+    ZONE_1: 'red',
+    TOO_DEEP: 'muted',
+  },
+}
+
+export function zoneSemanticColour(zone: string | null, direction: 'BUY' | 'SELL' | null): ZoneSemanticColour {
+  if (!zone || !direction) return 'neutral'
+  return ZONE_COLOUR_BY_DIRECTION[direction][zone as AtrZone] ?? 'neutral'
+}
+
+export const ZONE_BAND_BG_CLASS: Record<ZoneSemanticColour, string> = {
+  green: 'bg-green-100',
+  amber: 'bg-amber-50',
+  red: 'bg-red-50',
+  neutral: 'bg-card',
+  muted: 'bg-muted/30',
+}
+
+export interface ZoneBoundaries {
+  rangeHigh: number
+  rangeLow: number
+  bandWidth: number
+  tooHigh: { min: number; max: number }
+  zone4: { min: number; max: number }
+  zone3: { min: number; max: number }
+  zone2: { min: number; max: number }
+  zone1: { min: number; max: number }
+  tooDeep: { min: number; max: number }
+}
+
+/**
+ * Approximate price boundaries for the six zones, derived purely from recent
+ * price action (last 20 bars of the 30-day history already fetched) -- this
+ * is a display-only approximation for the ladder/chart alignment, NOT a
+ * replacement for the engine's actual ATR-band zone calculation. Which zone
+ * is "current"/"preferred" still comes from opportunities.current_zone /
+ * preferred_entry_zone; this only says where each zone visually sits on the
+ * chart's price axis.
+ */
+export function computeZoneBoundaries(priceHistory: { high: number; low: number }[]): ZoneBoundaries | null {
+  const last20 = priceHistory.slice(-20)
+  if (last20.length === 0) return null
+  const rangeHigh = Math.max(...last20.map(d => d.high))
+  const rangeLow = Math.min(...last20.map(d => d.low))
+  if (!(rangeHigh > rangeLow)) return null
+  const bandWidth = (rangeHigh - rangeLow) / 4
+  return {
+    rangeHigh, rangeLow, bandWidth,
+    tooHigh: { min: rangeHigh, max: Infinity },
+    zone4: { min: rangeLow + bandWidth * 3, max: rangeHigh },
+    zone3: { min: rangeLow + bandWidth * 2, max: rangeLow + bandWidth * 3 },
+    zone2: { min: rangeLow + bandWidth * 1, max: rangeLow + bandWidth * 2 },
+    zone1: { min: rangeLow, max: rangeLow + bandWidth },
+    tooDeep: { min: -Infinity, max: rangeLow },
+  }
+}
+
 /** Currency codes implied by a 6-letter FX symbol (e.g. "EURUSD" -> ["EUR","USD"]).
  *  Returns [] for non-FX symbols/asset classes, where currency-based event
  *  filtering doesn't apply and callers should fall back to impact-only filtering. */
