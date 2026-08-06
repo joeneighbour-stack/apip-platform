@@ -224,6 +224,37 @@ export function computeZoneBoundaries(priceHistory: { high: number; low: number 
   }
 }
 
+/** Shared y-axis price domain for the ladder + chart pairing: the zone range
+ *  with 3% padding on each side, so both widgets scale to the exact same
+ *  price window and their bands line up pixel-for-pixel. */
+export function computeSharedYDomain(zoneBoundaries: ZoneBoundaries | null): [number, number] | null {
+  if (!zoneBoundaries) return null
+  const yMin = zoneBoundaries.tooDeep.max * 0.97
+  const yMax = zoneBoundaries.tooHigh.min * 1.03
+  return [yMin, yMax]
+}
+
+export function zoneRangeFor(zone: AtrZone, b: ZoneBoundaries): { min: number; max: number } {
+  switch (zone) {
+    case 'TOO_HIGH': return b.tooHigh
+    case 'ZONE_4': return b.zone4
+    case 'ZONE_3': return b.zone3
+    case 'ZONE_2': return b.zone2
+    case 'ZONE_1': return b.zone1
+    case 'TOO_DEEP': return b.tooDeep
+  }
+}
+
+/** A zone's pixel height within a fixed-height ladder, proportional to how
+ *  much of the shared y-domain it actually occupies (clamped to the domain,
+ *  since Too High/Too Deep are unbounded on one side). */
+export function zoneBandHeightPx(zoneMax: number, zoneMin: number, yDomain: [number, number], ladderHeight: number): number {
+  const [yMin, yMax] = yDomain
+  const totalRange = yMax - yMin
+  if (totalRange <= 0) return ladderHeight / 6
+  return ((Math.min(zoneMax, yMax) - Math.max(zoneMin, yMin)) / totalRange) * ladderHeight
+}
+
 /** Currency codes implied by a 6-letter FX symbol (e.g. "EURUSD" -> ["EUR","USD"]).
  *  Returns [] for non-FX symbols/asset classes, where currency-based event
  *  filtering doesn't apply and callers should fall back to impact-only filtering. */
@@ -270,6 +301,17 @@ function ordinal(n: number): string {
 export function atrPercentileLabel(pct: number | null): string {
   if (pct == null) return '—'
   return `${ordinal(pct)} percentile`
+}
+
+export function atrPercentileShortLabel(pct: number | null): string {
+  if (pct == null) return '—'
+  return `${ordinal(pct)} pct`
+}
+
+/** Just the volatility state word (no percentile) for compact display. */
+export function volatilityStateWord(atrPercentile: number | null): string {
+  if (atrPercentile == null) return '—'
+  return atrPercentile > 70 ? 'Expanding' : atrPercentile < 30 ? 'Contracting' : 'Normal'
 }
 
 /** Compares two consecutive market_regime_state.derived_from.atr_percentile

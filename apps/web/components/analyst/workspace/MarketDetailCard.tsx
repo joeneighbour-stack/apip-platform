@@ -5,10 +5,9 @@ import { ZoneLadder } from './ZoneLadder'
 import { PriceChart } from './PriceChart'
 import { formatR, formatPercent } from '@/lib/format'
 import {
-  emaStackString, directionalPersistenceLabel,
-  volatilityTrend, weekdayDateLabel, fxPipCount, zoneLabel,
-  regimeTrendLabelWithAdx, regimeVolatilityLabel, confidenceBadgeLabel,
-  computeZoneBoundaries,
+  weekdayDateLabel, fxPipCount, zoneLabel,
+  regimeTrendLabelWithAdx, confidenceBadgeLabel,
+  computeZoneBoundaries, computeSharedYDomain, atrPercentileShortLabel, volatilityStateWord,
 } from '@/lib/workspaceUtils'
 import type { WorkspaceRow } from './types'
 
@@ -33,22 +32,48 @@ function historicalEdgeTierLabel(tier: string): string {
   }
 }
 
+function eventTimeUk(iso: string): string {
+  return new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' })
+}
+
 export function MarketDetailCard({ row }: Props) {
-  const [coachingOpen, setCoachingOpen] = useState(false)
+  const [newsOpen, setNewsOpen] = useState(false)
   const precision = row.displayPrecision ?? 4
-  const volTrend = row.regime ? volatilityTrend(row.regime.atrPercentile, row.regime.priorAtrPercentile) : null
   const zoneBoundaries = computeZoneBoundaries(row.priceHistory)
+  const yDomain = computeSharedYDomain(zoneBoundaries)
+  const totalEventCount = row.eventRiskItems.length + row.eventRiskOverflowCount
 
   return (
-    <div className="border-t border-border bg-muted/20 p-5 space-y-5">
+    <div className="border-t border-border bg-muted/20 p-5 space-y-4">
+      {/* Header: symbol, direction, and the coaching note as an info tooltip */}
+      <div className="flex items-center gap-2">
+        <span className="text-sm font-semibold text-foreground">{row.symbol}</span>
+        {row.direction && (
+          <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
+            row.direction === 'BUY' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+          }`}>
+            {row.direction}
+          </span>
+        )}
+        {row.coachingNote && (
+          <span
+            title={personaliseNote(row.coachingNote)}
+            aria-label="Why this allocation"
+            className="w-4 h-4 flex items-center justify-center text-[10px] rounded-full border border-border text-muted-foreground hover:text-foreground hover:border-foreground/40 cursor-help"
+          >
+            ℹ
+          </span>
+        )}
+      </div>
+
       {row.isDoNotUse && (
         <p className="text-xs font-medium text-red-700">Levels outdated — recommendation requires recalculation.</p>
       )}
 
-      {/* A. Zone ladder + price chart, sharing a vertical price scale */}
+      {/* Zone ladder + price chart, sharing one price scale, rendered as a single unit */}
       <section>
-        <h3 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Zone &amp; Price (30 Days)</h3>
-        <div className="flex gap-3 items-start">
+        <h3 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Zone &amp; Price (21 Days)</h3>
+        <div className="flex border border-border rounded-md overflow-hidden">
           <ZoneLadder
             currentZone={row.currentZone}
             preferredZone={row.preferredZone}
@@ -59,12 +84,15 @@ export function MarketDetailCard({ row }: Props) {
             currentPrice={row.currentPrice}
             currentPriceSource={row.currentPriceSource}
             triggerProbability={row.triggerProbability}
+            zoneBoundaries={zoneBoundaries}
+            yDomain={yDomain}
           />
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 border-l border-border">
             <PriceChart
               data={row.priceHistory}
               direction={row.direction}
               zoneBoundaries={zoneBoundaries}
+              yDomain={yDomain}
               entryLow={row.entryLow}
               entryHigh={row.entryHigh}
               stopMid={row.riskMid}
@@ -73,101 +101,123 @@ export function MarketDetailCard({ row }: Props) {
             />
           </div>
         </div>
-        {row.distanceLanguage && (
-          <p className="text-xs text-muted-foreground mt-1.5">{row.distanceLanguage}</p>
-        )}
       </section>
 
-      {/* B. Guidance levels */}
-      <section>
-        <h3 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Guidance Levels</h3>
-        <table className="w-full text-xs tabular-nums">
-          <thead>
-            <tr className="text-left text-muted-foreground">
-              <th className="font-medium py-1 pr-4">Level</th>
-              <th className="font-medium py-1 pr-4"></th>
-              <th className="font-medium py-1">ATR distance from entry</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr className="border-t border-border/60">
-              <td className="py-1.5 pr-4 text-muted-foreground">Entry</td>
-              <td className="py-1.5 pr-4 font-medium">
-                {row.entryLow != null && row.entryHigh != null ? `${row.entryLow.toFixed(precision)} – ${row.entryHigh.toFixed(precision)}` : '—'}
-              </td>
-              <td className="py-1.5 text-muted-foreground">—</td>
-            </tr>
-            <tr className="border-t border-border/60">
-              <td className="py-1.5 pr-4 text-muted-foreground">Stop</td>
-              <td className="py-1.5 pr-4 font-medium">{row.riskRange || '—'}</td>
-              <td className="py-1.5">{row.riskAtrDistance != null ? `${row.riskAtrDistance.toFixed(1)} ATR` : '—'}</td>
-            </tr>
-            <tr className="border-t border-border/60">
-              <td className="py-1.5 pr-4 text-muted-foreground">Target</td>
-              <td className="py-1.5 pr-4 font-medium">{row.targetRange || '—'}</td>
-              <td className="py-1.5">{row.targetAtrDistance != null ? `${row.targetAtrDistance.toFixed(1)} ATR` : '—'}</td>
-            </tr>
-          </tbody>
-        </table>
-        {row.volatilityWarning && (
-          <p className="text-xs text-amber-700 mt-2">{row.volatilityWarning}</p>
-        )}
-        {row.isEntryPassed && (
-          <p className="text-xs text-amber-700 mt-2">Price has moved beyond the entry range — levels shown for reference; apply judgement before acting.</p>
-        )}
-      </section>
-
-      {/* C. Regime panel */}
-      <section>
-        <h3 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Regime</h3>
-        {row.regime ? (
-          <div className="text-xs space-y-1 tabular-nums">
-            <p>
-              <span className="text-muted-foreground">Trend: </span>
-              <span className="font-medium text-foreground">{regimeTrendLabelWithAdx(row.regime.trendState, row.regime.adx14)}</span>
-              <span className={`ml-2 inline-block px-1.5 py-0.5 rounded-full text-[10px] border ${
-                row.regime.confidence === 'HIGH' ? 'bg-green-50 border-green-200 text-green-800'
-                  : row.regime.confidence === 'MEDIUM' ? 'bg-amber-50 border-amber-200 text-amber-800'
-                  : 'bg-muted border-border text-muted-foreground'
-              }`}>
-                {confidenceBadgeLabel(row.regime.confidence)}
+      {/* Compact data grid: guidance levels, regime, historical edge */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="rounded-lg border border-border bg-card p-3">
+          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Guidance Levels</p>
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">Entry</span>
+              <span className="text-sm font-medium tabular-nums">
+                {row.entryLow != null && row.entryHigh != null ? `${row.entryLow.toFixed(precision)}–${row.entryHigh.toFixed(precision)}` : '—'}
               </span>
-            </p>
-            <p className="text-muted-foreground">
-              EMA Stack: <span className="text-foreground">{emaStackString(row.regime.ema20, row.regime.ema50, row.regime.ema200)}</span>
-              {'  '}Persistence: <span className="text-foreground">{directionalPersistenceLabel(row.regime.directionalPersistence)}</span>
-            </p>
-            <p className="text-muted-foreground">
-              Volatility: <span className="text-foreground">{regimeVolatilityLabel(row.regime.atrPercentile)}</span>
-              {volTrend && volTrend !== 'flat' && (
-                <span className={volTrend === 'expanding' ? 'text-amber-600' : 'text-muted-foreground'}> ({volTrend} vs. yesterday)</span>
-              )}
-            </p>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">Stop</span>
+              <span className="text-sm font-medium tabular-nums">{row.riskRange || '—'}</span>
+            </div>
+            {row.riskAtrDistance != null && (
+              <p className="text-[10px] text-muted-foreground text-right -mt-0.5">{row.riskAtrDistance.toFixed(1)} ATR to stop</p>
+            )}
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">Target</span>
+              <span className="text-sm font-medium tabular-nums">{row.targetRange || '—'}</span>
+            </div>
+            {row.targetAtrDistance != null && (
+              <p className="text-[10px] text-muted-foreground text-right -mt-0.5">{row.targetAtrDistance.toFixed(1)} ATR to tgt</p>
+            )}
           </div>
-        ) : (
-          <p className="text-xs text-muted-foreground">No regime data available for this market.</p>
-        )}
-      </section>
+          {(row.volatilityWarning || row.isEntryPassed) && (
+            <p className="text-[10px] text-amber-700 mt-2">{row.volatilityWarning || 'Price beyond entry range'}</p>
+          )}
+        </div>
 
-      {/* D. Previous day summary */}
-      <section>
-        <h3 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Previous Day</h3>
+        <div className="rounded-lg border border-border bg-card p-3">
+          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Regime</p>
+          {row.regime ? (
+            <div className="space-y-1">
+              <p className="text-sm font-medium tabular-nums text-foreground">
+                {regimeTrendLabelWithAdx(row.regime.trendState, row.regime.adx14)}
+              </p>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">Confidence</span>
+                <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] border ${
+                  row.regime.confidence === 'HIGH' ? 'bg-green-50 border-green-200 text-green-800'
+                    : row.regime.confidence === 'MEDIUM' ? 'bg-amber-50 border-amber-200 text-amber-800'
+                    : 'bg-muted border-border text-muted-foreground'
+                }`}>
+                  {confidenceBadgeLabel(row.regime.confidence)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">Volatility</span>
+                <span className="text-xs font-medium tabular-nums">{volatilityStateWord(row.regime.atrPercentile)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">ATR</span>
+                <span className="text-xs font-medium tabular-nums">{atrPercentileShortLabel(row.regime.atrPercentile)}</span>
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">No regime data.</p>
+          )}
+        </div>
+
+        <div className="rounded-lg border border-border bg-card p-3">
+          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Historical Edge</p>
+          {row.direction && (
+            <p className="text-xs text-muted-foreground mb-1">
+              {row.direction} · {row.symbol}{row.historicalEdge.tier === 'zone' ? ` · ${zoneLabel(row.preferredZone)}` : ''}
+            </p>
+          )}
+          {row.historicalEdge.tier !== 'none' ? (
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">Win Rate</span>
+                <span className="text-sm font-medium tabular-nums">{formatPercent(row.historicalEdge.winRate)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">Avg R</span>
+                <span className={`text-sm font-medium tabular-nums ${(row.historicalEdge.avgR ?? 0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                  {formatR(row.historicalEdge.avgR)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">Trades</span>
+                <span className="text-sm font-medium tabular-nums">{row.historicalEdge.trades}</span>
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                {historicalEdgeTierLabel(row.historicalEdge.tier)}{row.historicalEdge.quality ? ` · ${row.historicalEdge.quality}` : ''}
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">No trade history yet.</p>
+          )}
+        </div>
+      </div>
+
+      {/* Previous day, single compact box */}
+      <div className="rounded-lg border border-border bg-card p-3">
+        <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+          Previous Day
+          {row.previousDay && <span className="normal-case font-normal text-foreground ml-1.5">{weekdayDateLabel(row.previousDay.date)}</span>}
+        </p>
         {row.previousDay ? (
-          <p className="text-xs tabular-nums text-muted-foreground">
-            {weekdayDateLabel(row.previousDay.date)}:{'  '}
-            Open <span className="text-foreground">{row.previousDay.open.toFixed(precision)}</span>{'  '}
-            High <span className="text-foreground">{row.previousDay.high.toFixed(precision)}</span>{'  '}
-            Low <span className="text-foreground">{row.previousDay.low.toFixed(precision)}</span>{'  '}
-            Close <span className="text-foreground">{row.previousDay.close.toFixed(precision)}</span>{'  '}
-            Range{' '}
-            <span className="text-foreground">
+          <p className="text-xs tabular-nums mt-1">
+            O: <span className="font-medium">{row.previousDay.open.toFixed(precision)}</span>{'  '}
+            H: <span className="font-medium">{row.previousDay.high.toFixed(precision)}</span>{'  '}
+            L: <span className="font-medium">{row.previousDay.low.toFixed(precision)}</span>{'  '}
+            C: <span className="font-medium">{row.previousDay.close.toFixed(precision)}</span>{'  '}
+            Range: <span className="font-medium">
               {(row.previousDay.high - row.previousDay.low).toFixed(precision)}
               {row.assetClass === 'FX' && fxPipCount(row.previousDay.high - row.previousDay.low, row.displayPrecision) != null &&
                 ` (${fxPipCount(row.previousDay.high - row.previousDay.low, row.displayPrecision)} pips)`}
             </span>
           </p>
         ) : (
-          <p className="text-xs text-muted-foreground">No prior-day data available.</p>
+          <p className="text-xs text-muted-foreground mt-1">No prior-day data available.</p>
         )}
         {row.yesterdayTradeOutcome && (
           <p className="text-xs mt-1">
@@ -185,78 +235,56 @@ export function MarketDetailCard({ row }: Props) {
             )}
           </p>
         )}
-      </section>
+      </div>
 
-      {/* E. Historical edge */}
-      <section>
-        <h3 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">
-          Historical Edge {row.direction && `(${row.symbol} · ${row.direction}${row.historicalEdge.tier === 'zone' ? ` · ${zoneLabel(row.preferredZone)}` : ''})`}
-        </h3>
-        {row.historicalEdge.tier !== 'none' ? (
-          <p className="text-xs tabular-nums">
-            <span className="text-muted-foreground">Avg R: </span>
-            <span className={`font-medium ${(row.historicalEdge.avgR ?? 0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-              {formatR(row.historicalEdge.avgR)}
-            </span>
-            <span className="text-muted-foreground">{'  '}Win Rate: </span>
-            <span className="font-medium text-foreground">{formatPercent(row.historicalEdge.winRate)}</span>
-            <span className="text-muted-foreground">{'  '}Trades: </span>
-            <span className="font-medium text-foreground">{row.historicalEdge.trades}</span>
-            <span className="text-muted-foreground"> ({historicalEdgeTierLabel(row.historicalEdge.tier)}
-              {row.historicalEdge.quality ? `, ${row.historicalEdge.quality} quality` : ''})</span>
-          </p>
-        ) : (
-          <p className="text-xs text-muted-foreground">No trade history for this market yet.</p>
-        )}
-      </section>
+      <MarketNews symbols={[row.symbol]} />
 
-      {/* F. News & event risk */}
-      <section className="space-y-2">
-        <h3 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">News &amp; Event Risk</h3>
-        <MarketNews symbols={[row.symbol]} />
-        {row.eventRiskItems.length > 0 && (
-          <div className="space-y-1.5">
-            {row.eventRiskItems.map((ev, i) => (
-              <div key={i} className="text-xs rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="font-medium text-amber-800">
-                    ⚠ {new Date(ev.eventTimeUk).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' })} UK — {ev.eventName}
-                  </span>
-                  {ev.riskScore != null && (
-                    <span className="tabular-nums font-medium text-amber-800 ml-2">{(ev.riskScore * 10).toFixed(1)}/10</span>
-                  )}
-                </div>
-                {ev.analystWarning && <p className="text-amber-700 mt-0.5">{ev.analystWarning}</p>}
-                {(ev.forecast || ev.previous || ev.actual) && (
-                  <p className="text-amber-700 mt-0.5 tabular-nums">
-                    {ev.forecast && <>Forecast: {ev.forecast} </>}
-                    {ev.previous && <>Previous: {ev.previous} </>}
-                    {ev.actual && <>Actual: {ev.actual}</>}
-                  </p>
-                )}
-              </div>
-            ))}
-            {row.eventRiskOverflowCount > 0 && (
-              <p className="text-[11px] text-muted-foreground">and {row.eventRiskOverflowCount} more event{row.eventRiskOverflowCount === 1 ? '' : 's'}</p>
-            )}
-          </div>
-        )}
-      </section>
-
-      {/* G. Coaching note */}
-      {row.coachingNote && (
-        <section>
+      {/* News & events, collapsible */}
+      {row.eventRiskItems.length > 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
           <button
             type="button"
-            onClick={() => setCoachingOpen(v => !v)}
-            className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide hover:text-foreground transition-colors"
+            onClick={() => setNewsOpen(v => !v)}
+            className="w-full flex items-center justify-between text-left"
           >
-            Why this allocation? {coachingOpen ? '▾' : '▸'}
+            <span className="text-xs font-medium text-amber-800">
+              ⚠ {totalEventCount} high-impact event{totalEventCount === 1 ? '' : 's'} today
+            </span>
+            <span className="text-amber-700 text-xs">{newsOpen ? '▾' : '▸'}</span>
           </button>
-          {coachingOpen && (
-            <p className="text-xs text-muted-foreground leading-relaxed mt-1.5">{personaliseNote(row.coachingNote)}</p>
+          {!newsOpen && row.eventRiskItems[0] && (
+            <p className="text-[11px] text-amber-700 mt-0.5">
+              Next: {eventTimeUk(row.eventRiskItems[0].eventTimeUk)} {row.eventRiskItems[0].eventName}
+            </p>
           )}
-        </section>
+          {newsOpen && (
+            <div className="space-y-1.5 mt-2">
+              {row.eventRiskItems.map((ev, i) => (
+                <div key={i} className="text-xs rounded-md border border-amber-200 bg-card px-2.5 py-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium text-amber-800">
+                      ⚠ {eventTimeUk(ev.eventTimeUk)} UK — {ev.eventName}
+                    </span>
+                    {ev.riskScore != null && (
+                      <span className="tabular-nums font-medium text-amber-800 ml-2">{(ev.riskScore * 10).toFixed(1)}/10</span>
+                    )}
+                  </div>
+                  {ev.analystWarning && <p className="text-amber-700 mt-0.5">{ev.analystWarning}</p>}
+                  {(ev.forecast || ev.previous || ev.actual) && (
+                    <p className="text-amber-700 mt-0.5 tabular-nums">
+                      {ev.forecast && <>Forecast: {ev.forecast} </>}
+                      {ev.previous && <>Previous: {ev.previous} </>}
+                      {ev.actual && <>Actual: {ev.actual}</>}
+                    </p>
+                  )}
+                </div>
+              ))}
+              {row.eventRiskOverflowCount > 0 && (
+                <p className="text-[11px] text-amber-700">and {row.eventRiskOverflowCount} more event{row.eventRiskOverflowCount === 1 ? '' : 's'}</p>
+              )}
+            </div>
+          )}
+        </div>
       )}
     </div>
   )

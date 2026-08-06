@@ -7,6 +7,7 @@ interface Props {
   data: PriceBar[]
   direction: 'BUY' | 'SELL' | null
   zoneBoundaries: ZoneBoundaries | null
+  yDomain: [number, number] | null
   entryLow: number | null
   entryHigh: number | null
   stopMid: number | null
@@ -30,7 +31,7 @@ function CustomTooltip({ active, payload, label, precision }: any) {
   )
 }
 
-export function PriceChart({ data, direction, zoneBoundaries, entryLow, entryHigh, stopMid, targetMid, displayPrecision }: Props) {
+export function PriceChart({ data, direction, zoneBoundaries, yDomain, entryLow, entryHigh, stopMid, targetMid, displayPrecision }: Props) {
   const precision = displayPrecision ?? 4
 
   if (data.length === 0) {
@@ -39,14 +40,13 @@ export function PriceChart({ data, direction, zoneBoundaries, entryLow, entryHig
 
   const lastClose = data[data.length - 1]?.close ?? null
 
-  // Prefer the zone-aligned domain (rangeLow-rangeHigh +/- 10%, matching the
-  // ladder's price scale) so the two visually line up; fall back to an
-  // auto-scale around close/entry/stop/target when there isn't enough recent
-  // history to establish a zone range.
+  // yDomain is computed once (shared with the ladder, so the two visually
+  // line up) from the same zone boundaries; fall back to an auto-scale around
+  // close/entry/stop/target when there isn't enough recent history to
+  // establish a zone range at all.
   let domain: [number, number]
-  if (zoneBoundaries) {
-    const pad = (zoneBoundaries.rangeHigh - zoneBoundaries.rangeLow) * 0.1
-    domain = [zoneBoundaries.rangeLow - pad, zoneBoundaries.rangeHigh + pad]
+  if (yDomain) {
+    domain = yDomain
   } else {
     const values = data.map(d => d.close)
     const candidates = [...values, entryLow, entryHigh, stopMid, targetMid].filter((v): v is number => v != null)
@@ -70,7 +70,7 @@ export function PriceChart({ data, direction, zoneBoundaries, entryLow, entryHig
     : null
 
   return (
-    <div style={{ height: 200, width: '100%' }}>
+    <div style={{ height: 220, width: '100%' }}>
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
           <XAxis

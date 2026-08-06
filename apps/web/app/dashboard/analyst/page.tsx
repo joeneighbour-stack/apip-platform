@@ -197,14 +197,16 @@ export default async function AnalystWorkspacePage() {
     if (!priorDayByMarket.has(row.market_id)) priorDayByMarket.set(row.market_id, row)
   }
 
-  // 30-day OHLC for the detail card's price chart.
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
+  // 21-day (3-week) OHLC for the detail card's price chart -- tighter window
+  // than the original 30 days, for a scale that stays closer to the current
+  // zone positions.
+  const twentyOneDaysAgo = new Date(Date.now() - 21 * 86400000).toISOString().slice(0, 10)
   const { data: priceHistoryRows } = marketIds.length > 0
     ? await supabase
         .from('market_state_daily')
         .select('market_id, date, open, high, low, close')
         .in('market_id', marketIds)
-        .gte('date', thirtyDaysAgo)
+        .gte('date', twentyOneDaysAgo)
         .order('date', { ascending: true })
     : { data: [] }
 

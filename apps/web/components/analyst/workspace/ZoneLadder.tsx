@@ -1,5 +1,6 @@
 import {
-  ZONE_LADDER_ORDER, zonePlainLabel, zoneSemanticColour, ZONE_BAND_BG_CLASS, type AtrZone,
+  ZONE_LADDER_ORDER, zonePlainLabel, zoneSemanticColour, ZONE_BAND_BG_CLASS,
+  zoneRangeFor, zoneBandHeightPx, type AtrZone, type ZoneBoundaries,
 } from '@/lib/workspaceUtils'
 
 interface Props {
@@ -12,27 +13,23 @@ interface Props {
   currentPrice: number | null
   currentPriceSource: 'live' | 'close' | null
   triggerProbability: number | null
+  zoneBoundaries: ZoneBoundaries | null
+  yDomain: [number, number] | null
 }
 
 const TRIGGER_TOOLTIP =
   'Probability of price reaching this zone based on historical data from current position. Per-zone probabilities coming soon.'
 
-// Real zones (Zone 1-4) get flex-grow 2, Too High/Too Deep get flex-grow 1 --
-// against a 200px-tall container that's 4x2 + 2x1 = 10 weight units (20px each),
-// giving 40px per real zone and 20px per extreme zone, and lining up with the
-// price chart's 10%-each-side Y-axis padding so the bands visually align.
-function zoneWeight(zone: AtrZone): number {
-  return zone === 'TOO_HIGH' || zone === 'TOO_DEEP' ? 1 : 2
-}
+const LADDER_HEIGHT = 220
 
 export function ZoneLadder({
   currentZone, preferredZone, direction, entryLow, entryHigh, displayPrecision,
-  currentPrice, currentPriceSource, triggerProbability,
+  currentPrice, currentPriceSource, triggerProbability, zoneBoundaries, yDomain,
 }: Props) {
   const precision = displayPrecision ?? 4
 
   return (
-    <div className="flex flex-col rounded-md border border-border overflow-hidden" style={{ height: 200, width: 140 }}>
+    <div className="flex flex-col overflow-hidden shrink-0" style={{ height: LADDER_HEIGHT, width: 140 }}>
       {ZONE_LADDER_ORDER.map((zone) => {
         const isCurrent = zone === currentZone
         const isPreferred = zone === preferredZone
@@ -40,11 +37,18 @@ export function ZoneLadder({
         const bgClass = ZONE_BAND_BG_CLASS[colour]
         const preferredClass = isPreferred ? 'border-t-2 border-b-2 border-green-300 dark:bg-green-900/20' : ''
 
+        // Price-proportional height when we have real zone boundaries to work
+        // from (matching the chart's y-axis exactly); otherwise fall back to
+        // equal bands so the ladder still renders sensibly with thin history.
+        const height = zoneBoundaries && yDomain
+          ? zoneBandHeightPx(zoneRangeFor(zone, zoneBoundaries).max, zoneRangeFor(zone, zoneBoundaries).min, yDomain, LADDER_HEIGHT)
+          : LADDER_HEIGHT / 6
+
         return (
           <div
             key={zone}
-            className={`flex items-center justify-between px-2 border-t border-border first:border-t-0 ${bgClass} ${preferredClass}`}
-            style={{ flexGrow: zoneWeight(zone as AtrZone), flexBasis: 0 }}
+            className={`flex items-center justify-between px-2 border-t border-border first:border-t-0 overflow-hidden ${bgClass} ${preferredClass}`}
+            style={{ height, minHeight: height }}
           >
             <div className="flex flex-col justify-center leading-tight min-w-0">
               <span className="text-[10px] font-medium text-foreground truncate">{zonePlainLabel(zone)}</span>
