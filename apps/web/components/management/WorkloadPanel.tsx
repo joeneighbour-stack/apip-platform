@@ -1,6 +1,7 @@
 'use client'
 import { useState } from 'react'
 import { InlineAnalystProfile } from './InlineAnalystProfile'
+import { InlineAnalystWorkspace } from './InlineAnalystWorkspace'
 
 interface AllocationOpportunity {
   analyst_action: string | null
@@ -110,59 +111,17 @@ export function WorkloadPanel({ allocations, availability }: WorkloadPanelProps)
             })}
           </div>
 
-          {/* Inline expand: View (today's allocations) or Profile (KPI summary) */}
+          {/* Inline expand: View (workspace coverage strip) or Profile (KPI summary) */}
           {expandedAnalystId && expandedPanel && byAnalyst.has(expandedAnalystId) && (
             <div className="rounded-lg border border-primary/20 bg-card overflow-hidden">
-              <div className="px-4 py-2.5 bg-muted/30 border-b border-border flex items-center justify-between">
+              <div className="px-4 py-2.5 bg-muted/30 border-b border-border">
                 <p className="text-xs font-medium">
-                  {byAnalyst.get(expandedAnalystId)!.name} &mdash; {expandedPanel === 'view' ? "Today's Markets" : 'Profile'}
+                  {byAnalyst.get(expandedAnalystId)!.name} &mdash; {expandedPanel === 'view' ? 'Workspace' : 'Profile'}
                 </p>
-                {expandedPanel === 'view' && (
-                  <a href={`/dashboard/management/analyst/${expandedAnalystId}/workspace`}
-                    className="text-xs text-primary hover:underline">
-                    Open full workspace &#8599;
-                  </a>
-                )}
               </div>
-              <div className={expandedPanel === 'profile' ? 'p-4' : ''}>
+              <div className="p-4">
                 {expandedPanel === 'view' ? (
-                  <table className="w-full text-sm">
-                    <thead className="bg-muted/20">
-                      <tr>
-                        <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Market</th>
-                        <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Direction</th>
-                        <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Zone</th>
-                        <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Action</th>
-                        <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Trigger %</th>
-                        <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Exp R</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {byAnalyst.get(expandedAnalystId)!.allocs.map(alloc => {
-                        const opp = alloc.opportunity as any
-                        return (
-                          <tr key={alloc.allocation_id} className="hover:bg-muted/20">
-                            <td className="px-3 py-2 text-xs font-medium">{opp?.market?.symbol ?? '—'}</td>
-                            <td className="px-3 py-2">
-                              {opp?.direction ? (
-                                <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${opp.direction === 'BUY' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                                  {opp.direction}
-                                </span>
-                              ) : '—'}
-                            </td>
-                            <td className="px-3 py-2 text-xs text-muted-foreground">{opp?.current_zone ?? '—'}</td>
-                            <td className="px-3 py-2 text-xs text-muted-foreground">{opp?.analyst_action?.replace('_', ' ') ?? '—'}</td>
-                            <td className="px-3 py-2 text-xs tabular-nums">
-                              {opp?.trigger_probability != null ? `${Math.round(Number(opp.trigger_probability) * 100)}%` : '—'}
-                            </td>
-                            <td className="px-3 py-2 text-xs tabular-nums">
-                              {opp?.expected_r != null ? `${Number(opp.expected_r).toFixed(2)}R` : '—'}
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
+                  <InlineAnalystWorkspace analystId={expandedAnalystId} />
                 ) : (
                   <InlineAnalystProfile analystId={expandedAnalystId} />
                 )}

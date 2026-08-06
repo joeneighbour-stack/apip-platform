@@ -9,6 +9,10 @@ import type { WorkspaceRow } from './types'
 
 interface Props {
   rows: WorkspaceRow[]
+  // No-op today -- the strip and MarketDetailCard have no mutating actions to begin with
+  // (expand/collapse is the only interaction). Accepted so callers like the management
+  // inline View panel can be explicit that this is a read-only render.
+  readOnly?: boolean
 }
 
 export function CoverageStrip({ rows }: Props) {
