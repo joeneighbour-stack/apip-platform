@@ -1,6 +1,5 @@
 'use client'
 import { useState } from 'react'
-import { MarketNews } from '@/components/analyst/MarketNews'
 import { ZoneLadder } from './ZoneLadder'
 import { PriceChart } from './PriceChart'
 import { formatR, formatPercent } from '@/lib/format'
@@ -13,6 +12,7 @@ import type { WorkspaceRow } from './types'
 
 interface Props {
   row: WorkspaceRow
+  newsHeadline: string | null
 }
 
 function personaliseNote(note: string): string {
@@ -36,11 +36,11 @@ function eventTimeUk(iso: string): string {
   return new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' })
 }
 
-export function MarketDetailCard({ row }: Props) {
+export function MarketDetailCard({ row, newsHeadline }: Props) {
   const [newsOpen, setNewsOpen] = useState(false)
   const precision = row.displayPrecision ?? 4
   const zoneBoundaries = computeZoneBoundaries(row.priceHistory)
-  const yDomain = computeSharedYDomain(zoneBoundaries)
+  const yDomain = computeSharedYDomain(zoneBoundaries, row.entryLow, row.entryHigh)
   const totalEventCount = row.eventRiskItems.length + row.eventRiskOverflowCount
 
   return (
@@ -87,7 +87,7 @@ export function MarketDetailCard({ row }: Props) {
             zoneBoundaries={zoneBoundaries}
             yDomain={yDomain}
           />
-          <div className="flex-1 min-w-0 border-l border-border">
+          <div className="flex-1 min-w-0">
             <PriceChart
               data={row.priceHistory}
               direction={row.direction}
@@ -237,7 +237,11 @@ export function MarketDetailCard({ row }: Props) {
         )}
       </div>
 
-      <MarketNews symbols={[row.symbol]} />
+      {newsHeadline && (
+        <div className="pl-2.5 border-l-2 border-primary/30">
+          <p className="text-xs text-foreground leading-snug font-medium">{newsHeadline}</p>
+        </div>
+      )}
 
       {/* News & events, collapsible */}
       {row.eventRiskItems.length > 0 && (

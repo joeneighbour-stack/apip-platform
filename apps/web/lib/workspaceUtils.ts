@@ -185,6 +185,18 @@ export const ZONE_BAND_BG_CLASS: Record<ZoneSemanticColour, string> = {
   muted: 'bg-muted/30',
 }
 
+/** Same semantic colours as ZONE_BAND_BG_CLASS, as hex fills for the chart's
+ *  Recharts ReferenceAreas (which take actual colour values, not classes).
+ *  'neutral' renders as no fill at all -- matching the ladder's plain bg-card
+ *  treatment for Zone 3 ("Fair Value") on both directions. */
+export const ZONE_COLOUR_HEX: Record<ZoneSemanticColour, string | null> = {
+  green: '#22c55e',
+  amber: '#f59e0b',
+  red: '#ef4444',
+  neutral: null,
+  muted: '#9ca3af',
+}
+
 export interface ZoneBoundaries {
   rangeHigh: number
   rangeLow: number
@@ -224,13 +236,25 @@ export function computeZoneBoundaries(priceHistory: { high: number; low: number 
   }
 }
 
-/** Shared y-axis price domain for the ladder + chart pairing: the zone range
- *  with 3% padding on each side, so both widgets scale to the exact same
- *  price window and their bands line up pixel-for-pixel. */
-export function computeSharedYDomain(zoneBoundaries: ZoneBoundaries | null): [number, number] | null {
+/**
+ * Shared y-axis price domain for the ladder + chart pairing: the zone range
+ * (Zone 1's low to Zone 4's high) with 3% padding on each side, so both
+ * widgets scale to the exact same price window and their bands line up
+ * pixel-for-pixel. Widened to also cover the entry range -- if the
+ * recommendation's entry sits outside the last 20 bars' range (price hasn't
+ * traded there recently), the domain must still reach it, or the one thing
+ * the chart exists to show becomes invisible.
+ */
+export function computeSharedYDomain(
+  zoneBoundaries: ZoneBoundaries | null,
+  entryRangeLow: number | null,
+  entryRangeHigh: number | null,
+): [number, number] | null {
   if (!zoneBoundaries) return null
-  const yMin = zoneBoundaries.tooDeep.max * 0.97
-  const yMax = zoneBoundaries.tooHigh.min * 1.03
+  const rangeLow = zoneBoundaries.zone1.min
+  const rangeHigh = zoneBoundaries.zone4.max
+  const yMin = Math.min(rangeLow, entryRangeLow ?? rangeLow) * 0.97
+  const yMax = Math.max(rangeHigh, entryRangeHigh ?? rangeHigh) * 1.03
   return [yMin, yMax]
 }
 

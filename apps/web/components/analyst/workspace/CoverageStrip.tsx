@@ -1,5 +1,5 @@
 'use client'
-import { Fragment, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { MarketDetailCard } from './MarketDetailCard'
 import {
   zonePlainLabel, zoneProximityClass, ZONE_PROXIMITY_TEXT_CLASS,
@@ -13,6 +13,26 @@ interface Props {
 
 export function CoverageStrip({ rows }: Props) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  // Headline per symbol, fetched lazily on expand -- undefined means "not
+  // fetched yet", null means "fetched, nothing available". Lifted up here
+  // (rather than fetched independently inside MarketDetailCard) so the strip's
+  // slim summary row and the detail card's News section share one fetch
+  // instead of both hitting the news endpoint for the same symbol.
+  const [newsBySymbol, setNewsBySymbol] = useState<Record<string, string | null>>({})
+
+  useEffect(() => {
+    if (!expandedId) return
+    const row = rows.find(r => r.recommendationId === expandedId)
+    if (!row || newsBySymbol[row.symbol] !== undefined) return
+    fetch('/api/news/acuity', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbols: [row.symbol] }),
+    })
+      .then(r => r.json())
+      .then(data => setNewsBySymbol(prev => ({ ...prev, [row.symbol]: data[row.symbol] ?? null })))
+      .catch(() => setNewsBySymbol(prev => ({ ...prev, [row.symbol]: null })))
+  }, [expandedId, rows, newsBySymbol])
 
   if (rows.length === 0) {
     return (
@@ -45,6 +65,8 @@ export function CoverageStrip({ rows }: Props) {
               const proximity = zoneProximityClass(row.currentZone, row.preferredZone)
               const precision = row.displayPrecision ?? 4
               const sessionEnd = estimateSessionEnd(row.session, row.assetClass, row.sessionEndIso)
+              const headline = newsBySymbol[row.symbol]
+              const totalEventCount = row.eventRiskItems.length + row.eventRiskOverflowCount
               return (
                 <Fragment key={row.recommendationId}>
                   <tr
@@ -90,10 +112,22 @@ export function CoverageStrip({ rows }: Props) {
                     <td className="py-2 px-3">{row.hasHighImpactEventToday && <span className="text-amber-600">⚠</span>}</td>
                     <td className="py-2 px-3 text-muted-foreground">{countdownLabel(sessionEnd)}</td>
                   </tr>
+                  {isExpanded && headline && (
+                    <tr className="bg-muted/20">
+                      <td colSpan={9} className="px-3 py-1">
+                        <div className="pl-4 flex items-center gap-3">
+                          <p className="flex-1 min-w-0 text-xs text-muted-foreground italic truncate">📰 &ldquo;{headline}&rdquo;</p>
+                          {totalEventCount > 0 && (
+                            <span className="shrink-0 text-[11px] font-medium text-amber-600">⚠ {totalEventCount} event{totalEventCount === 1 ? '' : 's'}</span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
                   {isExpanded && (
                     <tr>
                       <td colSpan={9} className="p-0">
-                        <MarketDetailCard row={row} />
+                        <MarketDetailCard row={row} newsHeadline={headline ?? null} />
                       </td>
                     </tr>
                   )}

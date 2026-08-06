@@ -1,7 +1,12 @@
 'use client'
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, ReferenceArea, ReferenceLine } from 'recharts'
-import { chartDateLabel, type ZoneBoundaries } from '@/lib/workspaceUtils'
+import {
+  chartDateLabel, zoneSemanticColour, zoneRangeFor, ZONE_COLOUR_HEX, ZONE_LADDER_ORDER,
+  type ZoneBoundaries, type AtrZone,
+} from '@/lib/workspaceUtils'
 import type { PriceBar } from './types'
+
+interface ZoneBand { zone: AtrZone; hex: string; y1: number; y2: number }
 
 interface Props {
   data: PriceBar[]
@@ -56,18 +61,23 @@ export function PriceChart({ data, direction, zoneBoundaries, yDomain, entryLow,
     domain = [min - pad, max + pad]
   }
 
-  // BUY: cheap zones (1-2) are the opportunity (green), stretched (4) is the
-  // danger (red). SELL inverts which end is shaded which colour.
-  const opportunityArea = zoneBoundaries && direction === 'BUY'
-    ? { y1: zoneBoundaries.zone1.min, y2: zoneBoundaries.zone2.max }
-    : zoneBoundaries && direction === 'SELL'
-    ? { y1: zoneBoundaries.zone4.min, y2: zoneBoundaries.tooHigh.min }
-    : null
-  const dangerArea = zoneBoundaries && direction === 'BUY'
-    ? { y1: zoneBoundaries.zone4.min, y2: zoneBoundaries.tooHigh.min }
-    : zoneBoundaries && direction === 'SELL'
-    ? { y1: zoneBoundaries.zone1.min, y2: zoneBoundaries.zone2.max }
-    : null
+  // The ladder's six zone bands, extended across the full chart width at the
+  // same price boundaries and the same direction-aware colours, clamped to
+  // the visible domain since Too High/Too Deep are unbounded on one side.
+  // Zone 3 ("Fair Value") has no colour on either direction, so it renders
+  // no band at all -- same as its plain bg-card treatment in the ladder.
+  const zoneBands: ZoneBand[] = []
+  if (zoneBoundaries) {
+    for (const zone of ZONE_LADDER_ORDER) {
+      const hex = ZONE_COLOUR_HEX[zoneSemanticColour(zone, direction)]
+      if (!hex) continue
+      const range = zoneRangeFor(zone, zoneBoundaries)
+      const y1 = Math.max(range.min, domain[0])
+      const y2 = Math.min(range.max, domain[1])
+      if (!(y2 > y1)) continue
+      zoneBands.push({ zone, hex, y1, y2 })
+    }
+  }
 
   return (
     <div style={{ height: 220, width: '100%' }}>
@@ -90,14 +100,11 @@ export function PriceChart({ data, direction, zoneBoundaries, yDomain, entryLow,
             tickLine={false}
           />
           <Tooltip content={<CustomTooltip precision={precision} />} />
-          {opportunityArea && (
-            <ReferenceArea y1={opportunityArea.y1} y2={opportunityArea.y2} fill="#22c55e" fillOpacity={0.08} strokeOpacity={0} />
-          )}
-          {dangerArea && (
-            <ReferenceArea y1={dangerArea.y1} y2={dangerArea.y2} fill="#ef4444" fillOpacity={0.08} strokeOpacity={0} />
-          )}
+          {zoneBands.map(b => (
+            <ReferenceArea key={b.zone} y1={b.y1} y2={b.y2} fill={b.hex} fillOpacity={0.06} strokeOpacity={0} />
+          ))}
           {entryLow != null && entryHigh != null && (
-            <ReferenceArea y1={entryLow} y2={entryHigh} fill="#16a34a" fillOpacity={0.18} strokeOpacity={0} />
+            <ReferenceArea y1={entryLow} y2={entryHigh} fill="#16a34a" fillOpacity={0.15} strokeOpacity={0} />
           )}
           {stopMid != null && (
             <ReferenceLine y={stopMid} stroke="#dc2626" strokeDasharray="4 3" strokeWidth={1} />
