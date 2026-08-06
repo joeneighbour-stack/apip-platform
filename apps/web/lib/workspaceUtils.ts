@@ -210,40 +210,72 @@ export interface ZoneBoundaries {
 }
 
 /**
- * Approximate price boundaries for the six zones, derived purely from recent
- * price action (last 20 bars of the 30-day history already fetched) -- this
- * is a display-only approximation for the ladder/chart alignment, NOT a
- * replacement for the engine's actual ATR-band zone calculation. Which zone
- * is "current"/"preferred" still comes from opportunities.current_zone /
- * preferred_entry_zone; this only says where each zone visually sits on the
- * chart's price axis.
+ * Engine-accurate zone boundaries -- exact replica of calculateAtrZones() in
+ * intelligence-engine/src/services/marketStateService.ts, Pine-style band
+ * construction (locked formula):
+ *   bottomAnchor = min(previousClose, sessionLow)
+ *   topAnchor    = max(previousClose, sessionHigh)
+ *   lowerBand    = topAnchor - atr20
+ *   upperBand    = bottomAnchor + atr20
+ *   step         = (upperBand - lowerBand) / 4
+ * Replaces the old last-20-day-quartering approximation entirely -- that
+ * approximation could disagree with the engine's real zones badly enough
+ * (verified live against Gold) that a recommendation's actual entry range
+ * would land in what the approximation called "Too High" while the engine's
+ * own preferred_entry_zone said "Zone 1". This is the same anchor/ATR math
+ * the engine used to produce that entry range in the first place, so they
+ * can no longer disagree.
+ *
+ * currentPrice is only used for the band-collapse guard (see below); the
+ * classification of which zone is "current"/"preferred" still comes from
+ * opportunities.current_zone/preferred_entry_zone, not from this function.
  */
-export function computeZoneBoundaries(priceHistory: { high: number; low: number }[]): ZoneBoundaries | null {
-  const last20 = priceHistory.slice(-20)
-  if (last20.length === 0) return null
-  const rangeHigh = Math.max(...last20.map(d => d.high))
-  const rangeLow = Math.min(...last20.map(d => d.low))
-  if (!(rangeHigh > rangeLow)) return null
-  const bandWidth = (rangeHigh - rangeLow) / 4
+export function computeZoneBoundaries(
+  atr20: number | null,
+  previousClose: number | null,
+  sessionHigh: number | null,
+  sessionLow: number | null,
+  currentPrice: number | null,
+): ZoneBoundaries | null {
+  if (!atr20 || atr20 <= 0 || previousClose == null || sessionHigh == null || sessionLow == null) return null
+
+  const bottomAnchor = Math.min(previousClose, sessionLow)
+  const topAnchor = Math.max(previousClose, sessionHigh)
+
+  let lowerBand = topAnchor - atr20
+  let upperBand = bottomAnchor + atr20
+
+  // Band-collapse guard, matching marketStateService.ts's calculateAtrZones()
+  // exactly: when ATR is large enough relative to the anchor spread that the
+  // bands invert, re-centre on the current price (not the anchor midpoint --
+  // centring on price is what the engine actually does).
+  if (upperBand <= lowerBand) {
+    if (currentPrice == null) return null
+    const halfAtr = atr20 / 2
+    lowerBand = currentPrice - halfAtr
+    upperBand = currentPrice + halfAtr
+  }
+
+  const step = (upperBand - lowerBand) / 4
   return {
-    rangeHigh, rangeLow, bandWidth,
-    tooHigh: { min: rangeHigh, max: Infinity },
-    zone4: { min: rangeLow + bandWidth * 3, max: rangeHigh },
-    zone3: { min: rangeLow + bandWidth * 2, max: rangeLow + bandWidth * 3 },
-    zone2: { min: rangeLow + bandWidth * 1, max: rangeLow + bandWidth * 2 },
-    zone1: { min: rangeLow, max: rangeLow + bandWidth },
-    tooDeep: { min: -Infinity, max: rangeLow },
+    rangeHigh: upperBand, rangeLow: lowerBand, bandWidth: step,
+    tooHigh: { min: upperBand, max: Infinity },
+    zone4: { min: lowerBand + step * 3, max: upperBand },
+    zone3: { min: lowerBand + step * 2, max: lowerBand + step * 3 },
+    zone2: { min: lowerBand + step * 1, max: lowerBand + step * 2 },
+    zone1: { min: lowerBand, max: lowerBand + step },
+    tooDeep: { min: -Infinity, max: lowerBand },
   }
 }
 
 /**
  * Shared y-axis price domain for the ladder + chart pairing: the zone range
- * (Zone 1's low to Zone 4's high) with 3% padding on each side, so both
- * widgets scale to the exact same price window and their bands line up
- * pixel-for-pixel. Widened to also cover the entry range -- if the
- * recommendation's entry sits outside the last 20 bars' range (price hasn't
- * traded there recently), the domain must still reach it, or the one thing
- * the chart exists to show becomes invisible.
+ * (lowerBand to upperBand) with 2% padding on each side, so both widgets
+ * scale to the exact same price window and their bands line up. Widened to
+ * also cover the entry range as a safety net -- with engine-accurate zones,
+ * the entry range should already fall inside [lowerBand, upperBand] (it's
+ * derived from the same anchors), so this should rarely actually extend
+ * anything in practice; it stays as a guard rather than an assumption.
  */
 export function computeSharedYDomain(
   zoneBoundaries: ZoneBoundaries | null,
@@ -253,8 +285,8 @@ export function computeSharedYDomain(
   if (!zoneBoundaries) return null
   const rangeLow = zoneBoundaries.zone1.min
   const rangeHigh = zoneBoundaries.zone4.max
-  const yMin = Math.min(rangeLow, entryRangeLow ?? rangeLow) * 0.97
-  const yMax = Math.max(rangeHigh, entryRangeHigh ?? rangeHigh) * 1.03
+  const yMin = Math.min(rangeLow, entryRangeLow ?? rangeLow) * 0.98
+  const yMax = Math.max(rangeHigh, entryRangeHigh ?? rangeHigh) * 1.02
   return [yMin, yMax]
 }
 
@@ -267,16 +299,6 @@ export function zoneRangeFor(zone: AtrZone, b: ZoneBoundaries): { min: number; m
     case 'ZONE_1': return b.zone1
     case 'TOO_DEEP': return b.tooDeep
   }
-}
-
-/** A zone's pixel height within a fixed-height ladder, proportional to how
- *  much of the shared y-domain it actually occupies (clamped to the domain,
- *  since Too High/Too Deep are unbounded on one side). */
-export function zoneBandHeightPx(zoneMax: number, zoneMin: number, yDomain: [number, number], ladderHeight: number): number {
-  const [yMin, yMax] = yDomain
-  const totalRange = yMax - yMin
-  if (totalRange <= 0) return ladderHeight / 6
-  return ((Math.min(zoneMax, yMax) - Math.max(zoneMin, yMin)) / totalRange) * ladderHeight
 }
 
 /** Currency codes implied by a 6-letter FX symbol (e.g. "EURUSD" -> ["EUR","USD"]).

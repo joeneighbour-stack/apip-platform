@@ -1,7 +1,4 @@
-import {
-  ZONE_LADDER_ORDER, zonePlainLabel, zoneSemanticColour, ZONE_BAND_BG_CLASS,
-  zoneRangeFor, zoneBandHeightPx, type AtrZone, type ZoneBoundaries,
-} from '@/lib/workspaceUtils'
+import { ZONE_LADDER_ORDER, zonePlainLabel, zoneSemanticColour, ZONE_BAND_BG_CLASS } from '@/lib/workspaceUtils'
 
 interface Props {
   currentZone: string | null
@@ -13,36 +10,39 @@ interface Props {
   currentPrice: number | null
   currentPriceSource: 'live' | 'close' | null
   triggerProbability: number | null
-  zoneBoundaries: ZoneBoundaries | null
-  yDomain: [number, number] | null
 }
 
 const TRIGGER_TOOLTIP =
   'Probability of price reaching this zone based on historical data from current position. Per-zone probabilities coming soon.'
 
-const LADDER_HEIGHT = 220
+// Zone 1-4 are equal-width by construction with the engine-accurate ATR
+// formula (each is exactly `step` wide), so they get equal fixed heights --
+// no more computing a height proportional to a y-domain that could balloon
+// when price moves. Too High/Too Deep get a smaller fixed height regardless
+// of how far they conceptually extend, since they're unbounded on one side
+// and have no "real" width to be proportional to.
+// 4*ZONE_HEIGHT + 2*EXTREME_HEIGHT = 204, plus a 20px bottom spacer to match
+// the chart's fixed XAxis height (PriceChart.tsx) = 224px total either way.
+const ZONE_HEIGHT = 40
+const EXTREME_HEIGHT = 22
+const AXIS_SPACER_HEIGHT = 20
 
 export function ZoneLadder({
   currentZone, preferredZone, direction, entryLow, entryHigh, displayPrecision,
-  currentPrice, currentPriceSource, triggerProbability, zoneBoundaries, yDomain,
+  currentPrice, currentPriceSource, triggerProbability,
 }: Props) {
   const precision = displayPrecision ?? 4
 
   return (
-    <div className="flex flex-col overflow-hidden shrink-0" style={{ height: LADDER_HEIGHT, width: 140 }}>
+    <div className="flex flex-col overflow-hidden shrink-0" style={{ width: 140 }}>
       {ZONE_LADDER_ORDER.map((zone) => {
         const isCurrent = zone === currentZone
         const isPreferred = zone === preferredZone
         const colour = zoneSemanticColour(zone, direction)
         const bgClass = ZONE_BAND_BG_CLASS[colour]
         const preferredClass = isPreferred ? 'border-t-2 border-b-2 border-green-300 dark:bg-green-900/20' : ''
-
-        // Price-proportional height when we have real zone boundaries to work
-        // from (matching the chart's y-axis exactly); otherwise fall back to
-        // equal bands so the ladder still renders sensibly with thin history.
-        const height = zoneBoundaries && yDomain
-          ? zoneBandHeightPx(zoneRangeFor(zone, zoneBoundaries).max, zoneRangeFor(zone, zoneBoundaries).min, yDomain, LADDER_HEIGHT)
-          : LADDER_HEIGHT / 6
+        const isExtreme = zone === 'TOO_HIGH' || zone === 'TOO_DEEP'
+        const height = isExtreme ? EXTREME_HEIGHT : ZONE_HEIGHT
 
         return (
           <div
@@ -75,6 +75,9 @@ export function ZoneLadder({
           </div>
         )
       })}
+      {/* Empty spacer matching the chart's fixed XAxis height, so both widgets'
+          zone-band regions occupy the same vertical span and their totals match. */}
+      <div style={{ height: AXIS_SPACER_HEIGHT }} />
     </div>
   )
 }

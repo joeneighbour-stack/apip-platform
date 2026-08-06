@@ -6,7 +6,7 @@ import { formatR, formatPercent } from '@/lib/format'
 import {
   weekdayDateLabel, fxPipCount, zoneLabel,
   regimeTrendLabelWithAdx, confidenceBadgeLabel,
-  computeZoneBoundaries, computeSharedYDomain, atrPercentileShortLabel, volatilityStateWord,
+  computeSharedYDomain, atrPercentileShortLabel, volatilityStateWord,
 } from '@/lib/workspaceUtils'
 import type { WorkspaceRow } from './types'
 
@@ -39,8 +39,7 @@ function eventTimeUk(iso: string): string {
 export function MarketDetailCard({ row, newsHeadline }: Props) {
   const [newsOpen, setNewsOpen] = useState(false)
   const precision = row.displayPrecision ?? 4
-  const zoneBoundaries = computeZoneBoundaries(row.priceHistory)
-  const yDomain = computeSharedYDomain(zoneBoundaries, row.entryLow, row.entryHigh)
+  const yDomain = computeSharedYDomain(row.zoneBoundaries, row.entryLow, row.entryHigh)
   const totalEventCount = row.eventRiskItems.length + row.eventRiskOverflowCount
 
   return (
@@ -70,9 +69,9 @@ export function MarketDetailCard({ row, newsHeadline }: Props) {
         <p className="text-xs font-medium text-red-700">Levels outdated — recommendation requires recalculation.</p>
       )}
 
-      {/* Zone ladder + price chart, sharing one price scale, rendered as a single unit */}
+      {/* Zone ladder + price chart, sharing one engine-accurate price scale */}
       <section>
-        <h3 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Zone &amp; Price (21 Days)</h3>
+        <h3 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Zone &amp; Price</h3>
         <div className="flex border border-border rounded-md overflow-hidden">
           <ZoneLadder
             currentZone={row.currentZone}
@@ -84,14 +83,12 @@ export function MarketDetailCard({ row, newsHeadline }: Props) {
             currentPrice={row.currentPrice}
             currentPriceSource={row.currentPriceSource}
             triggerProbability={row.triggerProbability}
-            zoneBoundaries={zoneBoundaries}
-            yDomain={yDomain}
           />
           <div className="flex-1 min-w-0">
             <PriceChart
               data={row.priceHistory}
               direction={row.direction}
-              zoneBoundaries={zoneBoundaries}
+              zoneBoundaries={row.zoneBoundaries}
               yDomain={yDomain}
               entryLow={row.entryLow}
               entryHigh={row.entryHigh}

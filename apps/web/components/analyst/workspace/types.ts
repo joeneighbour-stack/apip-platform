@@ -1,3 +1,5 @@
+import type { ZoneBoundaries } from '@/lib/workspaceUtils'
+
 export interface RegimeInfo {
   trendState: string | null
   volatilityState: string | null
@@ -93,4 +95,5 @@ export interface WorkspaceRow {
   currentPrice: number | null
   currentPriceSource: 'live' | 'close' | null
   priceHistory: PriceBar[]
+  zoneBoundaries: ZoneBoundaries | null
 }

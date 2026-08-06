@@ -8,6 +8,14 @@ import type { PriceBar } from './types'
 
 interface ZoneBand { zone: AtrZone; hex: string; y1: number; y2: number }
 
+// Matches ZoneLadder.tsx's total height (4*ZONE_HEIGHT + 2*EXTREME_HEIGHT +
+// AXIS_SPACER_HEIGHT = 224) and its bottom spacer (20px) exactly, so the
+// price-mapped plot area in both widgets occupies the same vertical span --
+// zero top/bottom chart margin plus a fixed (not auto) XAxis height means
+// Recharts can't reserve a different amount of space than the ladder's spacer.
+const CHART_HEIGHT = 224
+const AXIS_HEIGHT = 20
+
 interface Props {
   data: PriceBar[]
   direction: 'BUY' | 'SELL' | null
@@ -80,14 +88,15 @@ export function PriceChart({ data, direction, zoneBoundaries, yDomain, entryLow,
   }
 
   return (
-    <div style={{ height: 220, width: '100%' }}>
+    <div style={{ height: CHART_HEIGHT, width: '100%' }}>
       <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+        <LineChart data={data} margin={{ top: 0, right: 8, bottom: 0, left: 0 }}>
           <XAxis
             dataKey="date"
             tickFormatter={chartDateLabel}
             tick={{ fontSize: 10 }}
             minTickGap={24}
+            height={AXIS_HEIGHT}
             axisLine={{ stroke: 'hsl(var(--border))' }}
             tickLine={false}
           />
@@ -104,7 +113,11 @@ export function PriceChart({ data, direction, zoneBoundaries, yDomain, entryLow,
             <ReferenceArea key={b.zone} y1={b.y1} y2={b.y2} fill={b.hex} fillOpacity={0.06} strokeOpacity={0} />
           ))}
           {entryLow != null && entryHigh != null && (
-            <ReferenceArea y1={entryLow} y2={entryHigh} fill="#16a34a" fillOpacity={0.15} strokeOpacity={0} />
+            <ReferenceArea
+              y1={entryLow} y2={entryHigh} fill="#16a34a" fillOpacity={0.15}
+              stroke="#16a34a" strokeOpacity={0.6} strokeWidth={1} strokeDasharray="3 2"
+              label={{ value: 'Entry zone', position: 'insideTopRight', fontSize: 9, fill: '#16a34a' }}
+            />
           )}
           {stopMid != null && (
             <ReferenceLine y={stopMid} stroke="#dc2626" strokeDasharray="4 3" strokeWidth={1} />

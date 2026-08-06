@@ -2,7 +2,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { CoverageStrip } from '@/components/analyst/workspace/CoverageStrip'
-import { entryDistanceLanguage, parseGuidanceRange, atrDistanceFromEntry, marketCurrencies } from '@/lib/workspaceUtils'
+import { entryDistanceLanguage, parseGuidanceRange, atrDistanceFromEntry, marketCurrencies, computeZoneBoundaries } from '@/lib/workspaceUtils'
 import type { WorkspaceRow, RegimeInfo, EventRiskItem, HistoricalEdge, PriceBar } from '@/components/analyst/workspace/types'
 
 const EVENT_CAP = 4
@@ -219,19 +219,46 @@ export default async function AnalystWorkspacePage() {
     })
   }
 
-  // market_state_intraday is internal-only per RLS -- adminDb, used only for the
-  // "distance to entry in plain language" line (current price vs. entry range).
+  // market_state_intraday is internal-only per RLS -- adminDb. Used for the
+  // "distance to entry" line and now also as the Pine-band session anchors
+  // (session_high/session_low/previous_close) for the zone calc below.
   const { data: intradayRows } = marketIds.length > 0
     ? await adminDb
         .from('market_state_intraday')
-        .select('market_id, current_price, captured_at')
+        .select('market_id, current_price, session_high, session_low, previous_close, captured_at')
         .in('market_id', marketIds)
         .order('captured_at', { ascending: false })
     : { data: [] }
 
   const currentPriceByMarket = new Map<string, number>()
+  const intradayByMarket = new Map<string, any>()
   for (const row of (intradayRows ?? []) as any[]) {
     if (!currentPriceByMarket.has(row.market_id)) currentPriceByMarket.set(row.market_id, Number(row.current_price))
+    if (!intradayByMarket.has(row.market_id)) intradayByMarket.set(row.market_id, row)
+  }
+
+  // Engine-accurate zone boundaries (Pine-style ATR bands, matching
+  // marketStateService.ts exactly) -- session_high/session_low/previous_close
+  // from the latest intraday snapshot when available; ~25% of intraday rows
+  // have those fields null (verified live), so this falls back to the latest
+  // daily bar's own high/low/close as anchors, matching the engine's own
+  // non-session fallback path (min(close,low)=low and max(close,high)=high
+  // automatically, since close always sits between a bar's own high and low).
+  function resolveZoneBoundaries(marketId: string, currentPrice: number | null) {
+    const priorDay = priorDayByMarket.get(marketId)
+    const atr20 = priorDay?.atr20 != null ? Number(priorDay.atr20) : null
+    const intraday = intradayByMarket.get(marketId)
+    if (intraday?.session_high != null && intraday?.session_low != null && intraday?.previous_close != null) {
+      return computeZoneBoundaries(
+        atr20, Number(intraday.previous_close), Number(intraday.session_high), Number(intraday.session_low), currentPrice,
+      )
+    }
+    if (priorDay) {
+      return computeZoneBoundaries(
+        atr20, Number(priorDay.close), Number(priorDay.high), Number(priorDay.low), currentPrice,
+      )
+    }
+    return null
   }
 
   // Analyst's own trade history for the "Historical Edge" tiers. entry_zone is
@@ -366,6 +393,7 @@ export default async function AnalystWorkspacePage() {
     const expectedR = rec.expected_r != null ? Number(rec.expected_r) : null
     const hasEventRisk = marketId ? todayEventsByMarket.has(marketId) : false
     const allEventItems = marketId ? todayEventsByMarket.get(marketId) ?? [] : []
+    const zoneBoundaries = marketId ? resolveZoneBoundaries(marketId, currentPrice) : null
 
     return {
       recommendationId: rec.recommendation_id,
@@ -392,6 +420,7 @@ export default async function AnalystWorkspacePage() {
       currentPrice,
       currentPriceSource,
       priceHistory: marketId ? priceHistoryByMarket.get(marketId) ?? [] : [],
+      zoneBoundaries,
       previousDay: priorDay ? {
         date: priorDay.date,
         open: Number(priorDay.open), high: Number(priorDay.high),
