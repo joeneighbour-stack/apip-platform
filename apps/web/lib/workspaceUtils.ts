@@ -138,6 +138,21 @@ export function zonePlainLabel(zone: string | null): string {
   }
 }
 
+/** Abbreviated zone label for the 140px-wide ladder strip -- arrows instead of
+ *  "High"/"Low" for the extreme zones, and the preferred-zone star folded
+ *  directly into the label text rather than as a separate marker element. */
+export function zoneLadderLabel(zone: string | null, isPreferred: boolean): string {
+  switch (zone) {
+    case 'TOO_DEEP': return 'Extreme ↓'
+    case 'ZONE_1': return isPreferred ? 'Deep Value ★' : 'Deep Value'
+    case 'ZONE_2': return isPreferred ? 'Value ★' : 'Value'
+    case 'ZONE_3': return 'Fair Value'
+    case 'ZONE_4': return 'Stretched'
+    case 'TOO_HIGH': return 'Extreme ↑'
+    default: return '—'
+  }
+}
+
 export type ZoneSemanticColour = 'green' | 'amber' | 'red' | 'neutral' | 'muted'
 
 /**

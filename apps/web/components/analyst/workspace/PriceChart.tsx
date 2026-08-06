@@ -8,12 +8,12 @@ import type { PriceBar } from './types'
 
 interface ZoneBand { zone: AtrZone; hex: string; y1: number; y2: number }
 
-// Matches ZoneLadder.tsx's total height (4*ZONE_HEIGHT + 2*EXTREME_HEIGHT +
-// AXIS_SPACER_HEIGHT = 224) and its bottom spacer (20px) exactly, so the
-// price-mapped plot area in both widgets occupies the same vertical span --
-// zero top/bottom chart margin plus a fixed (not auto) XAxis height means
-// Recharts can't reserve a different amount of space than the ladder's spacer.
-const CHART_HEIGHT = 224
+// Matches ZoneLadder.tsx's total height (4*52 + 2*20 + 20px axis spacer =
+// 268) and its bottom spacer (20px) exactly, so the price-mapped plot area in
+// both widgets occupies the same vertical span -- zero top/bottom chart
+// margin plus a fixed (not auto) XAxis height means Recharts can't reserve a
+// different amount of space than the ladder's spacer.
+const CHART_HEIGHT = 268
 const AXIS_HEIGHT = 20
 
 interface Props {
@@ -100,14 +100,13 @@ export function PriceChart({ data, direction, zoneBoundaries, yDomain, entryLow,
             axisLine={{ stroke: 'hsl(var(--border))' }}
             tickLine={false}
           />
-          <YAxis
-            domain={domain}
-            tick={{ fontSize: 10 }}
-            tickFormatter={(v: number) => v.toFixed(precision)}
-            width={precision > 2 ? 60 : 44}
-            axisLine={false}
-            tickLine={false}
-          />
+          {/* The ladder is the y-axis now -- this stays only to pin the chart's
+              price scale to the shared domain (so zone bands/entry/stop/target
+              line up with the ladder); hide suppresses all its visual chrome
+              (ticks, labels, line) and width=0 stops it reserving any space,
+              closing the horizontal gap a visible axis used to leave between
+              the ladder and the plot area. */}
+          <YAxis domain={domain} hide width={0} />
           <Tooltip content={<CustomTooltip precision={precision} />} />
           {zoneBands.map(b => (
             <ReferenceArea key={b.zone} y1={b.y1} y2={b.y2} fill={b.hex} fillOpacity={0.06} strokeOpacity={0} />

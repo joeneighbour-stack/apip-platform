@@ -66,7 +66,6 @@ export function CoverageStrip({ rows }: Props) {
               const precision = row.displayPrecision ?? 4
               const sessionEnd = estimateSessionEnd(row.session, row.assetClass, row.sessionEndIso)
               const headline = newsBySymbol[row.symbol]
-              const totalEventCount = row.eventRiskItems.length + row.eventRiskOverflowCount
               return (
                 <Fragment key={row.recommendationId}>
                   <tr
@@ -112,18 +111,9 @@ export function CoverageStrip({ rows }: Props) {
                     <td className="py-2 px-3">{row.hasHighImpactEventToday && <span className="text-amber-600">⚠</span>}</td>
                     <td className="py-2 px-3 text-muted-foreground">{countdownLabel(sessionEnd)}</td>
                   </tr>
-                  {isExpanded && headline && (
-                    <tr className="bg-muted/20">
-                      <td colSpan={9} className="px-3 py-1">
-                        <div className="pl-4 flex items-center gap-3">
-                          <p className="flex-1 min-w-0 text-xs text-muted-foreground italic truncate">📰 &ldquo;{headline}&rdquo;</p>
-                          {totalEventCount > 0 && (
-                            <span className="shrink-0 text-[11px] font-medium text-amber-600">⚠ {totalEventCount} event{totalEventCount === 1 ? '' : 's'}</span>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  )}
+                  {/* The headline used to get a slim preview row here too, duplicating
+                      what the expanded MarketDetailCard's own header now shows --
+                      removed in favour of that single, always-visible copy. */}
                   {isExpanded && (
                     <tr>
                       <td colSpan={9} className="p-0">

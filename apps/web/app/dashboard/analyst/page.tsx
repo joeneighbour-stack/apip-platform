@@ -197,26 +197,36 @@ export default async function AnalystWorkspacePage() {
     if (!priorDayByMarket.has(row.market_id)) priorDayByMarket.set(row.market_id, row)
   }
 
-  // 21-day (3-week) OHLC for the detail card's price chart -- tighter window
-  // than the original 30 days, for a scale that stays closer to the current
-  // zone positions.
-  const twentyOneDaysAgo = new Date(Date.now() - 21 * 86400000).toISOString().slice(0, 10)
+  // Last 3 TRADING days of OHLC for the detail card's price chart -- tighter
+  // than the prior 21-day window, so the chart's scale stays close to recent
+  // price action. Fetched over a wider 10-calendar-day cutoff and sliced to
+  // the last 3 rows per market below, rather than gte'ing "3 days ago"
+  // directly: a pure 3-calendar-day cutoff would return only 0-1 trading days
+  // right after a weekend or holiday (e.g. any Monday), which would defeat
+  // the point of tightening the scale. Same "fetch wide, slice narrow"
+  // pattern already used for the zone calc's own last-20-bar window.
+  const priceHistoryFetchStart = new Date(Date.now() - 10 * 86400000).toISOString().slice(0, 10)
   const { data: priceHistoryRows } = marketIds.length > 0
     ? await supabase
         .from('market_state_daily')
         .select('market_id, date, open, high, low, close')
         .in('market_id', marketIds)
-        .gte('date', twentyOneDaysAgo)
+        .gte('date', priceHistoryFetchStart)
         .order('date', { ascending: true })
     : { data: [] }
 
-  const priceHistoryByMarket = new Map<string, PriceBar[]>()
+  const CHART_TRADING_DAYS = 3
+  const priceHistoryByMarketRaw = new Map<string, PriceBar[]>()
   for (const row of (priceHistoryRows ?? []) as any[]) {
-    if (!priceHistoryByMarket.has(row.market_id)) priceHistoryByMarket.set(row.market_id, [])
-    priceHistoryByMarket.get(row.market_id)!.push({
+    if (!priceHistoryByMarketRaw.has(row.market_id)) priceHistoryByMarketRaw.set(row.market_id, [])
+    priceHistoryByMarketRaw.get(row.market_id)!.push({
       date: row.date,
       open: Number(row.open), high: Number(row.high), low: Number(row.low), close: Number(row.close),
     })
+  }
+  const priceHistoryByMarket = new Map<string, PriceBar[]>()
+  for (const [marketId, bars] of priceHistoryByMarketRaw) {
+    priceHistoryByMarket.set(marketId, bars.slice(-CHART_TRADING_DAYS))
   }
 
   // market_state_intraday is internal-only per RLS -- adminDb. Used for the

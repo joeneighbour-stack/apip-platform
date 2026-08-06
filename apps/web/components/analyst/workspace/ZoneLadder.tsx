@@ -1,4 +1,4 @@
-import { ZONE_LADDER_ORDER, zonePlainLabel, zoneSemanticColour, ZONE_BAND_BG_CLASS } from '@/lib/workspaceUtils'
+import { ZONE_LADDER_ORDER, zoneLadderLabel, zonePlainLabel, zoneSemanticColour, ZONE_BAND_BG_CLASS } from '@/lib/workspaceUtils'
 
 interface Props {
   currentZone: string | null
@@ -16,15 +16,14 @@ const TRIGGER_TOOLTIP =
   'Probability of price reaching this zone based on historical data from current position. Per-zone probabilities coming soon.'
 
 // Zone 1-4 are equal-width by construction with the engine-accurate ATR
-// formula (each is exactly `step` wide), so they get equal fixed heights --
-// no more computing a height proportional to a y-domain that could balloon
-// when price moves. Too High/Too Deep get a smaller fixed height regardless
-// of how far they conceptually extend, since they're unbounded on one side
-// and have no "real" width to be proportional to.
-// 4*ZONE_HEIGHT + 2*EXTREME_HEIGHT = 204, plus a 20px bottom spacer to match
-// the chart's fixed XAxis height (PriceChart.tsx) = 224px total either way.
-const ZONE_HEIGHT = 40
-const EXTREME_HEIGHT = 22
+// formula, so equal fixed heights are correct, not just convenient. Too
+// High/Too Deep get a smaller fixed height regardless of how far they
+// conceptually extend, since they're unbounded on one side.
+// 4*ZONE_HEIGHT + 2*EXTREME_HEIGHT = 248 (PLOT_HEIGHT), plus a 20px bottom
+// spacer to match the chart's fixed XAxis height (PriceChart.tsx) = 268px
+// total either way.
+const ZONE_HEIGHT = 52
+const EXTREME_HEIGHT = 20
 const AXIS_SPACER_HEIGHT = 20
 
 export function ZoneLadder({
@@ -47,11 +46,13 @@ export function ZoneLadder({
         return (
           <div
             key={zone}
-            className={`flex items-center justify-between px-2 border-t border-border first:border-t-0 overflow-hidden ${bgClass} ${preferredClass}`}
+            className={`flex items-center px-2 border-t border-border first:border-t-0 overflow-hidden ${bgClass} ${preferredClass}`}
             style={{ height, minHeight: height }}
           >
             <div className="flex flex-col justify-center leading-tight min-w-0">
-              <span className="text-[10px] font-medium text-foreground truncate">{zonePlainLabel(zone)}</span>
+              <span className="text-[10px] font-medium text-foreground truncate" title={zonePlainLabel(zone)}>
+                {zoneLadderLabel(zone, isPreferred)}
+              </span>
               {isCurrent && currentPrice != null && (
                 <span className="text-[9px] tabular-nums text-foreground/70">
                   ● {currentPrice.toFixed(precision)}{currentPriceSource === 'close' ? ' (Last close)' : ''}
@@ -71,7 +72,6 @@ export function ZoneLadder({
                 </span>
               )}
             </div>
-            {isPreferred && <span className="text-xs shrink-0 ml-1" title={`Preferred entry: ${zonePlainLabel(preferredZone)}`}>★</span>}
           </div>
         )
       })}

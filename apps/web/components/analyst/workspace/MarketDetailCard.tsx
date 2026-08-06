@@ -44,24 +44,29 @@ export function MarketDetailCard({ row, newsHeadline }: Props) {
 
   return (
     <div className="border-t border-border bg-muted/20 p-5 space-y-4">
-      {/* Header: symbol, direction, and the coaching note as an info tooltip */}
-      <div className="flex items-center gap-2">
-        <span className="text-sm font-semibold text-foreground">{row.symbol}</span>
-        {row.direction && (
-          <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
-            row.direction === 'BUY' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-          }`}>
-            {row.direction}
-          </span>
-        )}
-        {row.coachingNote && (
-          <span
-            title={personaliseNote(row.coachingNote)}
-            aria-label="Why this allocation"
-            className="w-4 h-4 flex items-center justify-center text-[10px] rounded-full border border-border text-muted-foreground hover:text-foreground hover:border-foreground/40 cursor-help"
-          >
-            ℹ
-          </span>
+      {/* Header: symbol, direction, coaching note tooltip, and (space permitting) the news headline */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-sm font-semibold text-foreground">{row.symbol}</span>
+          {row.direction && (
+            <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
+              row.direction === 'BUY' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+            }`}>
+              {row.direction}
+            </span>
+          )}
+          {row.coachingNote && (
+            <span
+              title={personaliseNote(row.coachingNote)}
+              aria-label="Why this allocation"
+              className="w-4 h-4 flex items-center justify-center text-[10px] rounded-full border border-border text-muted-foreground hover:text-foreground hover:border-foreground/40 cursor-help"
+            >
+              ℹ
+            </span>
+          )}
+        </div>
+        {newsHeadline && (
+          <p className="text-xs text-muted-foreground italic truncate max-w-[60%]">📰 {newsHeadline}</p>
         )}
       </div>
 
@@ -202,17 +207,31 @@ export function MarketDetailCard({ row, newsHeadline }: Props) {
           {row.previousDay && <span className="normal-case font-normal text-foreground ml-1.5">{weekdayDateLabel(row.previousDay.date)}</span>}
         </p>
         {row.previousDay ? (
-          <p className="text-xs tabular-nums mt-1">
-            O: <span className="font-medium">{row.previousDay.open.toFixed(precision)}</span>{'  '}
-            H: <span className="font-medium">{row.previousDay.high.toFixed(precision)}</span>{'  '}
-            L: <span className="font-medium">{row.previousDay.low.toFixed(precision)}</span>{'  '}
-            C: <span className="font-medium">{row.previousDay.close.toFixed(precision)}</span>{'  '}
-            Range: <span className="font-medium">
-              {(row.previousDay.high - row.previousDay.low).toFixed(precision)}
-              {row.assetClass === 'FX' && fxPipCount(row.previousDay.high - row.previousDay.low, row.displayPrecision) != null &&
-                ` (${fxPipCount(row.previousDay.high - row.previousDay.low, row.displayPrecision)} pips)`}
-            </span>
-          </p>
+          <div className="grid grid-cols-5 gap-2 mt-1">
+            <div>
+              <p className="text-[10px] text-muted-foreground">Open</p>
+              <p className="text-xs font-medium tabular-nums">{row.previousDay.open.toFixed(precision)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-muted-foreground">High</p>
+              <p className="text-xs font-medium tabular-nums text-green-600">{row.previousDay.high.toFixed(precision)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-muted-foreground">Low</p>
+              <p className="text-xs font-medium tabular-nums text-red-600">{row.previousDay.low.toFixed(precision)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-muted-foreground">Close</p>
+              <p className="text-xs font-medium tabular-nums">{row.previousDay.close.toFixed(precision)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-muted-foreground">Range</p>
+              <p className="text-xs font-medium tabular-nums">{(row.previousDay.high - row.previousDay.low).toFixed(precision)}</p>
+              {row.assetClass === 'FX' && fxPipCount(row.previousDay.high - row.previousDay.low, row.displayPrecision) != null && (
+                <p className="text-[9px] text-muted-foreground">{fxPipCount(row.previousDay.high - row.previousDay.low, row.displayPrecision)} pips</p>
+              )}
+            </div>
+          </div>
         ) : (
           <p className="text-xs text-muted-foreground mt-1">No prior-day data available.</p>
         )}
@@ -234,13 +253,7 @@ export function MarketDetailCard({ row, newsHeadline }: Props) {
         )}
       </div>
 
-      {newsHeadline && (
-        <div className="pl-2.5 border-l-2 border-primary/30">
-          <p className="text-xs text-foreground leading-snug font-medium">{newsHeadline}</p>
-        </div>
-      )}
-
-      {/* News & events, collapsible */}
+      {/* News & events, collapsible -- the headline itself now lives in the card header */}
       {row.eventRiskItems.length > 0 && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
           <button
