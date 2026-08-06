@@ -1,5 +1,4 @@
 'use client'
-import { useState } from 'react'
 import Link from 'next/link'
 
 interface AllocationOpportunity {
@@ -31,8 +30,6 @@ interface WorkloadPanelProps {
 }
 
 export function WorkloadPanel({ allocations, availability }: WorkloadPanelProps) {
-  const [expanded, setExpanded] = useState<string | null>(null)
-
   // Count and group allocations per analyst
   const byAnalyst = new Map<string, { name: string; allocs: Allocation[] }>()
   for (const alloc of allocations) {
@@ -59,22 +56,18 @@ export function WorkloadPanel({ allocations, availability }: WorkloadPanelProps)
             {entries.map(([analystId, { name, allocs }]) => {
               const cap = capByAnalyst.get(analystId) ?? null
               const atCap = cap !== null && allocs.length >= cap
-              const isExpanded = expanded === analystId
               return (
-                <button
+                <div
                   key={analystId}
-                  onClick={() => setExpanded(isExpanded ? null : analystId)}
-                  className={`rounded-lg border p-3 text-left transition-all ${
-                    atCap ? 'border-amber-200 bg-amber-50' :
-                    isExpanded ? 'border-primary bg-primary/5' :
-                    'border-border bg-card hover:bg-muted/30'
+                  className={`rounded-lg border p-3 text-left ${
+                    atCap ? 'border-amber-200 bg-amber-50' : 'border-border bg-card'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-1">
                     <p className="text-xs text-muted-foreground truncate">{name}</p>
                     <div className="flex items-center gap-2 shrink-0">
-                      <Link href={`/dashboard/management/analyst/${analystId}/workspace`} onClick={e => e.stopPropagation()} className="text-xs text-primary hover:underline">View</Link>
-                      <Link href={`/dashboard/management/analyst/${analystId}`} onClick={e => e.stopPropagation()} className="text-xs text-primary hover:underline">Profile</Link>
+                      <Link href={`/dashboard/management/analyst/${analystId}/workspace`} className="text-xs text-primary hover:underline">View</Link>
+                      <Link href={`/dashboard/management/analyst/${analystId}`} className="text-xs text-primary hover:underline">Profile</Link>
                     </div>
                   </div>
                   <p className="text-2xl font-semibold mt-1">{allocs.length}</p>
@@ -82,57 +75,10 @@ export function WorkloadPanel({ allocations, availability }: WorkloadPanelProps)
                     {cap !== null ? `of ${cap} max` : 'markets'}
                   </p>
                   {atCap && <p className="text-xs text-amber-700 mt-1 font-medium">At capacity</p>}
-                  <p className="text-xs text-primary mt-1">{isExpanded ? 'Hide ↑' : 'View ↓'}</p>
-                </button>
+                </div>
               )
             })}
           </div>
-
-          {/* Expanded allocation detail */}
-          {expanded && byAnalyst.has(expanded) && (
-            <div className="rounded-lg border border-primary/20 bg-card overflow-hidden">
-              <div className="px-4 py-2.5 bg-muted/30 border-b border-border">
-                <p className="text-xs font-medium">{byAnalyst.get(expanded)!.name} — Today&apos;s Markets</p>
-              </div>
-              <table className="w-full text-sm">
-                <thead className="bg-muted/20">
-                  <tr>
-                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Market</th>
-                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Direction</th>
-                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Zone</th>
-                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Action</th>
-                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Trigger %</th>
-                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Exp R</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {byAnalyst.get(expanded)!.allocs.map(alloc => {
-                    const opp = alloc.opportunity as any
-                    return (
-                      <tr key={alloc.allocation_id} className="hover:bg-muted/20">
-                        <td className="px-3 py-2 text-xs font-medium">{opp?.market?.symbol ?? '—'}</td>
-                        <td className="px-3 py-2">
-                          {opp?.direction ? (
-                            <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${opp.direction === 'BUY' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                              {opp.direction}
-                            </span>
-                          ) : '—'}
-                        </td>
-                        <td className="px-3 py-2 text-xs text-muted-foreground">{opp?.current_zone ?? '—'}</td>
-                        <td className="px-3 py-2 text-xs text-muted-foreground">{opp?.analyst_action?.replace('_', ' ') ?? '—'}</td>
-                        <td className="px-3 py-2 text-xs tabular-nums">
-                          {opp?.trigger_probability != null ? `${Math.round(Number(opp.trigger_probability) * 100)}%` : '—'}
-                        </td>
-                        <td className="px-3 py-2 text-xs tabular-nums">
-                          {opp?.expected_r != null ? `${Number(opp.expected_r).toFixed(2)}R` : '—'}
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
         </div>
       )}
     </section>
