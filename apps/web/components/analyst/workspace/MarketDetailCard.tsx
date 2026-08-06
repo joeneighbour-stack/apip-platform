@@ -6,7 +6,7 @@ import { formatR, formatPercent } from '@/lib/format'
 import {
   weekdayDateLabel, fxPipCount, zoneLabel,
   regimeTrendLabelWithAdx, confidenceBadgeLabel,
-  computeSharedYDomain, atrPercentileShortLabel, volatilityStateWord,
+  computeSharedYDomain, volatilityLabel, volatilityTooltip, tradeSummary,
 } from '@/lib/workspaceUtils'
 import type { WorkspaceRow } from './types'
 
@@ -41,6 +41,7 @@ export function MarketDetailCard({ row, newsHeadline }: Props) {
   const precision = row.displayPrecision ?? 4
   const yDomain = computeSharedYDomain(row.zoneBoundaries, row.entryLow, row.entryHigh)
   const totalEventCount = row.eventRiskItems.length + row.eventRiskOverflowCount
+  const thesis = tradeSummary(row.currentZone, row.preferredZone, row.regime?.adx14 ?? null)
 
   return (
     <div className="border-t border-border bg-muted/20 p-5 space-y-4">
@@ -70,26 +71,36 @@ export function MarketDetailCard({ row, newsHeadline }: Props) {
         )}
       </div>
 
+      {thesis && (
+        <p className="text-xs text-muted-foreground">{thesis}</p>
+      )}
+
       {row.isDoNotUse && (
         <p className="text-xs font-medium text-red-700">Levels outdated — recommendation requires recalculation.</p>
       )}
 
-      {/* Zone ladder + price chart, sharing one engine-accurate price scale */}
+      {/* Zone ladder + price chart -- two distinct panels, not one pixel-aligned
+          unit. The ladder is a zone reference (where is price relative to the
+          engine's ATR bands); the chart is its own price history with the same
+          zone/entry/stop/target context drawn on its own scale. They share a
+          height and a visual seam, not a price-to-pixel mapping. */}
       <section>
         <h3 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Zone &amp; Price</h3>
-        <div className="flex border border-border rounded-md overflow-hidden">
-          <ZoneLadder
-            currentZone={row.currentZone}
-            preferredZone={row.preferredZone}
-            direction={row.direction}
-            entryLow={row.entryLow}
-            entryHigh={row.entryHigh}
-            displayPrecision={row.displayPrecision}
-            currentPrice={row.currentPrice}
-            currentPriceSource={row.currentPriceSource}
-            triggerProbability={row.triggerProbability}
-          />
-          <div className="flex-1 min-w-0">
+        <div className="flex">
+          <div className="bg-muted/20 rounded-l-lg border border-border overflow-hidden">
+            <ZoneLadder
+              currentZone={row.currentZone}
+              preferredZone={row.preferredZone}
+              direction={row.direction}
+              entryLow={row.entryLow}
+              entryHigh={row.entryHigh}
+              displayPrecision={row.displayPrecision}
+              currentPrice={row.currentPrice}
+              currentPriceSource={row.currentPriceSource}
+              triggerProbability={row.triggerProbability}
+            />
+          </div>
+          <div className="flex-1 min-w-0 bg-card rounded-r-lg border border-border border-l-2 border-l-primary/20 overflow-hidden">
             <PriceChart
               data={row.priceHistory}
               direction={row.direction}
@@ -155,11 +166,12 @@ export function MarketDetailCard({ row, newsHeadline }: Props) {
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-xs text-muted-foreground">Volatility</span>
-                <span className="text-xs font-medium tabular-nums">{volatilityStateWord(row.regime.atrPercentile)}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">ATR</span>
-                <span className="text-xs font-medium tabular-nums">{atrPercentileShortLabel(row.regime.atrPercentile)}</span>
+                <span
+                  className="text-xs font-medium cursor-help"
+                  title={volatilityTooltip(row.regime.atrPercentile)}
+                >
+                  {volatilityLabel(row.regime.atrPercentile)}
+                </span>
               </div>
             </div>
           ) : (

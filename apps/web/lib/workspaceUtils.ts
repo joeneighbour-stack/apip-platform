@@ -103,14 +103,6 @@ export function regimeTrendLabelWithAdx(trendState: string | null, adx14: number
   return `${label} (ADX ${adx14.toFixed(0)})`
 }
 
-/** Volatility description derived from ATR percentile, per spec:
- *  >70th = Expanding, 30-70th = Normal, <30th = Contracting. */
-export function regimeVolatilityLabel(atrPercentile: number | null): string {
-  if (atrPercentile == null) return '—'
-  const state = atrPercentile > 70 ? 'Expanding' : atrPercentile < 30 ? 'Contracting' : 'Normal'
-  return `${state} (${atrPercentileLabel(atrPercentile)})`
-}
-
 export function confidenceBadgeLabel(confidence: string | null): string {
   switch (confidence) {
     case 'HIGH': return 'HIGH'
@@ -136,6 +128,29 @@ export function zonePlainLabel(zone: string | null): string {
     case 'TOO_HIGH': return 'Extreme High'
     default: return '—'
   }
+}
+
+/**
+ * One-line "why this recommendation" summary, shown directly on the card so
+ * the trade thesis is visible without opening the coaching-note tooltip.
+ * direction/winRate/trades aren't part of the actual sentence (only zone
+ * position and trend strength are), so they're deliberately not parameters
+ * here -- keeping the signature honest about what it uses.
+ */
+export function tradeSummary(currentZone: string | null, preferredZone: string | null, adx: number | null): string | null {
+  if (!currentZone || !preferredZone || adx == null) return null
+
+  const zoneContext = currentZone === preferredZone
+    ? `Price is in the preferred ${zonePlainLabel(currentZone)} zone`
+    : `Price is in ${zonePlainLabel(currentZone)}, targeting ${zonePlainLabel(preferredZone)}`
+
+  const trendContext = adx < 15
+    ? 'Low ADX confirms ranging conditions — mean reversion setup'
+    : adx > 25
+    ? `Strong trend (ADX ${adx.toFixed(0)}) supports directional bias`
+    : `Moderate trend strength (ADX ${adx.toFixed(0)})`
+
+  return `${zoneContext}. ${trendContext}.`
 }
 
 /** Abbreviated zone label for the 140px-wide ladder strip -- arrows instead of
@@ -359,20 +374,23 @@ function ordinal(n: number): string {
   }
 }
 
-export function atrPercentileLabel(pct: number | null): string {
-  if (pct == null) return '—'
-  return `${ordinal(pct)} percentile`
-}
-
-export function atrPercentileShortLabel(pct: number | null): string {
-  if (pct == null) return '—'
-  return `${ordinal(pct)} pct`
-}
-
-/** Just the volatility state word (no percentile) for compact display. */
-export function volatilityStateWord(atrPercentile: number | null): string {
+/**
+ * Plain-English volatility level from ATR percentile -- shown to the analyst
+ * on its own, no percentile number attached (that goes in the tooltip via
+ * volatilityTooltip() instead, for anyone who wants the detail).
+ */
+export function volatilityLabel(atrPercentile: number | null): string {
   if (atrPercentile == null) return '—'
-  return atrPercentile > 70 ? 'Expanding' : atrPercentile < 30 ? 'Contracting' : 'Normal'
+  if (atrPercentile <= 20) return 'Very Low'
+  if (atrPercentile <= 40) return 'Low'
+  if (atrPercentile <= 60) return 'Normal'
+  if (atrPercentile <= 80) return 'Elevated'
+  return 'Very High'
+}
+
+export function volatilityTooltip(atrPercentile: number | null): string | undefined {
+  if (atrPercentile == null) return undefined
+  return `ATR at ${ordinal(atrPercentile)} percentile of recent history`
 }
 
 /** Compares two consecutive market_regime_state.derived_from.atr_percentile

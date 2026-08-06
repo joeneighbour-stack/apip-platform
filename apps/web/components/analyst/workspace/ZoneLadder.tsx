@@ -19,12 +19,14 @@ const TRIGGER_TOOLTIP =
 // formula, so equal fixed heights are correct, not just convenient. Too
 // High/Too Deep get a smaller fixed height regardless of how far they
 // conceptually extend, since they're unbounded on one side.
-// 4*ZONE_HEIGHT + 2*EXTREME_HEIGHT = 248 (PLOT_HEIGHT), plus a 20px bottom
-// spacer to match the chart's fixed XAxis height (PriceChart.tsx) = 268px
-// total either way.
+// The ladder is a zone reference, not a price-to-pixel-mapped y-axis for the
+// chart -- these heights aren't trying to line up with the chart's price
+// scale. The bottom spacer just keeps the ladder's total height matching
+// PriceChart.tsx's fixed height (268px) so the two panels sit flush as a
+// visual pair.
 const ZONE_HEIGHT = 52
 const EXTREME_HEIGHT = 20
-const AXIS_SPACER_HEIGHT = 20
+const BOTTOM_SPACER_HEIGHT = 20
 
 export function ZoneLadder({
   currentZone, preferredZone, direction, entryLow, entryHigh, displayPrecision,
@@ -75,9 +77,9 @@ export function ZoneLadder({
           </div>
         )
       })}
-      {/* Empty spacer matching the chart's fixed XAxis height, so both widgets'
-          zone-band regions occupy the same vertical span and their totals match. */}
-      <div style={{ height: AXIS_SPACER_HEIGHT }} />
+      {/* Empty spacer so the ladder's total height matches the chart's for a
+          balanced side-by-side look -- not tied to price/axis alignment. */}
+      <div style={{ height: BOTTOM_SPACER_HEIGHT }} />
     </div>
   )
 }
