@@ -33,12 +33,6 @@ export function InlineAnalystWorkspace({ analystId }: Props) {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <a href={`/dashboard/management/analyst/${analystId}/workspace`}
-          className="text-sm text-primary hover:underline">
-          Open full workspace &#8599;
-        </a>
-      </div>
       {state.status === 'loading' && (
         <div className="rounded-lg border border-border bg-card p-6 text-center">
           <p className="text-sm text-muted-foreground">Loading workspace&hellip;</p>
