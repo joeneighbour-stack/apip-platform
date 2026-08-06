@@ -44,9 +44,9 @@ export function MarketDetailCard({ row, newsHeadline }: Props) {
 
   return (
     <div className="border-t border-border bg-muted/20 p-5 space-y-4">
-      {/* Header: symbol, direction, coaching note tooltip, and (space permitting) the news headline */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 shrink-0">
+      {/* Header: symbol, direction, coaching note tooltip, and (below) the news headline */}
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center gap-2">
           <span className="text-sm font-semibold text-foreground">{row.symbol}</span>
           {row.direction && (
             <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
@@ -66,7 +66,7 @@ export function MarketDetailCard({ row, newsHeadline }: Props) {
           )}
         </div>
         {newsHeadline && (
-          <p className="text-xs text-muted-foreground italic truncate max-w-[60%]">📰 {newsHeadline}</p>
+          <p className="text-xs font-medium text-foreground leading-snug">{newsHeadline}</p>
         )}
       </div>
 
@@ -163,7 +163,7 @@ export function MarketDetailCard({ row, newsHeadline }: Props) {
               </div>
             </div>
           ) : (
-            <p className="text-xs text-muted-foreground">No regime data.</p>
+            <p className="text-xs text-muted-foreground">Regime data updates each morning. Check back after 05:00 UTC.</p>
           )}
         </div>
 
