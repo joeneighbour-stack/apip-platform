@@ -34,6 +34,37 @@ interface FinnhubCandleResponse {
   c: number[]; h: number[]; l: number[]; o: number[]; t: number[]; s: string
 }
 
+/**
+ * Aggregates Finnhub 5-minute bars for a single date into a synthetic daily
+ * OHLC candle. Used to fill gaps left by Finnhub's daily (resolution=D)
+ * endpoint, which lags 1-2 days behind for forex -- the 5-minute endpoint
+ * (resolution=5) is current, so today/yesterday can be backfilled from it
+ * rather than left missing until the daily candle catches up.
+ */
+async function fetchIntradayAsDailyBar(
+  finnhubSymbol: string, date: string, apiKey: string, isCrypto: boolean,
+): Promise<OhlcBar | null> {
+  const dayStart = Math.floor(new Date(date + 'T00:00:00Z').getTime() / 1000)
+  const dayEnd   = Math.floor(new Date(date + 'T23:59:59Z').getTime() / 1000)
+
+  const endpoint = isCrypto
+    ? `https://finnhub.io/api/v1/crypto/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=5&from=${dayStart}&to=${dayEnd}&token=${apiKey}`
+    : `https://finnhub.io/api/v1/forex/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=5&from=${dayStart}&to=${dayEnd}&token=${apiKey}`
+
+  const res = await fetch(endpoint)
+  if (!res.ok) return null
+  const data: FinnhubCandleResponse = await res.json()
+  if (data.s !== 'ok' || !data.c?.length) return null
+
+  return {
+    date,
+    open:  data.o[0]!,
+    high:  Math.max(...data.h),
+    low:   Math.min(...data.l),
+    close: data.c[data.c.length - 1]!,
+  }
+}
+
 async function fetchRecentOhlc(
   finnhubSymbol: string, days: number, apiKey: string, isCrypto = false,
 ): Promise<OhlcBar[]> {
@@ -59,10 +90,18 @@ async function main() {
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
   // Prefer candle-enabled key; fall back to primary
   const FINNHUB_API_KEY = process.env.FINNHUB_CANDLE_API_KEY ?? process.env.FINNHUB_API_KEY
+  // 5-minute intraday fetch (used to synthesize today/yesterday's daily bar
+  // when Finnhub's daily endpoint hasn't caught up yet) requires the
+  // intraday-licenced key specifically -- FINNHUB_API_KEY alone may not have
+  // resolution=5 access, so this is not allowed to fall back to it.
+  const FINNHUB_CANDLE_API_KEY = process.env.FINNHUB_CANDLE_API_KEY
 
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !FINNHUB_API_KEY) {
     console.error('Missing required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, FINNHUB_API_KEY (or FINNHUB_CANDLE_API_KEY)')
     process.exit(1)
+  }
+  if (!FINNHUB_CANDLE_API_KEY) {
+    console.warn('FINNHUB_CANDLE_API_KEY not set -- missing today/yesterday daily candles will NOT be backfilled from 5-min data\n')
   }
 
   const isDryRun = process.argv.includes('--dry-run')
@@ -99,12 +138,35 @@ async function main() {
 
   const summary = { upserted: 0, skipped: 0, errors: 0 }
   const today = new Date().toISOString().slice(0, 10)
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
   for (const market of markets) {
     if (!market.price_data_symbol) continue
     try {
       const isCrypto = market.price_data_provider === 'FINNHUB_CRYPTO'
       const bars = await fetchRecentOhlc(market.price_data_symbol, DAYS_TO_FETCH, FINNHUB_API_KEY, isCrypto)
+
+      // Finnhub's daily forex candle lags 1-2 days; fill today/yesterday from
+      // 5-minute bars when the daily endpoint hasn't caught up yet. Only
+      // fills genuinely missing dates -- never replaces a real daily candle.
+      const syntheticDates = new Set<string>()
+      if (FINNHUB_CANDLE_API_KEY) {
+        const existingDates = new Set(bars.map(b => b.date))
+        for (const date of [yesterday, today]) {
+          if (existingDates.has(date)) continue
+          const syntheticBar = await fetchIntradayAsDailyBar(
+            market.price_data_symbol, date, FINNHUB_CANDLE_API_KEY, isCrypto,
+          )
+          if (syntheticBar) {
+            bars.push(syntheticBar)
+            syntheticDates.add(date)
+            console.log(`  ${market.symbol}: synthetic daily bar for ${date} from 5-min data`)
+          }
+        }
+        if (syntheticDates.size > 0) {
+          bars.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+        }
+      }
 
       if (bars.length < ATR_PERIOD_PRIMARY) {
         console.log(`  ${market.symbol}: insufficient bars (${bars.length} < ${ATR_PERIOD_PRIMARY}), skipping`)
@@ -143,7 +205,9 @@ async function main() {
           source_system:    'FINNHUB',
           source_record_id: `${market.price_data_symbol}:${bar.date}`,
           imported_at:      new Date().toISOString(),
-          raw_payload:      { symbol: market.price_data_symbol, bar },
+          raw_payload:      syntheticDates.has(bar.date)
+            ? { symbol: market.price_data_symbol, bar, synthetic: true, aggregatedFrom: '5min' }
+            : { symbol: market.price_data_symbol, bar },
         })
       }
 
