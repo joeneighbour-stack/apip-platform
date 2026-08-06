@@ -244,6 +244,7 @@ async function main() {
       .select('market_id, date, high, low, close, atr14')
       .gte('date', isBackfill ? '2015-01-01' : windowStart)
       .order('date', { ascending: true })
+      .order('market_id', { ascending: true })
       .range(page * 1000, page * 1000 + 999)
     if (!data?.length) { hasMore = false } else {
       allBars.push(...data)
