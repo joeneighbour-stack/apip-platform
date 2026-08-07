@@ -17,6 +17,7 @@ export interface EventRiskItem {
   eventName: string
   impact: string
   eventTimeUk: string
+  currency: string | null
   riskScore: number | null
   analystWarning: string | null
   forecast: string | null

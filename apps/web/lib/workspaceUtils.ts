@@ -517,26 +517,27 @@ export function historicalProfileRating(
   return 'NEUTRAL'
 }
 
-export type TodaysConditionsRating = 'SUPPORTIVE' | 'MIXED' | 'NEUTRAL' | 'UNSUPPORTIVE'
+export type TodaysConditionsRating = 'SUPPORTIVE' | 'MIXED' | 'CONFLICTING'
 
 export const CONDITIONS_RATING_CLASS: Record<TodaysConditionsRating, string> = {
   SUPPORTIVE: 'text-green-700',
   MIXED: 'text-amber-600',
-  NEUTRAL: 'text-muted-foreground',
-  UNSUPPORTIVE: 'text-red-600',
+  CONFLICTING: 'text-red-600',
 }
 
 /**
  * TODAY'S CONDITIONS rating. Combines the two objective signals this card
  * already computes elsewhere -- regime fit (isTrendingRegime/isRegimeAligned,
  * the same pair regimeFitRating() uses) and price location (zoneProximityClass,
- * the same function priceLocationRating() uses) -- into one read. Counter-trend
- * is always UNSUPPORTIVE (the strongest single negative signal); trend-aligned
- * + at-zone, or ranging + at-zone (the existing mean-reversion rule from
- * marketConditionsInterpretation), is SUPPORTIVE; trend-aligned but price not
- * yet at the preferred zone is MIXED (one signal good, one not there yet);
- * everything else is NEUTRAL. No thresholds here are new. Returns null when
- * there's no regime data at all.
+ * the same function priceLocationRating() uses) -- into one read. Counter-trend,
+ * or price sitting far from the preferred zone, is CONFLICTING (the strongest
+ * single negative signal); trend-aligned + at-zone, or ranging + at-zone (the
+ * existing mean-reversion rule from marketConditionsInterpretation), is
+ * SUPPORTIVE; everything else (trend-aligned but not yet at zone, or no strong
+ * signal either way) is MIXED -- some factors agree, others don't, or neither
+ * pillar has a clear read. Three tiers only, matching the redesign's SUPPORTIVE/
+ * MIXED/CONFLICTING taxonomy -- no thresholds here are new, only the label a
+ * given branch maps to. Returns null when there's no regime data at all.
  */
 export function todaysConditionsRating(
   direction: 'BUY' | 'SELL' | null, currentZone: string | null, preferredZone: string | null,
@@ -548,12 +549,12 @@ export function todaysConditionsRating(
   const proximity = zoneProximityClass(currentZone, preferredZone)
   const atZone = proximity === 'green'
 
-  if (trending && !aligned) return 'UNSUPPORTIVE'
+  if (trending && !aligned) return 'CONFLICTING'
   if (aligned && atZone) return 'SUPPORTIVE'
   if (!trending && atZone) return 'SUPPORTIVE'
   if (aligned && !atZone) return 'MIXED'
-  if (proximity === 'red') return 'UNSUPPORTIVE'
-  return 'NEUTRAL'
+  if (proximity === 'red') return 'CONFLICTING'
+  return 'MIXED'
 }
 
 type Polarity = 'positive' | 'neutral' | 'negative'
@@ -566,8 +567,8 @@ function historicalPolarity(r: HistoricalProfileRating | null): Polarity {
 
 function conditionsPolarity(r: TodaysConditionsRating | null): Polarity {
   if (r === 'SUPPORTIVE') return 'positive'
-  if (r === 'UNSUPPORTIVE') return 'negative'
-  return 'neutral' // MIXED, NEUTRAL, or no data
+  if (r === 'CONFLICTING') return 'negative'
+  return 'neutral' // MIXED or no data
 }
 
 function historicalClauseText(rating: HistoricalProfileRating | null, symbolDisplay: string, dirWord: string): string {
@@ -586,6 +587,18 @@ function historicalClauseText(rating: HistoricalProfileRating | null, symbolDisp
   }
 }
 
+/** "Your historical DOW SELL ideas show a strong positive edge from the Stretched
+ *  zone" -- the lead clause for the two hPol==='positive' synthesis branches, tying
+ *  the historical edge to the specific zone it was earned from (reuses zonePlainLabel,
+ *  no new vocabulary). */
+function historicalEdgeZoneClause(
+  rating: HistoricalProfileRating | null, symbolDisplay: string, dirWord: string, preferredZone: string | null,
+): string {
+  const strength = rating === 'STRONG FIT' ? 'a strong positive' : 'a positive'
+  const zonePhrase = preferredZone ? ` from the ${zonePlainLabel(preferredZone)} zone` : ''
+  return `Your historical ${symbolDisplay} ${dirWord} ideas show ${strength} edge${zonePhrase}`
+}
+
 function conditionsClauseText(rating: TodaysConditionsRating | null, trendState: string | null, adx14: number | null): string {
   const isRanging = trendState === 'RANGE' || (adx14 != null && adx14 < 15)
   switch (rating) {
@@ -595,7 +608,7 @@ function conditionsClauseText(rating: TodaysConditionsRating | null, trendState:
         : `today's market remains in a ${regimeTrendLabel(trendState, adx14).toLowerCase()}`
     case 'MIXED':
       return `today's market conditions provide only partial support`
-    case 'UNSUPPORTIVE':
+    case 'CONFLICTING':
       return `today's conditions work against the directional bias`
     default:
       return `today's market conditions are broadly neutral`
@@ -609,40 +622,57 @@ function capitalize(s: string): string {
 /**
  * "WHY THIS IS BEING RECOMMENDED" -- one to two sentences synthesising the two
  * evidence pillars. Never manufactures a positive read: if either pillar is
- * negative or the two disagree, the sentence says so explicitly rather than
- * defaulting to an upbeat tone. Built entirely from the two ratings above (which
- * are themselves built from existing thresholds) plus the plain-English trend
- * label already used elsewhere on this card -- no new data.
+ * negative, thin, or the two disagree, the sentence says so explicitly rather
+ * than defaulting to an upbeat tone. Critically, when the historical edge is
+ * positive but today's conditions conflict, the sentence doesn't just report the
+ * conflict and stop -- it explains *why* the setup still has a starting point
+ * (the zone the edge was earned from) and *what* would need to happen for it to
+ * become relevant (price reaching that zone), reusing zoneProximityClass/
+ * zonePlainLabel rather than inventing new language. Built entirely from the two
+ * ratings above (which are themselves built from existing thresholds) plus the
+ * plain-English trend/zone labels already used elsewhere on this card -- no new
+ * data, no new thresholds.
  */
 export function recommendationSynthesis(
   symbolDisplay: string, direction: 'BUY' | 'SELL' | null,
   historicalRating: HistoricalProfileRating | null, conditionsRating: TodaysConditionsRating | null,
   trendState: string | null, adx14: number | null,
+  currentZone: string | null, preferredZone: string | null,
 ): string {
   const dirWord = direction ?? ''
   const hPol = historicalPolarity(historicalRating)
   const cPol = conditionsPolarity(conditionsRating)
   const hClause = historicalClauseText(historicalRating, symbolDisplay, dirWord)
   const cClause = conditionsClauseText(conditionsRating, trendState, adx14)
+  const atZone = zoneProximityClass(currentZone, preferredZone) === 'green'
+  const approachVerb = direction === 'BUY' ? 'dips' : 'rallies'
 
   if (hPol === 'positive' && cPol === 'positive') {
     const strength = historicalRating === 'STRONG FIT' ? 'strong' : 'positive'
     return `This setup combines a ${strength} historical fit with supportive current conditions. ${capitalize(hClause)}, while ${cClause}.`
   }
   if (hPol === 'positive' && cPol === 'negative') {
-    return `${capitalize(hClause)}, but ${cClause} today — treat with caution.`
+    const lead = historicalEdgeZoneClause(historicalRating, symbolDisplay, dirWord, preferredZone)
+    if (atZone) {
+      return `${lead}. Price is already in the preferred entry area despite conflicting trend conditions — treat with extra caution.`
+    }
+    return `${lead}. Current trend conditions conflict with the ${dirWord} bias, so this is a conditional setup to review if price ${approachVerb} into the preferred entry area.`
+  }
+  if (hPol === 'positive' && cPol === 'neutral') {
+    const lead = historicalEdgeZoneClause(historicalRating, symbolDisplay, dirWord, preferredZone)
+    return `${lead}. However, ${cClause}, so this stays a conditional setup to review rather than an immediate entry.`
   }
   if (cPol === 'positive' && hPol === 'negative') {
-    return `${capitalize(cClause)}, but ${hClause} — treat with caution.`
+    return `${capitalize(cClause)}, but ${hClause} — today's conditions look favourable, though your own record in this setup argues for caution.`
   }
-  if (hPol === 'positive') {
-    return `${capitalize(hClause)}, although ${cClause}.`
+  if (cPol === 'positive' && hPol === 'neutral') {
+    return `${capitalize(cClause)}, though ${hClause} — this is more about today's conditions than a proven personal edge, so weight it accordingly.`
   }
-  if (cPol === 'positive') {
-    return `${capitalize(cClause)}, although ${hClause}.`
+  if (hPol === 'negative' && cPol === 'negative') {
+    return `Neither your historical record nor today's conditions support this setup: ${hClause}, and ${cClause}. This is a weak candidate — consider skipping unless something changes.`
   }
   if (hPol === 'negative' || cPol === 'negative') {
     return `Neither your historical record nor today's conditions strongly support this setup: ${hClause}, and ${cClause}. Review carefully before proceeding.`
   }
-  return `The evidence for this setup is mixed: ${hClause}, and ${cClause}.`
+  return `The evidence for this setup is mixed: ${hClause}, and ${cClause}. Neither pillar gives a strong signal either way — treat this as a lower-conviction idea and rely on your own read of the market.`
 }

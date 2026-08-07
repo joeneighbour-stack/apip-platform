@@ -15,7 +15,10 @@ export function RecommendationSynthesis({ row }: Props) {
   const symbolDisplay = formatSymbolForDisplay(row.symbol, row.assetClass)
   const historicalRating = historicalProfileRating(row.historicalEdge.avgR, row.historicalEdge.winRate, row.historicalEdge.quality, row.historicalEdge.trades)
   const conditionsRating = todaysConditionsRating(row.direction, row.currentZone, row.preferredZone, row.regime?.trendState ?? null, row.regime?.adx14 ?? null)
-  const synthesis = recommendationSynthesis(symbolDisplay, row.direction, historicalRating, conditionsRating, row.regime?.trendState ?? null, row.regime?.adx14 ?? null)
+  const synthesis = recommendationSynthesis(
+    symbolDisplay, row.direction, historicalRating, conditionsRating,
+    row.regime?.trendState ?? null, row.regime?.adx14 ?? null, row.currentZone, row.preferredZone,
+  )
 
   return (
     <div>

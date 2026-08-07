@@ -34,7 +34,7 @@ export function EvidencePillars({ row }: Props) {
       <div className="sm:pr-6 sm:border-r sm:border-border space-y-2">
         <div className="flex items-baseline justify-between">
           <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Your Historical Profile</p>
-          {historicalRating && <span className={`text-xs font-semibold ${HISTORICAL_RATING_CLASS[historicalRating]}`}>{historicalRating}</span>}
+          {historicalRating && <span className={`text-xs font-semibold px-1.5 py-0.5 rounded bg-current/10 ${HISTORICAL_RATING_CLASS[historicalRating]}`}>{historicalRating}</span>}
         </div>
         {edge.trades > 0 ? (
           <div className="space-y-1">
@@ -46,12 +46,15 @@ export function EvidencePillars({ row }: Props) {
         ) : (
           <p className="text-xs text-muted-foreground">No trade history yet for this market.</p>
         )}
+        {row.personalisation && (
+          <p className="text-xs text-muted-foreground pt-1">{row.personalisation}</p>
+        )}
       </div>
 
       <div className="space-y-2">
         <div className="flex items-baseline justify-between">
           <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Today&apos;s Conditions</p>
-          {conditionsRating && <span className={`text-xs font-semibold ${CONDITIONS_RATING_CLASS[conditionsRating]}`}>{conditionsRating}</span>}
+          {conditionsRating && <span className={`text-xs font-semibold px-1.5 py-0.5 rounded bg-current/10 ${CONDITIONS_RATING_CLASS[conditionsRating]}`}>{conditionsRating}</span>}
         </div>
         {regime ? (
           <div className="space-y-1">

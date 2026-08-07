@@ -86,7 +86,6 @@ export function SupportingEvidence({ row, recommendationsGeneratedToday, markets
               {row.direction && (
                 <p>Basis: <span className="text-foreground">{row.direction} · {row.symbol} · {historicalEdgeConditionsLabel(row.historicalEdge.tier)}</span></p>
               )}
-              {row.personalisation && <p>{row.personalisation}</p>}
               {row.coachingNote && <p>Coaching note: <span className="text-foreground">{row.coachingNote}</span></p>}
             </div>
           </SubSection>

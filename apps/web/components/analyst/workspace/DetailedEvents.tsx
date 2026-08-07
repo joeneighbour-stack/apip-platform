@@ -31,7 +31,6 @@ export function DetailedEvents({ eventRiskItems, eventRiskOverflowCount }: Props
     <div>
       {groups.length > 0 && (
         <div>
-          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Economic Calendar &mdash; Today</p>
           <div className="space-y-2">
             {groups.map(group => (
               <div key={group.eventTimeUk} className="rounded-md border border-border bg-card px-2.5 py-1.5">

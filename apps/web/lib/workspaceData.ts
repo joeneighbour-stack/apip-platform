@@ -110,6 +110,7 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
         eventName: event.event_name,
         impact: event.impact,
         eventTimeUk: event.event_time_uk,
+        currency: event.currency ?? null,
         riskScore: er.risk_score != null ? Number(er.risk_score) : null,
         analystWarning: er.analyst_warning ?? null,
         forecast: event.forecast ?? null,
