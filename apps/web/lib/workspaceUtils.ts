@@ -596,6 +596,13 @@ function isTrendingRegime(trendState: string | null, adx14: number | null): bool
   return adx14 != null && adx14 >= 25 && (trendState === 'TRENDING_UP' || trendState === 'TRENDING_DOWN')
 }
 
+/** Section 4/6 -- "Trending"/"Ranging" market label, per the redesign's simplified
+ *  two-word framing (regimeTrendLabel() above gives the fuller "Strong Uptrend" style
+ *  used elsewhere; this is deliberately blunter for the evidence-block heading). */
+export function isTrendingRegimeLabel(trendState: string | null, adx14: number | null): 'Trending' | 'Ranging' {
+  return isTrendingRegime(trendState, adx14) ? 'Trending' : 'Ranging'
+}
+
 function isRegimeAligned(direction: 'BUY' | 'SELL' | null, trendState: string | null): boolean {
   return (trendState === 'TRENDING_UP' && direction === 'BUY') || (trendState === 'TRENDING_DOWN' && direction === 'SELL')
 }
