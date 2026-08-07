@@ -2,7 +2,6 @@ import { groupEventsByTime, impactBadge } from '@/lib/workspaceUtils'
 import type { EventRiskItem } from './types'
 
 interface Props {
-  newsHeadline: string | null
   eventRiskItems: EventRiskItem[]
   eventRiskOverflowCount: number
 }
@@ -19,24 +18,17 @@ function fpaLine(e: EventRiskItem): string | null {
   return parts.length > 0 ? parts.join('   ') : null
 }
 
-// Section 9 -- market news moved here from the card header (supporting context,
-// not a primary signal), plus the economic calendar grouped by exact release
-// time, with forecast/previous/actual shown per indicator instead of the old
-// repeated "Be aware of potential volatility" boilerplate.
-export function DetailedEvents({ newsHeadline, eventRiskItems, eventRiskOverflowCount }: Props) {
-  if (!newsHeadline && eventRiskItems.length === 0) return null
+// Section 9 -- economic calendar grouped by exact release time, with forecast/
+// previous/actual shown per indicator instead of the old repeated "Be aware of
+// potential volatility" boilerplate. Market news lives higher up the card now
+// (right below the header), not here -- this is calendar detail only.
+export function DetailedEvents({ eventRiskItems, eventRiskOverflowCount }: Props) {
+  if (eventRiskItems.length === 0) return null
 
   const groups = groupEventsByTime(eventRiskItems)
 
   return (
-    <div className="space-y-3">
-      {newsHeadline && (
-        <div>
-          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">Market Context</p>
-          <p className="text-xs text-foreground italic">&ldquo;{newsHeadline}&rdquo;</p>
-        </div>
-      )}
-
+    <div>
       {groups.length > 0 && (
         <div>
           <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Economic Calendar &mdash; Today</p>

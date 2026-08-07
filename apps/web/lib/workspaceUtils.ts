@@ -320,17 +320,18 @@ export function atrDistanceFromEntry(entryMid: number | null, range: [number, nu
   return Math.abs(nearEdge - entryMid) / atr14
 }
 
-/** Plain-language distance from current price to the entry range, in ATR units.
- *  Matches runEngineSession.ts's ENTRY_ALREADY_PASSED check, which uses atr20. */
+/** Quantitative distance from current price to the entry range, in ATR units --
+ *  e.g. "0.3 ATR above entry", not a vague "near"/"far" read. Matches
+ *  runEngineSession.ts's ENTRY_ALREADY_PASSED check, which uses atr20. */
 export function entryDistanceLanguage(
   currentPrice: number | null, entryLow: number | null, entryHigh: number | null, atr20: number | null,
 ): string | null {
   if (currentPrice == null || entryLow == null || entryHigh == null || !atr20 || atr20 <= 0) return null
-  if (currentPrice >= entryLow && currentPrice <= entryHigh) return 'Price is inside the preferred entry zone'
+  if (currentPrice >= entryLow && currentPrice <= entryHigh) return 'At preferred entry zone'
   const entryMid = (entryLow + entryHigh) / 2
   const distanceAtr = Math.abs(currentPrice - entryMid) / atr20
   const direction = currentPrice > entryMid ? 'above' : 'below'
-  return `Price is ${distanceAtr.toFixed(1)} ATRs ${direction} the preferred entry zone`
+  return `${distanceAtr.toFixed(1)} ATR ${direction} entry`
 }
 
 /**
@@ -423,14 +424,18 @@ export function regimeAlignmentEvidence(direction: 'BUY' | 'SELL' | null, trendS
   return { status: 'neutral', label: 'Ranging market' }
 }
 
-/** Price location: same green/amber/red/neutral thresholds as zoneProximityClass. */
-export function priceLocationEvidence(currentZone: string | null, preferredZone: string | null): EvidenceIndicator | null {
+/** Price location: same green/amber/red/neutral thresholds as zoneProximityClass.
+ *  Prefers the quantitative ATR distance (e.g. "0.3 ATR above entry") over a vague
+ *  "near"/"far" read when it's available (entryDistanceLanguage needs atr20, which
+ *  isn't always present -- the qualitative label is the fallback, not the default). */
+export function priceLocationEvidence(
+  currentZone: string | null, preferredZone: string | null, distanceLabel?: string | null,
+): EvidenceIndicator | null {
   if (!currentZone || !preferredZone) return null
   const cls = zoneProximityClass(currentZone, preferredZone)
   if (cls === 'neutral') return null
-  const label = cls === 'green' ? 'Price at preferred zone'
-    : cls === 'amber' ? 'Price near preferred zone'
-    : 'Price far from preferred zone'
+  const label = distanceLabel
+    ?? (cls === 'green' ? 'Price at preferred zone' : cls === 'amber' ? 'Price near preferred zone' : 'Price far from preferred zone')
   return { status: cls, label }
 }
 
@@ -450,11 +455,24 @@ export function entryStatusEvidence(analystAction: string | null, isExpired: boo
   return { status: 'neutral', label: 'Entry not triggered' }
 }
 
-/** Historical fit: green if avgR>0.10 & winRate>0.50, amber if avgR>0 & winRate>0.45,
- *  red if avgR<=0, hidden (null) if there's no historical data at all. */
-export function historicalFitEvidence(avgR: number | null, winRate: number | null): EvidenceIndicator | null {
+/** True when the sample behind a historical edge is too thin to trust at face value --
+ *  LOW profile_quality, or (when quality wasn't computed at all, e.g. the zone/market_only
+ *  tiers) fewer than 20 trades, matching MEDIUM_CONFIDENCE_MIN_TRADES elsewhere. */
+export function isLowSampleEdge(quality: string | null, trades: number): boolean {
+  return quality === 'LOW' || (quality == null && trades < 20)
+}
+
+/** Historical fit: distinguishes WHETHER the result is positive (avgR) from HOW MUCH to
+ *  trust it (sample quality) -- a positive result on a thin sample reads as "positive
+ *  historical evidence · low sample", not "strong historical fit", so a small sample
+ *  is never overstated as a strong signal. red if avgR<=0 regardless of sample size
+ *  (a negative result is a negative result); hidden (null) if there's no data at all. */
+export function historicalFitEvidence(
+  avgR: number | null, winRate: number | null, quality: string | null, trades: number,
+): EvidenceIndicator | null {
   if (avgR == null) return null
   if (avgR <= 0) return { status: 'red', label: 'Weak historical fit' }
+  if (isLowSampleEdge(quality, trades)) return { status: 'amber', label: 'Positive historical evidence · low sample' }
   if (avgR > 0.10 && winRate != null && winRate > 0.50) return { status: 'green', label: 'Strong historical fit' }
   if (avgR > 0 && winRate != null && winRate > 0.45) return { status: 'amber', label: 'Moderate historical fit' }
   return { status: 'amber', label: 'Weak historical fit' }
@@ -526,6 +544,26 @@ export function historicalEvidenceRating(avgR: number): 'Positive' | 'Neutral' |
   if (avgR <= 0) return 'Weak'
   if (avgR > 0.10) return 'Positive'
   return 'Neutral'
+}
+
+/** "comparable conditions" / "zone-matched conditions" / "all conditions" -- shared by
+ *  the Why This Setup summary line and the full Historical Evidence strip, so the two
+ *  name the same tier the same way. */
+export function historicalEdgeConditionsLabel(tier: string): string {
+  switch (tier) {
+    case 'zone': return 'zone-matched conditions'
+    case 'regime_direction': return 'comparable conditions'
+    default: return 'all conditions'
+  }
+}
+
+/** Section 4 Block 3, condensed -- a single qualitative sentence, no numbers (the
+ *  numbers -- win rate/expectancy/sample/quality -- live in the Historical Evidence
+ *  strip below; this just says whether the edge is positive and how much to trust it). */
+export function historicalEvidenceSummary(avgR: number, quality: string | null, trades: number, tier: string): string {
+  if (avgR <= 0) return `No positive edge in ${historicalEdgeConditionsLabel(tier)}.`
+  const lowSample = isLowSampleEdge(quality, trades)
+  return `Positive edge in ${historicalEdgeConditionsLabel(tier)}${lowSample ? ' (low sample)' : ''}.`
 }
 
 /** Section 6 -- Market Conditions one-line interpretation, per the spec's

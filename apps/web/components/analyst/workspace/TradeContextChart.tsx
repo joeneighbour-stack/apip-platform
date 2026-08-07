@@ -3,7 +3,7 @@ import { ResponsiveContainer, ComposedChart, Bar, XAxis, YAxis, Tooltip, Referen
 import { chartDateLabel, parseGuidanceRange } from '@/lib/workspaceUtils'
 import type { PriceBar, EventRiskItem } from './types'
 
-const CHART_HEIGHT = 220
+const CHART_HEIGHT = 140
 
 interface Props {
   data: PriceBar[]
@@ -80,12 +80,15 @@ export function TradeContextChart({
   const stopRange = parseGuidanceRange(riskRange)
   const targetRangeParsed = parseGuidanceRange(targetRange)
 
+  // Auto-fit around recent price action + entry/stop/target, not the raw 10-day
+  // extreme alone -- sensible padding (8%) keeps candles off the plot edges at this
+  // reduced height without exaggerating the visible range.
   const values = data.flatMap(d => [d.low, d.high])
   const candidates = [...values, entryLow, entryHigh, currentPrice, ...(stopRange ?? []), ...(targetRangeParsed ?? [])]
     .filter((v): v is number => v != null)
   const min = Math.min(...candidates)
   const max = Math.max(...candidates)
-  const pad = (max - min) * 0.05 || 1
+  const pad = (max - min) * 0.08 || 1
   const domain: [number, number] = [min - pad, max + pad]
 
   const lastDate = data[data.length - 1]!.date
@@ -128,8 +131,8 @@ export function TradeContextChart({
           )}
           {currentPrice != null && (
             <ReferenceLine
-              y={currentPrice} stroke="currentColor" strokeDasharray="2 3" strokeWidth={1} className="text-foreground"
-              label={{ value: currentPrice.toFixed(precision), position: 'right', fontSize: 9, fill: 'currentColor' }}
+              y={currentPrice} stroke="currentColor" strokeDasharray="2 3" strokeWidth={1.5} className="text-foreground"
+              label={{ value: `● ${currentPrice.toFixed(precision)}`, position: 'right', fontSize: 9, fontWeight: 600, fill: 'currentColor' }}
             />
           )}
           {highImpactEvent && (

@@ -30,10 +30,10 @@ export function RecommendationHeader({ row }: Props) {
 
   const indicators = [
     regimeAlignmentEvidence(row.direction, row.regime?.trendState ?? null),
-    priceLocationEvidence(row.currentZone, row.preferredZone),
+    priceLocationEvidence(row.currentZone, row.preferredZone, row.distanceLanguage),
     eventRiskEvidence(row.eventRiskItems),
     entryStatusEvidence(row.analystAction, isExpired),
-    historicalFitEvidence(row.historicalEdge.avgR, row.historicalEdge.winRate),
+    historicalFitEvidence(row.historicalEdge.avgR, row.historicalEdge.winRate, row.historicalEdge.quality, row.historicalEdge.trades),
   ].filter((i): i is EvidenceIndicator => i !== null)
 
   return (
