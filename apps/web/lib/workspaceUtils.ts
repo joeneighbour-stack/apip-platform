@@ -480,3 +480,209 @@ export function fxPipCount(range: number, displayPrecision: number | null): numb
   const pipDecimalPlaces = Math.max(displayPrecision - 1, 0)
   return Math.round(range / Math.pow(10, -pipDecimalPlaces))
 }
+
+// ============================================================================
+// Recommendation card redesign -- evidence indicators, block ratings, and
+// event grouping. All pure functions over already-fetched WorkspaceRow data;
+// no new data sources. Colour is restricted to the same 4-value palette used
+// throughout the redesign (green/amber/red/neutral) -- "grey" states from the
+// spec (e.g. expired) render as 'neutral' with a distinguishing label, not a
+// 5th colour, per the design principle that colour is used only for
+// supportive/caution/risk/everything-else.
+// ============================================================================
+
+export type EvidenceStatus = 'green' | 'amber' | 'red' | 'neutral'
+
+export interface EvidenceIndicator {
+  status: EvidenceStatus
+  label: string
+}
+
+export const EVIDENCE_STATUS_CLASS: Record<EvidenceStatus, string> = {
+  green: 'text-green-700',
+  amber: 'text-amber-600',
+  red: 'text-red-600',
+  neutral: 'text-muted-foreground',
+}
+
+export const EVIDENCE_STATUS_ICON: Record<EvidenceStatus, string> = {
+  green: '✓',
+  amber: '⚠',
+  red: '⚠',
+  neutral: '○',
+}
+
+/** Regime aligned: green if trend direction matches trade direction, amber if
+ *  counter-trend, neutral (hidden by caller) if no regime/direction data. */
+export function regimeAlignmentEvidence(direction: 'BUY' | 'SELL' | null, trendState: string | null): EvidenceIndicator | null {
+  if (!direction || !trendState) return null
+  if (trendState === 'TRENDING_UP') {
+    return direction === 'BUY' ? { status: 'green', label: 'Regime aligned' } : { status: 'amber', label: 'Counter-trend' }
+  }
+  if (trendState === 'TRENDING_DOWN') {
+    return direction === 'SELL' ? { status: 'green', label: 'Regime aligned' } : { status: 'amber', label: 'Counter-trend' }
+  }
+  return { status: 'neutral', label: 'Ranging market' }
+}
+
+/** Price location: same green/amber/red/neutral thresholds as zoneProximityClass. */
+export function priceLocationEvidence(currentZone: string | null, preferredZone: string | null): EvidenceIndicator | null {
+  if (!currentZone || !preferredZone) return null
+  const cls = zoneProximityClass(currentZone, preferredZone)
+  if (cls === 'neutral') return null
+  const label = cls === 'green' ? 'Price at preferred zone'
+    : cls === 'amber' ? 'Price near preferred zone'
+    : 'Price far from preferred zone'
+  return { status: cls, label }
+}
+
+/** Event risk: red if any HIGH-impact event today, amber if events exist but none
+ *  are HIGH impact, hidden (null) if no relevant events at all. */
+export function eventRiskEvidence(eventRiskItems: { impact: string }[]): EvidenceIndicator | null {
+  if (eventRiskItems.length === 0) return null
+  const hasHigh = eventRiskItems.some(e => e.impact === 'HIGH')
+  return hasHigh ? { status: 'red', label: 'Major event risk' } : { status: 'amber', label: 'Event risk today' }
+}
+
+/** Entry status: green once price is at the preferred zone (ENTER_NOW), neutral
+ *  while waiting, neutral-with-different-label once the session has expired. */
+export function entryStatusEvidence(analystAction: string | null, isExpired: boolean): EvidenceIndicator {
+  if (isExpired) return { status: 'neutral', label: 'Session expired' }
+  if (analystAction === 'ENTER_NOW') return { status: 'green', label: 'Entry triggered' }
+  return { status: 'neutral', label: 'Entry not triggered' }
+}
+
+/** Historical fit: green if avgR>0.10 & winRate>0.50, amber if avgR>0 & winRate>0.45,
+ *  red if avgR<=0, hidden (null) if there's no historical data at all. */
+export function historicalFitEvidence(avgR: number | null, winRate: number | null): EvidenceIndicator | null {
+  if (avgR == null) return null
+  if (avgR <= 0) return { status: 'red', label: 'Weak historical fit' }
+  if (avgR > 0.10 && winRate != null && winRate > 0.50) return { status: 'green', label: 'Strong historical fit' }
+  if (avgR > 0 && winRate != null && winRate > 0.45) return { status: 'amber', label: 'Moderate historical fit' }
+  return { status: 'amber', label: 'Weak historical fit' }
+}
+
+/** Header status line: LEVELS OUTDATED > SESSION EXPIRED > ENTRY PASSED > ENTRY
+ *  TRIGGERED > WAITING FOR ENTRY, in that priority order. */
+export function recommendationStatusLabel(
+  isDoNotUse: boolean, isEntryPassed: boolean, analystAction: string | null, isExpired: boolean,
+): string {
+  if (isDoNotUse) return 'LEVELS OUTDATED'
+  if (isExpired) return 'SESSION EXPIRED'
+  if (isEntryPassed) return 'ENTRY PASSED'
+  if (analystAction === 'ENTER_NOW') return 'ENTRY TRIGGERED'
+  return 'WAITING FOR ENTRY'
+}
+
+export type BlockRating = 'Strong' | 'Neutral' | 'Weak' | 'Good' | 'Caution' | 'Positive'
+
+export const BLOCK_RATING_CLASS: Record<BlockRating, string> = {
+  Strong: 'text-green-700', Good: 'text-green-700', Positive: 'text-green-700',
+  Neutral: 'text-muted-foreground',
+  Caution: 'text-amber-600',
+  Weak: 'text-red-600',
+}
+
+/** Section 4 Block 1 -- Price Location rating. Caller only invokes this once
+ *  currentZone/preferredZone are both known to be present. */
+export function priceLocationRating(currentZone: string, preferredZone: string): 'Strong' | 'Neutral' | 'Weak' {
+  const cls = zoneProximityClass(currentZone, preferredZone)
+  if (cls === 'green') return 'Strong'
+  if (cls === 'amber') return 'Neutral'
+  return 'Weak'
+}
+
+function isTrendingRegime(trendState: string | null, adx14: number | null): boolean {
+  return adx14 != null && adx14 >= 25 && (trendState === 'TRENDING_UP' || trendState === 'TRENDING_DOWN')
+}
+
+function isRegimeAligned(direction: 'BUY' | 'SELL' | null, trendState: string | null): boolean {
+  return (trendState === 'TRENDING_UP' && direction === 'BUY') || (trendState === 'TRENDING_DOWN' && direction === 'SELL')
+}
+
+/** Section 4 Block 2 -- Regime Fit rating. */
+export function regimeFitRating(direction: 'BUY' | 'SELL' | null, trendState: string | null, adx14: number | null): 'Good' | 'Neutral' | 'Caution' {
+  if (!isTrendingRegime(trendState, adx14)) return 'Neutral'
+  return isRegimeAligned(direction, trendState) ? 'Good' : 'Caution'
+}
+
+/** Section 4 Block 2 / Section 6 -- one-line regime interpretation, per the
+ *  spec's explicit ranging / trending-aligned / trending-counter rule order. */
+export function regimeFitInterpretation(direction: 'BUY' | 'SELL' | null, trendState: string | null, adx14: number | null): string {
+  if (!isTrendingRegime(trendState, adx14)) return 'Range conditions favour mean-reversion setups.'
+  return isRegimeAligned(direction, trendState)
+    ? 'Trend conditions support directional bias.'
+    : 'Setup trades against prevailing trend — lower probability.'
+}
+
+/** Section 4 Block 3 -- Historical Evidence rating. Caller only invokes this
+ *  once avgR is known to be non-null (i.e. some historical data exists). */
+export function historicalEvidenceRating(avgR: number): 'Positive' | 'Neutral' | 'Weak' {
+  if (avgR <= 0) return 'Weak'
+  if (avgR > 0.10) return 'Positive'
+  return 'Neutral'
+}
+
+/** Section 6 -- Market Conditions one-line interpretation, per the spec's
+ *  explicit rule priority: ranging+aligned, trending+aligned, trending+counter,
+ *  low volatility, else none. */
+export function marketConditionsInterpretation(
+  direction: 'BUY' | 'SELL' | null, currentZone: string | null, preferredZone: string | null,
+  trendState: string | null, adx14: number | null, atrPercentile: number | null,
+): string | null {
+  const zoneAligned = currentZone != null && preferredZone != null && currentZone === preferredZone
+  const isRanging = trendState === 'RANGE' || (adx14 != null && adx14 < 15)
+  if (isRanging && zoneAligned) return 'Range conditions support mean-reversion.'
+  if (isTrendingRegime(trendState, adx14)) {
+    return isRegimeAligned(direction, trendState)
+      ? 'Trend direction supports this setup.'
+      : 'Prevailing trend works against this setup.'
+  }
+  if (atrPercentile != null && atrPercentile <= 20) return 'Compressed volatility — potential for directional move.'
+  return null
+}
+
+interface GroupableEvent {
+  eventName: string
+  impact: string
+  eventTimeUk: string
+  riskScore: number | null
+  analystWarning: string | null
+  forecast: string | null
+  previous: string | null
+  actual: string | null
+}
+
+export interface EventGroup<T extends GroupableEvent = GroupableEvent> {
+  eventTimeUk: string
+  maxImpact: string
+  items: T[]
+}
+
+/** Groups same-market events by exact timestamp (e.g. a data release bundle
+ *  publishing several indicators at once), for Section 9's grouped calendar
+ *  and Section 2's major-event-warning summary line. No collective release
+ *  name exists in economic_calendar_events (only per-indicator event_name),
+ *  so groups are identified by time, not a fabricated umbrella title. */
+export function groupEventsByTime<T extends GroupableEvent>(items: T[]): EventGroup<T>[] {
+  const map = new Map<string, T[]>()
+  for (const item of items) {
+    if (!map.has(item.eventTimeUk)) map.set(item.eventTimeUk, [])
+    map.get(item.eventTimeUk)!.push(item)
+  }
+  const groups: EventGroup<T>[] = [...map.entries()].map(([eventTimeUk, group]) => ({
+    eventTimeUk,
+    maxImpact: group.some(e => e.impact === 'HIGH') ? 'HIGH' : group.some(e => e.impact === 'MEDIUM') ? 'MEDIUM' : 'LOW',
+    items: group,
+  }))
+  groups.sort((a, b) => a.eventTimeUk.localeCompare(b.eventTimeUk))
+  return groups
+}
+
+export function impactBadge(impact: string): string {
+  switch (impact) {
+    case 'HIGH': return '⚠⚠ HIGH'
+    case 'MEDIUM': return '⚠ MEDIUM'
+    default: return 'LOW'
+  }
+}

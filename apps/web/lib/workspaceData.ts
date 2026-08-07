@@ -1,9 +1,12 @@
 import { createClient, createAdminClient } from '@/lib/supabase/server'
-import { entryDistanceLanguage, parseGuidanceRange, atrDistanceFromEntry, marketCurrencies, computeZoneBoundaries } from '@/lib/workspaceUtils'
+import { entryDistanceLanguage, parseGuidanceRange, atrDistanceFromEntry, marketCurrencies, computeZoneBoundaries, trendLabelFull } from '@/lib/workspaceUtils'
 import type { WorkspaceRow, RegimeInfo, EventRiskItem, HistoricalEdge, PriceBar } from '@/components/analyst/workspace/types'
 
 const EVENT_CAP = 4
-const CHART_TRADING_DAYS = 3
+// Trade context chart shows 10 trading days (redesign spec). Fetched over a wider
+// 20-calendar-day cutoff and sliced below, same "fetch wide, slice narrow" reasoning
+// as before -- 10 calendar days isn't reliably 10 TRADING days across a holiday week.
+const CHART_TRADING_DAYS = 10
 
 export interface WorkspaceData {
   rows: WorkspaceRow[]
@@ -11,6 +14,10 @@ export interface WorkspaceData {
   marketsWithEventRisk: number
   yesterdayR: number
   closedYesterdayCount: number
+  // Section 4 selection funnel -- total opportunities/recommendations generated
+  // across ALL analysts today (any session), via adminDb since opportunities RLS
+  // scopes ANALYST to their own assigned rows only (migrations/002_rls.sql).
+  recommendationsGeneratedToday: number
 }
 
 // Shared by the analyst's own workspace (/dashboard/analyst, their own analyst_id) and the
@@ -36,7 +43,7 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
   const { data: allRecs } = await adminDb
     .from('coaching_recommendations')
     .select(`
-      recommendation_id, entry_range_low, entry_range_high,
+      recommendation_id, opportunity_id, entry_range_low, entry_range_high,
       risk_range, target_range, trigger_probability, expected_r,
       coaching_note, shown_at,
       opportunity:opportunity_id (
@@ -172,11 +179,11 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
     if (!priorDayByMarket.has(row.market_id)) priorDayByMarket.set(row.market_id, row)
   }
 
-  // Last 3 TRADING days of OHLC for the detail card's price chart. Fetched over a wider
-  // 10-calendar-day cutoff and sliced to the last 3 rows per market below, rather than
-  // gte'ing "3 days ago" directly: a pure 3-calendar-day cutoff would return only 0-1
-  // trading days right after a weekend or holiday.
-  const priceHistoryFetchStart = new Date(Date.now() - 10 * 86400000).toISOString().slice(0, 10)
+  // Last 10 TRADING days of OHLC for the trade context chart. Fetched over a wider
+  // 20-calendar-day cutoff and sliced to the last 10 rows per market below, rather than
+  // gte'ing "10 days ago" directly: a pure 10-calendar-day cutoff would return fewer than
+  // 10 trading days across a week that includes a weekend or holiday.
+  const priceHistoryFetchStart = new Date(Date.now() - 20 * 86400000).toISOString().slice(0, 10)
   const { data: priceHistoryRows } = marketIds.length > 0
     ? await supabase
         .from('market_state_daily')
@@ -272,42 +279,88 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
   // (actual_trades.entry_zone) is the only place a genuine zone-scoped edge could come
   // from, and is likewise unpopulated on every row today; wired up to activate
   // automatically the moment either data source starts carrying real zone values.
+  //
+  // Fetched as an ARRAY per (market, direction), not a single row: generateAnalystProfiles.ts
+  // writes one row PER REGIME (profile_data.regime = TRENDING_UP/TRENDING_DOWN/RANGE/MIXED)
+  // whenever regime-specific data exists, and only falls back to a single regime-agnostic
+  // row when it doesn't -- so "this analyst's overall record for market+direction" has to be
+  // computed by blending across whichever rows exist, not read off one row directly.
   const { data: profileRows } = await adminDb
     .from('analyst_profiles')
     .select('market_id, direction, profile_data')
     .eq('analyst_id', analystId)
     .in('market_id', marketIds.length > 0 ? marketIds : [''])
 
-  const profileByMarketDirection = new Map<string, any>()
+  const profilesByMarketDirection = new Map<string, any[]>()
   for (const p of (profileRows ?? []) as any[]) {
-    if (!p.direction) continue
-    profileByMarketDirection.set(`${p.market_id}::${p.direction}`, p.profile_data ?? {})
+    if (!p.direction || !p.profile_data) continue
+    const key = `${p.market_id}::${p.direction}`
+    if (!profilesByMarketDirection.has(key)) profilesByMarketDirection.set(key, [])
+    profilesByMarketDirection.get(key)!.push(p.profile_data)
   }
 
-  function historicalEdge(marketId: string, direction: string | null, zone: string | null): HistoricalEdge {
+  // Trade-count-weighted blend across every profile row for a market+direction,
+  // regardless of regime -- "all conditions", not just whichever row happened to be
+  // fetched last. Quality is taken from whichever single row has the most trades (a
+  // representative pick, not a re-derived combined threshold the source data doesn't state).
+  function blendProfiles(rows: any[]): { avgR: number; winRate: number | null; trades: number; quality: string | null } | null {
+    const withTrades = rows.filter(r => (r.trade_count ?? 0) > 0)
+    if (withTrades.length === 0) return null
+    const totalTrades = withTrades.reduce((s, r) => s + r.trade_count, 0)
+    const avgR = withTrades.reduce((s, r) => s + (r.avg_r ?? 0) * r.trade_count, 0) / totalTrades
+    const withWinRate = withTrades.filter(r => r.win_rate != null)
+    const winRate = withWinRate.length > 0
+      ? withWinRate.reduce((s, r) => s + r.win_rate * r.trade_count, 0) / withWinRate.reduce((s, r) => s + r.trade_count, 0)
+      : null
+    const mostTrades = [...withTrades].sort((a, b) => b.trade_count - a.trade_count)[0]
+    return { avgR, winRate, trades: totalTrades, quality: mostTrades?.profile_quality ?? null }
+  }
+
+  function regimeMatchedProfile(rows: any[], trendState: string | null): { avgR: number; winRate: number | null; trades: number; quality: string | null; regime: string } | null {
+    if (!trendState) return null
+    const match = rows.find(r => r.regime === trendState && (r.trade_count ?? 0) > 0)
+    if (!match) return null
+    return { avgR: match.avg_r ?? 0, winRate: match.win_rate ?? null, trades: match.trade_count, quality: match.profile_quality ?? null, regime: trendState }
+  }
+
+  function historicalEdge(marketId: string, direction: string | null, zone: string | null, trendState: string | null): HistoricalEdge {
     if (direction && zone) {
       const z = byZone.get(`${marketId}::${direction}::${zone}`)
       if (z && z.trades > 0) {
-        return { tier: 'zone', avgR: z.totalR / z.trades, winRate: z.wins / z.trades, trades: z.trades, quality: null }
+        return { tier: 'zone', avgR: z.totalR / z.trades, winRate: z.wins / z.trades, trades: z.trades, quality: null, regimeLabel: null }
       }
     }
     if (direction) {
-      const profile = profileByMarketDirection.get(`${marketId}::${direction}`)
-      if (profile && profile.trade_count > 0) {
-        return {
-          tier: 'market_direction',
-          avgR: profile.avg_r ?? null,
-          winRate: profile.win_rate ?? null,
-          trades: profile.trade_count,
-          quality: profile.profile_quality ?? null,
-        }
+      const rows = profilesByMarketDirection.get(`${marketId}::${direction}`) ?? []
+      const regimeMatch = regimeMatchedProfile(rows, trendState)
+      if (regimeMatch) {
+        return { tier: 'regime_direction', avgR: regimeMatch.avgR, winRate: regimeMatch.winRate, trades: regimeMatch.trades, quality: regimeMatch.quality, regimeLabel: regimeMatch.regime }
+      }
+      const blended = blendProfiles(rows)
+      if (blended) {
+        return { tier: 'market_direction', avgR: blended.avgR, winRate: blended.winRate, trades: blended.trades, quality: blended.quality, regimeLabel: null }
       }
     }
     const m = byMarket.get(marketId)
     if (m && m.trades > 0) {
-      return { tier: 'market_only', avgR: m.totalR / m.trades, winRate: m.wins / m.trades, trades: m.trades, quality: null }
+      return { tier: 'market_only', avgR: m.totalR / m.trades, winRate: m.wins / m.trades, trades: m.trades, quality: null, regimeLabel: null }
     }
-    return { tier: 'none', avgR: null, winRate: null, trades: 0, quality: null }
+    return { tier: 'none', avgR: null, winRate: null, trades: 0, quality: null, regimeLabel: null }
+  }
+
+  // Section 4 Block 4 ("Why You're Seeing This") -- personalised only when the analyst's
+  // regime-matched record for this market+direction is genuinely better than their blended
+  // "all conditions" record for the same market+direction. Never fabricated: both numbers
+  // come from the same analyst_profiles rows historicalEdge() above already reads.
+  function personalisationMessage(marketId: string, direction: string | null, trendState: string | null): string | null {
+    if (!direction) return null
+    const rows = profilesByMarketDirection.get(`${marketId}::${direction}`) ?? []
+    const regimeMatch = regimeMatchedProfile(rows, trendState)
+    const blended = blendProfiles(rows)
+    if (regimeMatch && blended && regimeMatch.avgR > blended.avgR) {
+      return `Your results in ${trendLabelFull(trendState).toLowerCase()} conditions have historically been above your overall average.`
+    }
+    return null
   }
 
   // Yesterday's trades, for the top-tile summary and the per-market "Your trade" line.
@@ -367,12 +420,15 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
     const hasEventRisk = marketId ? todayEventsByMarket.has(marketId) : false
     const allEventItems = marketId ? todayEventsByMarket.get(marketId) ?? [] : []
     const zoneBoundaries = marketId ? resolveZoneBoundaries(marketId, currentPrice) : null
+    const trendState = marketId ? regimeByMarket.get(marketId)?.trendState ?? null : null
 
     return {
       recommendationId: rec.recommendation_id,
+      opportunityId: rec.opportunity_id ?? null,
       symbol: market?.symbol ?? '—',
       marketId: marketId ?? '',
       direction,
+      analystAction: opp?.analyst_action ?? null,
       currentZone: opp?.current_zone ?? null,
       preferredZone: opp?.preferred_entry_zone ?? null,
       entryLow, entryHigh,
@@ -405,7 +461,10 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
         triggered: !!yTrade.triggered,
         resultR: yTrade.result_r != null ? Number(yTrade.result_r) : null,
       } : null,
-      historicalEdge: marketId ? historicalEdge(marketId, direction, opp?.preferred_entry_zone ?? null) : { tier: 'none', avgR: null, winRate: null, trades: 0, quality: null },
+      historicalEdge: marketId
+        ? historicalEdge(marketId, direction, opp?.preferred_entry_zone ?? null, trendState)
+        : { tier: 'none', avgR: null, winRate: null, trades: 0, quality: null, regimeLabel: null },
+      personalisation: marketId ? personalisationMessage(marketId, direction, trendState) : null,
       coachingNote: rec.coaching_note || null,
       shownAt: rec.shown_at,
       session: opp?.session ?? null,
@@ -422,11 +481,24 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
     return b.priorityScore - a.priorityScore
   })
 
+  // Section 4 selection funnel, "N with recommendations generated" -- total opportunities
+  // for today across every analyst/session, via adminDb (opportunities RLS scopes ANALYST
+  // to only their own assigned rows, migrations/002_rls.sql). Every opportunity gets exactly
+  // one recommendation_version at generation (runEngineSession.ts), so this count doubles as
+  // "recommendations generated." The upstream "N markets analysed" count has no DB home at
+  // all (SESSION_MARKETS is hardcoded engine config, never persisted) -- deliberately not
+  // queried here; the funnel UI shows that row as unavailable rather than a fabricated number.
+  const { count: recommendationsGeneratedToday } = await adminDb
+    .from('opportunities')
+    .select('opportunity_id', { count: 'exact', head: true })
+    .eq('date', today)
+
   return {
     rows,
     marketsToday: recommendations.length,
     marketsWithEventRisk,
     yesterdayR,
     closedYesterdayCount: closedYesterday.length,
+    recommendationsGeneratedToday: recommendationsGeneratedToday ?? 0,
   }
 }

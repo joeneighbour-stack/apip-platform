@@ -40,11 +40,14 @@ export interface YesterdayTradeOutcome {
 }
 
 export interface HistoricalEdge {
-  tier: 'zone' | 'market_direction' | 'market_only' | 'none'
+  tier: 'zone' | 'regime_direction' | 'market_direction' | 'market_only' | 'none'
   avgR: number | null
   winRate: number | null
   trades: number
   quality: string | null
+  // Set only when tier === 'regime_direction' -- the regime this edge is scoped to
+  // (e.g. "TRENDING_DOWN"), for the "comparable conditions" label.
+  regimeLabel: string | null
 }
 
 export interface PriceBar {
@@ -57,9 +60,11 @@ export interface PriceBar {
 
 export interface WorkspaceRow {
   recommendationId: string
+  opportunityId: string | null
   symbol: string
   marketId: string
   direction: 'BUY' | 'SELL' | null
+  analystAction: 'ENTER_NOW' | 'WAIT_FOR_PREFERRED_ZONE' | null
   currentZone: string | null
   preferredZone: string | null
   entryLow: number | null
@@ -84,6 +89,10 @@ export interface WorkspaceRow {
   previousDay: PreviousDaySummary | null
   yesterdayTradeOutcome: YesterdayTradeOutcome | null
   historicalEdge: HistoricalEdge
+  // Section 4 Block 4 ("Why You're Seeing This") -- derived from analyst_profiles
+  // only, never fabricated. Null when there's no meaningful differentiation to
+  // report (caller falls back to a neutral, still-honest statement in that case).
+  personalisation: string | null
   coachingNote: string | null
   shownAt: string
   session: string | null
