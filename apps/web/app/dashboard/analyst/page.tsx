@@ -40,7 +40,7 @@ export default async function AnalystWorkspacePage() {
     )
   }
 
-  const { rows, marketsToday, marketsWithEventRisk, yesterdayR, closedYesterdayCount } = await getWorkspaceData(user.analystId)
+  const { rows, marketsToday, marketsWithEventRisk, yesterdayR, closedYesterdayCount, recommendationsGeneratedToday } = await getWorkspaceData(user.analystId)
 
   return (
     <div className="space-y-6">
@@ -78,7 +78,7 @@ export default async function AnalystWorkspacePage() {
       {/* Coverage strip */}
       <section className="space-y-3">
         <h2 className="text-sm font-medium">Today&apos;s Recommendations</h2>
-        <CoverageStrip rows={rows} />
+        <CoverageStrip rows={rows} recommendationsGeneratedToday={recommendationsGeneratedToday} />
       </section>
     </div>
   )

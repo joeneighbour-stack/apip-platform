@@ -30,7 +30,7 @@ export default async function ManagementAnalystWorkspacePage({ params }: PagePro
 
   if (!analyst) notFound()
 
-  const { rows, marketsToday, marketsWithEventRisk, yesterdayR, closedYesterdayCount } = await getWorkspaceData(analystId)
+  const { rows, marketsToday, marketsWithEventRisk, yesterdayR, closedYesterdayCount, recommendationsGeneratedToday } = await getWorkspaceData(analystId)
 
   return (
     <div className="space-y-6">
@@ -71,7 +71,7 @@ export default async function ManagementAnalystWorkspacePage({ params }: PagePro
 
       <section className="space-y-3">
         <h2 className="text-sm font-medium">Today&apos;s Recommendations</h2>
-        <CoverageStrip rows={rows} />
+        <CoverageStrip rows={rows} recommendationsGeneratedToday={recommendationsGeneratedToday} />
       </section>
     </div>
   )

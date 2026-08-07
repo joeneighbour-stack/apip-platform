@@ -9,18 +9,6 @@ export const ZONE_LADDER_ORDER: AtrZone[] = ['TOO_HIGH', 'ZONE_4', 'ZONE_3', 'ZO
 // Ascending price order -- used for proximity distance, not display order.
 const ZONE_PRICE_ORDER: AtrZone[] = ['TOO_DEEP', 'ZONE_1', 'ZONE_2', 'ZONE_3', 'ZONE_4', 'TOO_HIGH']
 
-export function zoneLabel(zone: string | null): string {
-  switch (zone) {
-    case 'TOO_DEEP': return 'Too Deep'
-    case 'ZONE_1': return 'Zone 1'
-    case 'ZONE_2': return 'Zone 2'
-    case 'ZONE_3': return 'Zone 3'
-    case 'ZONE_4': return 'Zone 4'
-    case 'TOO_HIGH': return 'Too High'
-    default: return '—'
-  }
-}
-
 export function zoneShortLabel(zone: string | null): string {
   switch (zone) {
     case 'TOO_DEEP': return 'TD'
@@ -55,13 +43,6 @@ export const ZONE_PROXIMITY_TEXT_CLASS: Record<ReturnType<typeof zoneProximityCl
   amber: 'text-amber-600',
   red: 'text-red-600',
   neutral: 'text-muted-foreground',
-}
-
-export const ZONE_PROXIMITY_BADGE_CLASS: Record<ReturnType<typeof zoneProximityClass>, string> = {
-  green: 'bg-green-50 border-green-200 text-green-800',
-  amber: 'bg-amber-50 border-amber-200 text-amber-800',
-  red: 'bg-red-50 border-red-200 text-red-800',
-  neutral: 'bg-muted border-border text-muted-foreground',
 }
 
 export function trendArrow(state: string | null): string {
@@ -130,44 +111,6 @@ export function zonePlainLabel(zone: string | null): string {
   }
 }
 
-/**
- * One-line "why this recommendation" summary, shown directly on the card so
- * the trade thesis is visible without opening the coaching-note tooltip.
- * direction/winRate/trades aren't part of the actual sentence (only zone
- * position and trend strength are), so they're deliberately not parameters
- * here -- keeping the signature honest about what it uses.
- */
-export function tradeSummary(currentZone: string | null, preferredZone: string | null, adx: number | null): string | null {
-  if (!currentZone || !preferredZone || adx == null) return null
-
-  const zoneContext = currentZone === preferredZone
-    ? `Price is in the preferred ${zonePlainLabel(currentZone)} zone`
-    : `Price is in ${zonePlainLabel(currentZone)}, targeting ${zonePlainLabel(preferredZone)}`
-
-  const trendContext = adx < 15
-    ? 'Low ADX confirms ranging conditions — mean reversion setup'
-    : adx > 25
-    ? `Strong trend (ADX ${adx.toFixed(0)}) supports directional bias`
-    : `Moderate trend strength (ADX ${adx.toFixed(0)})`
-
-  return `${zoneContext}. ${trendContext}.`
-}
-
-/** Abbreviated zone label for the 140px-wide ladder strip -- arrows instead of
- *  "High"/"Low" for the extreme zones, and the preferred-zone star folded
- *  directly into the label text rather than as a separate marker element. */
-export function zoneLadderLabel(zone: string | null, isPreferred: boolean): string {
-  switch (zone) {
-    case 'TOO_DEEP': return 'Extreme ↓'
-    case 'ZONE_1': return isPreferred ? 'Deep Value ★' : 'Deep Value'
-    case 'ZONE_2': return isPreferred ? 'Value ★' : 'Value'
-    case 'ZONE_3': return 'Fair Value'
-    case 'ZONE_4': return 'Stretched'
-    case 'TOO_HIGH': return 'Extreme ↑'
-    default: return '—'
-  }
-}
-
 export type ZoneSemanticColour = 'green' | 'amber' | 'red' | 'neutral' | 'muted'
 
 /**
@@ -213,18 +156,6 @@ export const ZONE_BAND_BG_CLASS: Record<ZoneSemanticColour, string> = {
   red: 'bg-red-50',
   neutral: 'bg-card',
   muted: 'bg-muted/30',
-}
-
-/** Same semantic colours as ZONE_BAND_BG_CLASS, as hex fills for the chart's
- *  Recharts ReferenceAreas (which take actual colour values, not classes).
- *  'neutral' renders as no fill at all -- matching the ladder's plain bg-card
- *  treatment for Zone 3 ("Fair Value") on both directions. */
-export const ZONE_COLOUR_HEX: Record<ZoneSemanticColour, string | null> = {
-  green: '#22c55e',
-  amber: '#f59e0b',
-  red: '#ef4444',
-  neutral: null,
-  muted: '#9ca3af',
 }
 
 export interface ZoneBoundaries {
@@ -295,39 +226,6 @@ export function computeZoneBoundaries(
     zone2: { min: lowerBand + step * 1, max: lowerBand + step * 2 },
     zone1: { min: lowerBand, max: lowerBand + step },
     tooDeep: { min: -Infinity, max: lowerBand },
-  }
-}
-
-/**
- * Shared y-axis price domain for the ladder + chart pairing: the zone range
- * (lowerBand to upperBand) with 2% padding on each side, so both widgets
- * scale to the exact same price window and their bands line up. Widened to
- * also cover the entry range as a safety net -- with engine-accurate zones,
- * the entry range should already fall inside [lowerBand, upperBand] (it's
- * derived from the same anchors), so this should rarely actually extend
- * anything in practice; it stays as a guard rather than an assumption.
- */
-export function computeSharedYDomain(
-  zoneBoundaries: ZoneBoundaries | null,
-  entryRangeLow: number | null,
-  entryRangeHigh: number | null,
-): [number, number] | null {
-  if (!zoneBoundaries) return null
-  const rangeLow = zoneBoundaries.zone1.min
-  const rangeHigh = zoneBoundaries.zone4.max
-  const yMin = Math.min(rangeLow, entryRangeLow ?? rangeLow) * 0.98
-  const yMax = Math.max(rangeHigh, entryRangeHigh ?? rangeHigh) * 1.02
-  return [yMin, yMax]
-}
-
-export function zoneRangeFor(zone: AtrZone, b: ZoneBoundaries): { min: number; max: number } {
-  switch (zone) {
-    case 'TOO_HIGH': return b.tooHigh
-    case 'ZONE_4': return b.zone4
-    case 'ZONE_3': return b.zone3
-    case 'ZONE_2': return b.zone2
-    case 'ZONE_1': return b.zone1
-    case 'TOO_DEEP': return b.tooDeep
   }
 }
 

@@ -9,13 +9,17 @@ import type { WorkspaceRow } from './types'
 
 interface Props {
   rows: WorkspaceRow[]
+  // Section 4 selection funnel -- total opportunities generated today, across all
+  // analysts/sessions. Optional so existing/older callers don't have to change;
+  // the funnel row just reads "—" when omitted.
+  recommendationsGeneratedToday?: number
   // No-op today -- the strip and MarketDetailCard have no mutating actions to begin with
   // (expand/collapse is the only interaction). Accepted so callers like the management
   // inline View panel can be explicit that this is a read-only render.
   readOnly?: boolean
 }
 
-export function CoverageStrip({ rows }: Props) {
+export function CoverageStrip({ rows, recommendationsGeneratedToday = 0 }: Props) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   // Headline per symbol, fetched lazily on expand -- undefined means "not
   // fetched yet", null means "fetched, nothing available". Lifted up here
@@ -121,7 +125,12 @@ export function CoverageStrip({ rows }: Props) {
                   {isExpanded && (
                     <tr>
                       <td colSpan={9} className="p-0">
-                        <MarketDetailCard row={row} newsHeadline={headline ?? null} />
+                        <MarketDetailCard
+                          row={row}
+                          newsHeadline={headline ?? null}
+                          recommendationsGeneratedToday={recommendationsGeneratedToday}
+                          marketsAllocatedToday={rows.length}
+                        />
                       </td>
                     </tr>
                   )}

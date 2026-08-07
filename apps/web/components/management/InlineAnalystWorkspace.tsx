@@ -11,7 +11,8 @@ interface Props {
 // WorkloadPanel.tsx), so this never fetches until the manager actually expands it.
 export function InlineAnalystWorkspace({ analystId }: Props) {
   const [state, setState] = useState<
-    { status: 'loading' } | { status: 'error' } | { status: 'ready'; rows: WorkspaceRow[] }
+    | { status: 'loading' } | { status: 'error' }
+    | { status: 'ready'; rows: WorkspaceRow[]; recommendationsGeneratedToday: number }
   >({ status: 'loading' })
 
   useEffect(() => {
@@ -23,7 +24,7 @@ export function InlineAnalystWorkspace({ analystId }: Props) {
         return res.json()
       })
       .then(data => {
-        if (!cancelled) setState({ status: 'ready', rows: data.rows ?? [] })
+        if (!cancelled) setState({ status: 'ready', rows: data.rows ?? [], recommendationsGeneratedToday: data.recommendationsGeneratedToday ?? 0 })
       })
       .catch(() => {
         if (!cancelled) setState({ status: 'error' })
@@ -43,7 +44,9 @@ export function InlineAnalystWorkspace({ analystId }: Props) {
           <p className="text-sm text-muted-foreground">Couldn&apos;t load workspace data.</p>
         </div>
       )}
-      {state.status === 'ready' && <CoverageStrip rows={state.rows} readOnly />}
+      {state.status === 'ready' && (
+        <CoverageStrip rows={state.rows} recommendationsGeneratedToday={state.recommendationsGeneratedToday} readOnly />
+      )}
     </div>
   )
 }
