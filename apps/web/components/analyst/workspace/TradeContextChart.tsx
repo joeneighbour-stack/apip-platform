@@ -1,9 +1,12 @@
 'use client'
-import { ResponsiveContainer, ComposedChart, Bar, XAxis, YAxis, Tooltip, ReferenceArea, ReferenceLine } from 'recharts'
+import { ResponsiveContainer, ComposedChart, Bar, XAxis, YAxis, Tooltip, ReferenceArea, ReferenceLine, Customized } from 'recharts'
 import { chartDateLabel, parseGuidanceRange } from '@/lib/workspaceUtils'
 import type { PriceBar, EventRiskItem } from './types'
 
 const CHART_HEIGHT = 140
+const X_AXIS_HEIGHT = 16
+const CHART_MARGIN = { top: 6, right: 8, bottom: 2, left: 4 }
+const MIN_LABEL_GAP_PX = 11
 
 interface Props {
   data: PriceBar[]
@@ -59,10 +62,59 @@ function eventTimeUk(iso: string): string {
   return new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' })
 }
 
-// Section 3 -- compact trade context chart: candlesticks over the last 10 trading
-// days, with the entry/stop/target zones and current price overlaid so the whole
-// setup reads in one glance. No y-axis labels -- the overlays carry the price
-// context, per spec.
+interface ZoneLabelSpec {
+  key: string
+  anchor: number // the price value each label is anchored to (top edge of its zone)
+  text: string
+  color: string
+}
+
+// Renders ENTRY/STOP/TARGET labels itself, via Recharts' own y-scale (from
+// yAxisMap), instead of ReferenceArea's built-in `label` prop -- that prop has no
+// awareness of sibling labels, so when two zones sit close together (common once
+// the domain is correctly auto-fit around real price levels) their labels can land
+// right on top of each other. This sorts by actual pixel position and enforces a
+// minimum gap, working off the real scale so it's correct for any asset class/
+// price magnitude, not a hardcoded pixel offset per zone.
+function ZoneLabels(props: any) {
+  const { yAxisMap, offset, specs } = props as { yAxisMap: any; offset: any; specs: ZoneLabelSpec[] }
+  const scale = yAxisMap?.[Object.keys(yAxisMap)[0]]?.scale
+  if (!scale || !offset) return null
+
+  const positioned = specs
+    .map(s => ({ ...s, y: scale(s.anchor) }))
+    .filter(s => Number.isFinite(s.y))
+    .sort((a, b) => a.y - b.y)
+
+  for (let i = 1; i < positioned.length; i++) {
+    const prev = positioned[i - 1]!
+    const cur = positioned[i]!
+    if (cur.y - prev.y < MIN_LABEL_GAP_PX) cur.y = prev.y + MIN_LABEL_GAP_PX
+  }
+  // Keep the last label from being pushed below the plot area.
+  const maxY = offset.top + offset.height - 2
+  if (positioned.length > 0 && positioned[positioned.length - 1]!.y > maxY) {
+    const overshoot = positioned[positioned.length - 1]!.y - maxY
+    for (const p of positioned) p.y -= overshoot
+  }
+
+  return (
+    <g>
+      {positioned.map(p => (
+        <text key={p.key} x={offset.left + 3} y={Math.max(p.y, offset.top + 8)} fontSize={9} fontWeight={600} fill={p.color}>
+          {p.text}
+        </text>
+      ))}
+    </g>
+  )
+}
+
+// Compact trade context chart: candlesticks over the last 10 trading days, with
+// the entry/stop/target zones and current price overlaid. No y-axis tick labels --
+// the overlays carry the price context. Y-domain is fit to whatever price levels
+// actually need to be visible (candles + entry/stop/target + current price), with
+// allowDataOverflow so Recharts uses that domain exactly rather than silently
+// widening it to also fit its own auto-computed data range.
 export function TradeContextChart({
   data, entryLow, entryHigh, riskRange, targetRange, currentPrice, highImpactEvent, displayPrecision,
 }: Props) {
@@ -80,59 +132,68 @@ export function TradeContextChart({
   const stopRange = parseGuidanceRange(riskRange)
   const targetRangeParsed = parseGuidanceRange(targetRange)
 
-  // Auto-fit around recent price action + entry/stop/target, not the raw 10-day
-  // extreme alone -- sensible padding (8%) keeps candles off the plot edges at this
-  // reduced height without exaggerating the visible range.
+  // Auto-fit around every price level that needs to be visible: candle highs/lows,
+  // full entry/stop/target zones, current price. 7% padding above and below so the
+  // highest/lowest relevant level sits near the plot edge without touching it.
   const values = data.flatMap(d => [d.low, d.high])
   const candidates = [...values, entryLow, entryHigh, currentPrice, ...(stopRange ?? []), ...(targetRangeParsed ?? [])]
     .filter((v): v is number => v != null)
   const min = Math.min(...candidates)
   const max = Math.max(...candidates)
-  const pad = (max - min) * 0.08 || 1
+  const pad = (max - min) * 0.07 || Math.abs(max || 1) * 0.01
   const domain: [number, number] = [min - pad, max + pad]
 
   const lastDate = data[data.length - 1]!.date
 
+  const zoneLabelSpecs: ZoneLabelSpec[] = []
+  if (entryLow != null && entryHigh != null) {
+    zoneLabelSpecs.push({ key: 'entry', anchor: Math.max(entryLow, entryHigh), text: 'ENTRY', color: '#16a34a' })
+  }
+  if (stopRange) {
+    zoneLabelSpecs.push({ key: 'stop', anchor: Math.max(stopRange[0], stopRange[1]), text: 'STOP', color: '#dc2626' })
+  }
+  if (targetRangeParsed) {
+    zoneLabelSpecs.push({ key: 'target', anchor: Math.max(targetRangeParsed[0], targetRangeParsed[1]), text: 'TARGET', color: '#2563eb' })
+  }
+
   return (
     <div style={{ height: CHART_HEIGHT, width: '100%' }}>
       <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+        <ComposedChart data={chartData} margin={CHART_MARGIN}>
           <XAxis
             dataKey="date"
             tickFormatter={chartDateLabel}
             tick={{ fontSize: 10 }}
             minTickGap={20}
+            height={X_AXIS_HEIGHT}
             axisLine={{ stroke: 'hsl(var(--border))' }}
             tickLine={false}
           />
-          <YAxis domain={domain} hide />
+          <YAxis domain={domain} type="number" hide allowDataOverflow />
           <Tooltip content={<CandleTooltip precision={precision} />} />
 
           {entryLow != null && entryHigh != null && (
             <ReferenceArea
               y1={entryLow} y2={entryHigh} fill="#16a34a" fillOpacity={0.15}
               stroke="#16a34a" strokeOpacity={0.5} strokeWidth={1}
-              label={{ value: 'ENTRY', position: 'insideTopLeft', fontSize: 9, fill: '#16a34a', fontWeight: 600 }}
             />
           )}
           {stopRange && (
             <ReferenceArea
               y1={stopRange[0]} y2={stopRange[1]} fill="#dc2626" fillOpacity={0.08}
               stroke="#dc2626" strokeOpacity={0.4} strokeWidth={1}
-              label={{ value: 'STOP', position: 'insideTopLeft', fontSize: 9, fill: '#dc2626', fontWeight: 600 }}
             />
           )}
           {targetRangeParsed && (
             <ReferenceArea
               y1={targetRangeParsed[0]} y2={targetRangeParsed[1]} fill="#2563eb" fillOpacity={0.08}
               stroke="#2563eb" strokeOpacity={0.4} strokeWidth={1}
-              label={{ value: 'TARGET', position: 'insideTopLeft', fontSize: 9, fill: '#2563eb', fontWeight: 600 }}
             />
           )}
           {currentPrice != null && (
             <ReferenceLine
-              y={currentPrice} stroke="currentColor" strokeDasharray="2 3" strokeWidth={1.5} className="text-foreground"
-              label={{ value: `● ${currentPrice.toFixed(precision)}`, position: 'right', fontSize: 9, fontWeight: 600, fill: 'currentColor' }}
+              y={currentPrice} stroke="currentColor" strokeDasharray="5 3" strokeWidth={2} className="text-foreground"
+              label={{ value: `Current ${currentPrice.toFixed(precision)}`, position: 'right', fontSize: 9, fontWeight: 700, fill: 'currentColor' }}
             />
           )}
           {highImpactEvent && (
@@ -146,6 +207,7 @@ export function TradeContextChart({
           )}
 
           <Bar dataKey="range" shape={CandleShape} isAnimationActive={false} />
+          <Customized component={(p: any) => <ZoneLabels {...p} specs={zoneLabelSpecs} />} />
         </ComposedChart>
       </ResponsiveContainer>
     </div>
