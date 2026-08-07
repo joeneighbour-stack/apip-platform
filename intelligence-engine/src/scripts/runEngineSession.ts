@@ -15,6 +15,7 @@ import { buildCoachingRecommendation } from '../services/coachingService.js'
 import { allocateCoverage, type OpportunityForAllocation } from '../services/allocationService.js'
 import { createShadowTrade } from '../services/shadowTradeService.js'
 import type { ActiveAnalyst } from '../services/analystProfileService.js'
+import { scoreAnalystForMarket, type AnalystScore, type AnalystProfileRow } from '../services/analystScoringService.js'
 import type { SessionType } from '../types/domain.js'
 
 const SYSTEM_ENGINE_ID = 'ab9359b6-0e78-49fc-8a0a-1cf589552280'
@@ -222,6 +223,8 @@ async function main() {
     const { data: analystRows } = await db.from('analysts')
       .select('analyst_id, display_name, active, sessions').eq('active', true)
 
+    const analystNameById = new Map((analystRows ?? []).map(a => [a.analyst_id, a.display_name]))
+
     const sessionEligibleAnalysts = (analystRows ?? []).filter(a => {
       const sessions: string[] = a.sessions ?? []
       return sessions.includes(session as string)
@@ -279,25 +282,44 @@ async function main() {
     const { data: allMarketRows } = await db.from('markets').select('market_id, symbol')
     const symbolByMarketId = new Map((allMarketRows ?? []).map(m => [m.market_id, m.symbol]))
 
+    // tradesBySymbol: all analysts pooled -- still needed for markets that fall
+    // through to the team-wide fallback path (Step 5) when no analyst has a
+    // profile match. tradesByAnalystSymbol: same trades, additionally keyed by
+    // analyst, so the analyst-first path (Step 5) can hand buildRecommendation()
+    // only the assigned analyst's own history instead of the team average.
     const tradesBySymbol = new Map<string, RecommendationInputTrade[]>()
+    const tradesByAnalystSymbol = new Map<string, RecommendationInputTrade[]>()
     for (const t of allTradeRows) {
       const symbol = symbolByMarketId.get(t.market_id)
       if (!symbol) continue
-      if (!tradesBySymbol.has(symbol)) tradesBySymbol.set(symbol, [])
-      tradesBySymbol.get(symbol)!.push({
+      const input = {
         market: symbol,
         direction: t.direction,
         entryZone: t.entry_zone ?? null,
         resultR: t.result_r !== null ? Number(t.result_r) : null,
         triggered: t.triggered ?? false,
         analyst: t.analyst_id,
-      } as RecommendationInputTrade)
+      } as RecommendationInputTrade
+
+      if (!tradesBySymbol.has(symbol)) tradesBySymbol.set(symbol, [])
+      tradesBySymbol.get(symbol)!.push(input)
+
+      const asKey = `${t.analyst_id}::${symbol}`
+      if (!tradesByAnalystSymbol.has(asKey)) tradesByAnalystSymbol.set(asKey, [])
+      tradesByAnalystSymbol.get(asKey)!.push(input)
     }
 
     const { data: profileRows } = await db
       .from('analyst_profiles')
       .select('analyst_id, market_id, direction, zone, profile_data')
       .in('analyst_id', eligibleAnalysts.map(a => a.analyst))
+
+    // Grouped by analyst for scoreAnalystForMarket()'s per-analyst scoring pass.
+    const profilesByAnalyst = new Map<string, AnalystProfileRow[]>()
+    for (const p of (profileRows ?? [])) {
+      if (!profilesByAnalyst.has(p.analyst_id)) profilesByAnalyst.set(p.analyst_id, [])
+      profilesByAnalyst.get(p.analyst_id)!.push(p as unknown as AnalystProfileRow)
+    }
 
     const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
     const { data: regimeRows } = await db
@@ -418,41 +440,84 @@ async function main() {
         continue
       }
 
-      const allTrades = tradesBySymbol.get(symbol) ?? []
       const rvId = randomUUID()
       const regime = regimeByMarketId.get(market.market_id)
       const marketCurrentZone = marketStateWithZone.currentZone
-      // Direction priority: regime-matched analyst-profile avgR (preferredDirectionByMarketId,
-      // the more sophisticated signal -- which direction has actually performed better for
-      // THIS analyst pool specifically when the market was in the SAME regime as today) first;
-      // then raw current trend_state; then zone position (mean-reversion) as the last resort
-      // for RANGE/MIXED/no-regime-data markets.
-      let preferredDirection: 'BUY' | 'SELL' | null = null
-      const trendState = regime?.trend_state
-      const regimeMatchedDirection = preferredDirectionByMarketId.get(market.market_id)
-      if (regimeMatchedDirection) {
-        preferredDirection = regimeMatchedDirection
-        console.log(`    Profile(regime=${trendState ?? 'none'}) → direction: ${preferredDirection}`)
-      } else if (trendState === 'TRENDING_UP') {
-        preferredDirection = 'BUY'
-        console.log(`    Regime(TRENDING_UP) → direction: BUY`)
-      } else if (trendState === 'TRENDING_DOWN') {
-        preferredDirection = 'SELL'
-        console.log(`    Regime(TRENDING_DOWN) → direction: SELL`)
-      } else if (marketCurrentZone && ['ZONE_1', 'ZONE_2', 'TOO_DEEP'].includes(marketCurrentZone)) {
-        preferredDirection = 'BUY'
-        console.log(`    Zone(${marketCurrentZone}) → direction: BUY`)
-      } else if (marketCurrentZone && ['ZONE_3', 'ZONE_4', 'TOO_HIGH'].includes(marketCurrentZone)) {
-        preferredDirection = 'SELL'
-        console.log(`    Zone(${marketCurrentZone}) → direction: SELL`)
+      const trendState = regime?.trend_state ?? null
+      const volatilityState = regime?.volatility_state ?? null
+
+      // ── Analyst-first scoring (Step 5): score every eligible analyst
+      // against this market's regime + zone, and let the best-scoring one
+      // (confidence x avgR) both supply the direction and receive the
+      // assignment -- no separate team-wide direction pass, no separate
+      // workload-balanced allocation pass, for markets where at least one
+      // analyst has a real profile match. Wrapped in try/catch per the
+      // "never crash the session" requirement -- a scoring failure here
+      // degrades to the pre-Step-5 team-wide behaviour, exactly like a
+      // market with no analyst profile match at all.
+      let bestScore: AnalystScore | null = null
+      let scoringFailed = false
+      try {
+        let bestValue = -Infinity
+        for (const a of eligibleAnalysts) {
+          const score = scoreAnalystForMarket(
+            a.analyst, market.market_id, trendState, volatilityState, marketCurrentZone,
+            profilesByAnalyst.get(a.analyst) ?? [],
+          )
+          const value = score.confidence * score.avgR
+          if (score.profileTier !== 'NONE' && value > bestValue) { bestValue = value; bestScore = score }
+        }
+      } catch (err) {
+        console.log(`    ${symbol}: analyst scoring failed (${(err as Error).message}) -- falling back to team-wide behaviour`)
+        scoringFailed = true
       }
+
+      let assignedAnalystId: string | null = null
+      let preferredDirection: 'BUY' | 'SELL' | null = null
+
+      if (bestScore && !scoringFailed) {
+        assignedAnalystId = bestScore.analystId
+        preferredDirection = bestScore.preferredDirection
+        const name = analystNameById.get(bestScore.analystId) ?? bestScore.analystId
+        console.log(`    Analyst-first: ${name} tier=${bestScore.profileTier} dir=${preferredDirection ?? 'none'} avgR=${bestScore.avgR.toFixed(3)} confidence=${bestScore.confidence.toFixed(2)}`)
+      } else {
+        // Fallback: no analyst has any profile match for this market (all
+        // NONE tier) or scoring threw -- team-wide direction cascade,
+        // exactly as before Step 5. Analyst assignment is deferred to the
+        // workload-balanced allocateCoverage() pass in Step 4.
+        const regimeMatchedDirection = preferredDirectionByMarketId.get(market.market_id)
+        if (regimeMatchedDirection) {
+          preferredDirection = regimeMatchedDirection
+          console.log(`    Fallback: Profile(regime=${trendState ?? 'none'}) → direction: ${preferredDirection}`)
+        } else if (trendState === 'TRENDING_UP') {
+          preferredDirection = 'BUY'
+          console.log(`    Fallback: Regime(TRENDING_UP) → direction: BUY`)
+        } else if (trendState === 'TRENDING_DOWN') {
+          preferredDirection = 'SELL'
+          console.log(`    Fallback: Regime(TRENDING_DOWN) → direction: SELL`)
+        } else if (marketCurrentZone && ['ZONE_1', 'ZONE_2', 'TOO_DEEP'].includes(marketCurrentZone)) {
+          preferredDirection = 'BUY'
+          console.log(`    Fallback: Zone(${marketCurrentZone}) → direction: BUY`)
+        } else if (marketCurrentZone && ['ZONE_3', 'ZONE_4', 'TOO_HIGH'].includes(marketCurrentZone)) {
+          preferredDirection = 'SELL'
+          console.log(`    Fallback: Zone(${marketCurrentZone}) → direction: SELL`)
+        }
+        console.log(`    Fallback: no analyst profile match (NONE tier) for ${symbol} -- assignment deferred to workload-balanced allocation`)
+      }
+
       const regimeSnapshot: RegimeSnapshot | null = regime ? {
         trendState: regime.trend_state ?? null,
         regimeConfidence: regime.regime_confidence ?? null,
         regimeTags: regime.regime_tags ?? [],
       } : null
 
-      const trades = allTrades
+      // Step 5 Step C: the assigned analyst's own trades when we already know
+      // who that is; team-wide pooled trades when assignment is deferred to
+      // the fallback's workload-balanced allocation pass (we don't yet know
+      // who that'll be).
+      const trades = assignedAnalystId
+        ? (tradesByAnalystSymbol.get(`${assignedAnalystId}::${symbol}`) ?? [])
+        : (tradesBySymbol.get(symbol) ?? [])
 
       // Profile-based trigger rate -- used as both fallback and cap
       // Backfill has triggered=true for all trades → 100% without cap
@@ -510,6 +575,8 @@ async function main() {
         generatedItems.push({
           market, marketState: marketStateWithZone, opp, rv, hidden, diagnostics,
           rvId, validityOverride, cappedTriggerProbability,
+          preAssignedAnalystId: assignedAnalystId, // null => deferred to fallback allocation (Step 4)
+          analystScore: bestScore, // null when the fallback path was used
         })
         recommendationsCreated++
       } catch (err) {
@@ -526,35 +593,71 @@ async function main() {
       console.log('\nStep 4: Allocating and writing to database...')
       const stepId4 = await createStep(db, engineRunId, 'ALLOCATE_AND_WRITE')
 
-      const allocationInput: OpportunityForAllocation[] = generatedItems.map(item => {
-        let bestAnalystId: string | null = null
-        let bestScore = -Infinity
-        for (const a of eligibleAnalysts) {
-          const key = `${a.analyst}::${item.market.market_id}::${item.opp.direction}`
-          const score = profileScores.get(key) ?? -Infinity
-          if (score > bestScore) { bestScore = score; bestAnalystId = a.analyst }
-        }
-        return {
-          opportunityId: randomUUID(),
-          recommendationVersionId: item.rvId,
-          expectedR: item.opp.expectedR,
-          assignedAnalystId: bestAnalystId,
+      // Step 5 Step D: analyst-first items already carry their assignment from
+      // Step 3's scoring pass -- the highest-scoring analyst per market IS the
+      // allocation, no separate scoring/workload pass needed for these.
+      // Fallback items (no analyst had a profile match) still go through the
+      // pre-Step-5 workload-balanced allocateCoverage() pass, unchanged.
+      type ResolvedAllocation = {
+        allocationId: string; assignedAnalystId: string; eligibleAnalysts: string[]
+        allocationScore: number; reasonSummary: string
+      }
+      const allocationByRvId = new Map<string, ResolvedAllocation>()
+
+      const analystFirstItems = generatedItems.filter(item => item.preAssignedAnalystId)
+      const fallbackItems = generatedItems.filter(item => !item.preAssignedAnalystId)
+
+      for (const item of analystFirstItems) {
+        const score = item.analystScore as AnalystScore
+        allocationByRvId.set(item.rvId, {
+          allocationId: randomUUID(),
+          assignedAnalystId: score.analystId,
           eligibleAnalysts: eligibleAnalysts.map(a => a.analyst),
+          allocationScore: score.confidence * score.avgR,
+          reasonSummary: `Assigned via analyst-first profile scoring (tier: ${score.profileTier}, avgR: ${score.avgR.toFixed(3)}, confidence: ${score.confidence.toFixed(2)}).`,
+        })
+      }
+
+      if (fallbackItems.length > 0) {
+        const allocationInput: OpportunityForAllocation[] = fallbackItems.map(item => {
+          let bestAnalystId: string | null = null
+          let bestPScore = -Infinity
+          for (const a of eligibleAnalysts) {
+            const key = `${a.analyst}::${item.market.market_id}::${item.opp.direction}`
+            const pScore = profileScores.get(key) ?? -Infinity
+            if (pScore > bestPScore) { bestPScore = pScore; bestAnalystId = a.analyst }
+          }
+          return {
+            opportunityId: randomUUID(),
+            recommendationVersionId: item.rvId,
+            expectedR: item.opp.expectedR,
+            assignedAnalystId: bestAnalystId,
+            eligibleAnalysts: eligibleAnalysts.map(a => a.analyst),
+          }
+        })
+
+        const allocations = allocateCoverage({
+          opportunities: allocationInput,
+          activeAnalysts: eligibleAnalysts.map(a => a.analyst),
+          generateId: randomUUID,
+        })
+
+        for (const a of allocations) {
+          allocationByRvId.set(a.recommendationVersionId, {
+            allocationId: a.allocationId, assignedAnalystId: a.assignedAnalystId,
+            eligibleAnalysts: a.eligibleAnalysts, allocationScore: a.allocationScore,
+            reasonSummary: a.reasonSummary,
+          })
         }
-      })
-
-      const allocations = allocateCoverage({
-        opportunities: allocationInput,
-        activeAnalysts: eligibleAnalysts.map(a => a.analyst),
-        generateId: randomUUID,
-      })
-
-      const allocationByRvId = new Map(allocations.map(a => [a.recommendationVersionId, a]))
+      }
 
       for (const item of generatedItems) {
         const { market, marketState, opp, rv, hidden, diagnostics, validityOverride, cappedTriggerProbability } = item
         const allocation = allocationByRvId.get(item.rvId)
-        if (!allocation) continue
+        if (!allocation) {
+          console.log(`  ⚠ ${market.symbol}: no analyst could be assigned -- skipping recommendation`)
+          continue
+        }
 
         const intraday = intradayByMarket.get(market.market_id)
 

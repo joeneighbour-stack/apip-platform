@@ -45,6 +45,16 @@ const MEDIUM_CONFIDENCE_MIN_TRADES = 20
 // than filtering below a fixed sample floor, so this doesn't need to move.
 const MIN_PROFILE_TRADES = 5
 
+// market_state_daily.zone (the source backfillEntryZone.ts copies onto
+// actual_trades.entry_zone) is ZONE_2 on 99.8% of rows before this date --
+// confirmed live -- a placeholder artifact, not a genuine reading. Only from
+// 2026-01-01 does the zone column show real differentiation (71.8% ZONE_2,
+// consistent with price genuinely spending most of its time mid-range).
+// Trades before this date are treated as zone-unknown here so no downstream
+// zone-tagged profile (or the analyst-scoring FULL tier built on top of it)
+// is ever built from contaminated pre-2026 zone data.
+const ZONE_VALID_FROM = '2026-01-01'
+
 type ProfileQuality = 'HIGH' | 'MEDIUM' | 'LOW'
 type TrendState = 'TRENDING_UP' | 'TRENDING_DOWN' | 'RANGE' | 'MIXED'
 type VolatilityState = 'LOW_VOL' | 'NORMAL_VOL' | 'HIGH_VOL' | 'EXTREME_VOL'
@@ -167,11 +177,13 @@ async function main() {
       for (const t of data) {
         const symbol = symbolByMarketId.get(t.market_id)
         if (!symbol) continue
+        const publishedDate = t.published_at.slice(0, 10)
         allTrades.push({
           analyst_id: t.analyst_id, symbol, market_id: t.market_id,
-          direction: t.direction, entry_zone: t.entry_zone ?? null,
+          direction: t.direction,
+          entry_zone: (t.entry_zone && publishedDate >= ZONE_VALID_FROM) ? t.entry_zone : null,
           result_r: Number(t.result_r), triggered: t.triggered ?? false,
-          published_at: t.published_at.slice(0, 10),
+          published_at: publishedDate,
         })
       }
       hasMore = data.length === PAGE_SIZE
