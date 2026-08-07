@@ -361,10 +361,40 @@ async function main() {
   const dedupedRows = Array.from(seen.values())
   console.log(`Regime rows after dedup: ${dedupedRows.length} (removed ${regimeRows.length - dedupedRows.length} duplicates)`)
 
-  // Delete existing and re-insert (avoids upsert conflict on duplicate dates)
+  // Delete existing and re-insert (avoids upsert conflict on duplicate dates) --
+  // scoped per-market to exactly the [min,max] captured_at range about to be
+  // rewritten, NOT a full-table wipe. The previous unconditional
+  // `.delete().not('market_regime_state_id', 'is', null)` cleared every row on
+  // every run, including regular (non-backfill) runs that only ever rewrite the
+  // last ~60 bars -- since this script runs in regular mode multiple times a
+  // day (.github/workflows/engine-daily.yml), that wiped out any --backfill
+  // history on the very next scheduled run. Scoping the delete to what each
+  // market is about to have rewritten leaves everything outside that window
+  // (older backfilled rows, or rows for a market skipped this run due to
+  // insufficient bars) untouched.
   if (!isDryRun) {
-    console.log('\nClearing existing regime rows...')
-    await db.from('market_regime_state').delete().not('market_regime_state_id', 'is', null)
+    console.log('\nClearing existing regime rows in the rewritten window...')
+    const rangeByMarket = new Map<string, { min: string; max: string }>()
+    for (const row of dedupedRows) {
+      const existing = rangeByMarket.get(row.market_id)
+      if (!existing) rangeByMarket.set(row.market_id, { min: row.captured_at, max: row.captured_at })
+      else {
+        if (row.captured_at < existing.min) existing.min = row.captured_at
+        if (row.captured_at > existing.max) existing.max = row.captured_at
+      }
+    }
+    let cleared = 0
+    for (const [marketId, range] of rangeByMarket) {
+      const { error } = await db.from('market_regime_state')
+        .delete()
+        .eq('market_id', marketId)
+        .gte('captured_at', range.min)
+        .lte('captured_at', range.max)
+      if (error) { console.error(`\n  Delete error for market ${marketId}: ${error.message}`); process.exit(1) }
+      cleared++
+      if (cleared % 20 === 0) process.stdout.write(`\r  Cleared ${cleared}/${rangeByMarket.size} markets`)
+    }
+    console.log(`\n  Cleared existing rows for ${rangeByMarket.size} markets`)
   }
 
   console.log(isDryRun ? '\nDRY RUN -- nothing written.' : '\nWriting regime rows...')
