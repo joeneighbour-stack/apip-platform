@@ -6,12 +6,16 @@
 // market/direction/regime combination, and writes to analyst_profiles.
 //
 // Each profile row represents one analyst's historical performance in a
-// specific market, direction, and market regime -- trend_state
+// specific market, direction, market regime -- trend_state
 // (TRENDING_UP/DOWN/RANGE/MIXED) combined with volatility_state
-// (LOW_VOL/NORMAL_VOL/HIGH_VOL/EXTREME_VOL), so an analyst who thrives in
-// low-volatility ranging markets is distinguished from one who excels in
-// high-volatility trending conditions, rather than both folding into one
-// trend_state-only bucket.
+// (LOW_VOL/NORMAL_VOL/HIGH_VOL/EXTREME_VOL) -- and entry zone, so an analyst
+// who thrives in low-volatility ranging markets buying from Zone 1 is
+// distinguished from one who excels in high-volatility trending conditions
+// selling from Zone 4, rather than folding into one coarse bucket. Regime
+// coverage (market_regime_state) currently only reaches back to ~Feb 2025, so
+// a zone-only tier (no regime, entry_zone only) also exists to capture
+// zone-level performance across the much longer trade history outside that
+// window -- see the zone-only profiles loop below.
 // This enables the engine to:
 //   1. Select the best direction for a market given current regime
 //   2. Allocate the best analyst for a market given current regime
@@ -34,11 +38,11 @@ import path from 'node:path'
 
 const HIGH_CONFIDENCE_MIN_TRADES = 50
 const MEDIUM_CONFIDENCE_MIN_TRADES = 20
-// Kept at 5 even though grouping by trend_state x volatility_state (instead of
-// trend_state alone) produces smaller per-bucket sample sizes -- a LOW
-// profile_quality (5-19 trades, see profileQuality()) is still a real, if less
-// certain, signal. Consumers already weight/read profile_quality rather than
-// filtering below a fixed sample floor, so this doesn't need to move.
+// Kept at 5 even though grouping by trend_state x volatility_state x entry_zone
+// (instead of trend_state alone) produces smaller per-bucket sample sizes -- a
+// LOW profile_quality (5-19 trades, see profileQuality()) is still a real, if
+// less certain, signal. Consumers already weight/read profile_quality rather
+// than filtering below a fixed sample floor, so this doesn't need to move.
 const MIN_PROFILE_TRADES = 5
 
 type ProfileQuality = 'HIGH' | 'MEDIUM' | 'LOW'
@@ -216,18 +220,27 @@ async function main() {
       }
     }
 
-    // Group by market + direction + regime
+    // Group by market + direction + regime + zone
     const regimeGroups = new Map<string, typeof analystTrades>()
-    // Also group by market + direction (regime-agnostic fallback)
+    // Zone-only tier: trades with a known entry_zone but no regime data for
+    // that date -- disjoint from regimeGroups by construction (a trade either
+    // has regime data or it doesn't), so no dedup against regimeGroups is needed.
+    const zoneOnlyGroups = new Map<string, typeof analystTrades>()
+    // Also group by market + direction (fully regime/zone-agnostic fallback)
     const marketDirGroups = new Map<string, typeof analystTrades>()
 
     for (const t of analystTrades) {
       // Only group into regime-specific profiles if we have actual regime data
       if (t.regime?.trend_state) {
         const volatilityKey = t.regime.volatility_state ?? 'UNKNOWN'
-        const regimeKey = `${t.market_id}::${t.direction}::${t.regime.trend_state}::${volatilityKey}`
+        const entryZoneKey = t.entry_zone ?? 'NULL'
+        const regimeKey = `${t.market_id}::${t.direction}::${t.regime.trend_state}::${volatilityKey}::${entryZoneKey}`
         if (!regimeGroups.has(regimeKey)) regimeGroups.set(regimeKey, [])
         regimeGroups.get(regimeKey)!.push(t)
+      } else if (t.entry_zone) {
+        const zoneKey = `${t.market_id}::${t.direction}::${t.entry_zone}`
+        if (!zoneOnlyGroups.has(zoneKey)) zoneOnlyGroups.set(zoneKey, [])
+        zoneOnlyGroups.get(zoneKey)!.push(t)
       }
 
       // Always add to fallback group
@@ -239,11 +252,12 @@ async function main() {
     const analystProfiles: any[] = []
 
     // Regime-specific profiles -- keyed by market + direction + trend_state +
-    // volatility_state, so trend and volatility conditions each get their own
-    // profile instead of folding into one trend_state-only bucket.
+    // volatility_state + entry_zone, so trend, volatility, and zone conditions
+    // each get their own profile instead of folding into one coarse bucket.
     for (const [key, trades] of regimeGroups) {
       if (trades.length < MIN_PROFILE_TRADES) continue
-      const [market_id, direction, regime, volatilityState] = key.split('::')
+      const [market_id, direction, regime, volatilityState, entryZoneRaw] = key.split('::')
+      const entryZone = entryZoneRaw === 'NULL' ? null : entryZoneRaw
 
       const wins = trades.filter(t => t.result_r > 0).length
       const avgR = trades.reduce((s, t) => s + t.result_r, 0) / trades.length
@@ -255,7 +269,7 @@ async function main() {
         analyst_id: analyst.analyst_id,
         market_id,
         direction,
-        zone: null,
+        zone: entryZone,
         includes_historical_backfill: true,
         profile_data: {
           trade_count: trades.length,
@@ -265,7 +279,44 @@ async function main() {
           profile_quality: quality,
           regime: regime === 'UNKNOWN' ? null : regime,
           volatility_state: volatilityState === 'UNKNOWN' ? null : volatilityState,
+          zone: entryZone,
           has_regime_data: regime !== 'UNKNOWN',
+        },
+        generated_at: generatedAt,
+      })
+    }
+
+    // Zone-only profiles -- trades with a known entry_zone but no regime data
+    // for that date (regime coverage currently only reaches back to ~Feb
+    // 2025). Captures zone-level performance across the much longer trade
+    // history outside that window, without conflating it with a specific
+    // trend/volatility regime it can't actually attest to.
+    for (const [key, trades] of zoneOnlyGroups) {
+      if (trades.length < MIN_PROFILE_TRADES) continue
+      const [market_id, direction, entryZone] = key.split('::')
+
+      const wins = trades.filter(t => t.result_r > 0).length
+      const avgR = trades.reduce((s, t) => s + t.result_r, 0) / trades.length
+      const winRate = wins / trades.length
+      const triggerRate = marketTriggerRates.get(market_id!) ?? 0.5
+      const quality = profileQuality(trades.length)
+
+      analystProfiles.push({
+        analyst_id: analyst.analyst_id,
+        market_id,
+        direction,
+        zone: entryZone,
+        includes_historical_backfill: true,
+        profile_data: {
+          trade_count: trades.length,
+          avg_r: avgR,
+          win_rate: winRate,
+          trigger_rate: triggerRate,
+          profile_quality: quality,
+          regime: null,
+          volatility_state: null,
+          zone: entryZone,
+          has_regime_data: false,
         },
         generated_at: generatedAt,
       })
@@ -314,7 +365,7 @@ async function main() {
       return sym === 'EURUSD'
     })
     const regimeSummary = eurusdProfiles.length > 0
-      ? eurusdProfiles.map(p => `${p.direction}/${p.profile_data.regime ?? 'no-regime'}/${p.profile_data.volatility_state ?? 'no-vol'}(${p.profile_data.trade_count})`).join(' ')
+      ? eurusdProfiles.map(p => `${p.direction}/${p.profile_data.regime ?? 'no-regime'}/${p.profile_data.volatility_state ?? 'no-vol'}/${p.zone ?? 'no-zone'}(${p.profile_data.trade_count})`).join(' ')
       : 'no EURUSD'
 
     console.log(`  ${analyst.display_name}: ${analystProfiles.length} profiles from ${analystTrades.length} trades | EURUSD: ${regimeSummary}`)
