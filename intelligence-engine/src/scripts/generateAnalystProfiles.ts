@@ -6,7 +6,12 @@
 // market/direction/regime combination, and writes to analyst_profiles.
 //
 // Each profile row represents one analyst's historical performance in a
-// specific market, direction, and market regime (TRENDING_UP/DOWN/RANGE/MIXED).
+// specific market, direction, and market regime -- trend_state
+// (TRENDING_UP/DOWN/RANGE/MIXED) combined with volatility_state
+// (LOW_VOL/NORMAL_VOL/HIGH_VOL/EXTREME_VOL), so an analyst who thrives in
+// low-volatility ranging markets is distinguished from one who excels in
+// high-volatility trending conditions, rather than both folding into one
+// trend_state-only bucket.
 // This enables the engine to:
 //   1. Select the best direction for a market given current regime
 //   2. Allocate the best analyst for a market given current regime
@@ -29,10 +34,21 @@ import path from 'node:path'
 
 const HIGH_CONFIDENCE_MIN_TRADES = 50
 const MEDIUM_CONFIDENCE_MIN_TRADES = 20
+// Kept at 5 even though grouping by trend_state x volatility_state (instead of
+// trend_state alone) produces smaller per-bucket sample sizes -- a LOW
+// profile_quality (5-19 trades, see profileQuality()) is still a real, if less
+// certain, signal. Consumers already weight/read profile_quality rather than
+// filtering below a fixed sample floor, so this doesn't need to move.
 const MIN_PROFILE_TRADES = 5
 
 type ProfileQuality = 'HIGH' | 'MEDIUM' | 'LOW'
 type TrendState = 'TRENDING_UP' | 'TRENDING_DOWN' | 'RANGE' | 'MIXED'
+type VolatilityState = 'LOW_VOL' | 'NORMAL_VOL' | 'HIGH_VOL' | 'EXTREME_VOL'
+
+interface RegimeSnapshot {
+  trend_state: TrendState | null
+  volatility_state: VolatilityState | null
+}
 
 function profileQuality(trades: number): ProfileQuality {
   if (trades >= HIGH_CONFIDENCE_MIN_TRADES) return 'HIGH'
@@ -106,7 +122,7 @@ async function main() {
   let rPage = 0, rHasMore = true
   while (rHasMore) {
     const { data } = await db.from('market_regime_state')
-      .select('market_id, captured_at, trend_state')
+      .select('market_id, captured_at, trend_state, volatility_state')
       .gte('captured_at', windowStart)
       .order('captured_at', { ascending: true })
       .range(rPage * 1000, rPage * 1000 + 999)
@@ -119,12 +135,15 @@ async function main() {
   }
   console.log(` ${allRegimes.length} rows`)
 
-  // Build regime lookup: market_id -> date -> trend_state
-  const regimeByMarketDate = new Map<string, Map<string, TrendState>>()
+  // Build regime lookup: market_id -> date -> {trend_state, volatility_state}
+  const regimeByMarketDate = new Map<string, Map<string, RegimeSnapshot>>()
   for (const r of allRegimes) {
     const date = r.captured_at.slice(0, 10)
     if (!regimeByMarketDate.has(r.market_id)) regimeByMarketDate.set(r.market_id, new Map())
-    regimeByMarketDate.get(r.market_id)!.set(date, r.trend_state as TrendState)
+    regimeByMarketDate.get(r.market_id)!.set(date, {
+      trend_state: (r.trend_state as TrendState) ?? null,
+      volatility_state: (r.volatility_state as VolatilityState) ?? null,
+    })
   }
 
   // Paginate all trades
@@ -204,8 +223,9 @@ async function main() {
 
     for (const t of analystTrades) {
       // Only group into regime-specific profiles if we have actual regime data
-      if (t.regime) {
-        const regimeKey = `${t.market_id}::${t.direction}::${t.regime}`
+      if (t.regime?.trend_state) {
+        const volatilityKey = t.regime.volatility_state ?? 'UNKNOWN'
+        const regimeKey = `${t.market_id}::${t.direction}::${t.regime.trend_state}::${volatilityKey}`
         if (!regimeGroups.has(regimeKey)) regimeGroups.set(regimeKey, [])
         regimeGroups.get(regimeKey)!.push(t)
       }
@@ -218,10 +238,12 @@ async function main() {
 
     const analystProfiles: any[] = []
 
-    // Regime-specific profiles
+    // Regime-specific profiles -- keyed by market + direction + trend_state +
+    // volatility_state, so trend and volatility conditions each get their own
+    // profile instead of folding into one trend_state-only bucket.
     for (const [key, trades] of regimeGroups) {
       if (trades.length < MIN_PROFILE_TRADES) continue
-      const [market_id, direction, regime] = key.split('::')
+      const [market_id, direction, regime, volatilityState] = key.split('::')
 
       const wins = trades.filter(t => t.result_r > 0).length
       const avgR = trades.reduce((s, t) => s + t.result_r, 0) / trades.length
@@ -242,6 +264,7 @@ async function main() {
           trigger_rate: triggerRate,
           profile_quality: quality,
           regime: regime === 'UNKNOWN' ? null : regime,
+          volatility_state: volatilityState === 'UNKNOWN' ? null : volatilityState,
           has_regime_data: regime !== 'UNKNOWN',
         },
         generated_at: generatedAt,
@@ -291,7 +314,7 @@ async function main() {
       return sym === 'EURUSD'
     })
     const regimeSummary = eurusdProfiles.length > 0
-      ? eurusdProfiles.map(p => `${p.direction}/${p.profile_data.regime ?? 'no-regime'}(${p.profile_data.trade_count})`).join(' ')
+      ? eurusdProfiles.map(p => `${p.direction}/${p.profile_data.regime ?? 'no-regime'}/${p.profile_data.volatility_state ?? 'no-vol'}(${p.profile_data.trade_count})`).join(' ')
       : 'no EURUSD'
 
     console.log(`  ${analyst.display_name}: ${analystProfiles.length} profiles from ${analystTrades.length} trades | EURUSD: ${regimeSummary}`)
