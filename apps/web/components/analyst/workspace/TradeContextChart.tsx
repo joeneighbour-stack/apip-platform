@@ -3,7 +3,6 @@ import { ResponsiveContainer, ComposedChart, Bar, XAxis, YAxis, Tooltip, Referen
 import { chartDateLabel, parseGuidanceRange } from '@/lib/workspaceUtils'
 import type { PriceBar, EventRiskItem } from './types'
 
-const CHART_HEIGHT = 140
 const X_AXIS_HEIGHT = 16
 const CHART_MARGIN = { top: 6, right: 8, bottom: 2, left: 4 }
 const MIN_LABEL_GAP_PX = 11
@@ -122,7 +121,7 @@ export function TradeContextChart({
 
   if (data.length === 0) {
     return (
-      <div style={{ height: CHART_HEIGHT }} className="flex items-center justify-center">
+      <div className="flex-1 min-h-[140px] w-full flex items-center justify-center">
         <p className="text-xs text-muted-foreground">No price history available.</p>
       </div>
     )
@@ -157,7 +156,12 @@ export function TradeContextChart({
   }
 
   return (
-    <div style={{ height: CHART_HEIGHT, width: '100%' }}>
+    // flex-1 fills whatever height the card resolves to (MarketDetailCard's grid row
+    // stretches this card to match Why This Setup's height) -- min-h-[140px] is only a
+    // floor for narrow/mobile layouts where the grid stacks into separate auto-height
+    // rows and there'd otherwise be nothing for flex-1 to grow into. ResponsiveContainer
+    // needs this wrapper to have a real resolved height for height="100%" to work.
+    <div className="flex-1 min-h-[140px] w-full">
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={chartData} margin={CHART_MARGIN}>
           <XAxis

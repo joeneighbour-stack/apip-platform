@@ -50,7 +50,7 @@ export function MarketDetailCard({ row, newsHeadline, recommendationsGeneratedTo
 
       {/* Chart 65% / Why This Setup 35% */}
       <div className="grid grid-cols-1 lg:grid-cols-[65fr_35fr] gap-4">
-        <div className="rounded-lg border border-border bg-card p-2 min-w-0">
+        <div className="rounded-lg border border-border bg-card p-2 min-w-0 flex flex-col">
           <TradeContextChart
             data={row.priceHistory}
             entryLow={row.entryLow}
