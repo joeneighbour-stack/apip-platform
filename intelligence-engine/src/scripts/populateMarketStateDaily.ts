@@ -13,6 +13,14 @@
 //   npx tsx src/scripts/populateMarketStateDaily.ts --dry-run
 //   npx tsx src/scripts/populateMarketStateDaily.ts
 //   npx tsx src/scripts/populateMarketStateDaily.ts --days=90
+//   npx tsx src/scripts/populateMarketStateDaily.ts --history
+//     Fetches from HISTORY_START (2019-01-01) to today instead of the last
+//     DAYS_TO_FETCH days -- a one-off backfill for regime/analyst-profile
+//     history, not part of the regular daily run. Does not change --days=N
+//     or the default 60-day behaviour, which still use fetchRecentOhlc()
+//     exactly as before. Requires FINNHUB_CANDLE_API_KEY specifically
+//     (confirmed working back to 2019) rather than falling back to
+//     FINNHUB_API_KEY, whose historical coverage isn't confirmed.
 //
 // Required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, FINNHUB_API_KEY
 //   Note: FINNHUB_API_KEY must have access to forex/candle (resolution=D).
@@ -29,6 +37,18 @@ const ZONE_COUNT = 4
 
 const daysArg = process.argv.find(a => a.startsWith('--days='))?.split('=')[1]
 const DAYS_TO_FETCH = Number(daysArg ?? 60)
+
+const isHistory = process.argv.includes('--history')
+const HISTORY_START = '2019-01-01' // provides warmup bars before 2020 analyst trades
+
+// Informational/logging only -- the actual fetch call is branched below
+// (fetchHistoricalOhlc vs the untouched fetchRecentOhlc) rather than unified
+// through this date, so --days=N and the default 60-day path keep their
+// exact existing from/to computation (fetchRecentOhlc's own `to - days*86400`
+// in seconds) instead of picking up this date-truncated equivalent.
+const fromDate = isHistory
+  ? HISTORY_START
+  : new Date(Date.now() - DAYS_TO_FETCH * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
 interface FinnhubCandleResponse {
   c: number[]; h: number[]; l: number[]; o: number[]; t: number[]; s: string
@@ -85,6 +105,32 @@ async function fetchRecentOhlc(
   return bars
 }
 
+/**
+ * Same shape as fetchRecentOhlc(), but takes an explicit calendar `from`
+ * date instead of a day-count -- used only by --history so the regular
+ * --days=N / default path (fetchRecentOhlc, untouched) keeps its exact
+ * existing seconds-based `to - days*86400` window.
+ */
+async function fetchHistoricalOhlc(
+  finnhubSymbol: string, fromDateIso: string, apiKey: string, isCrypto = false,
+): Promise<OhlcBar[]> {
+  const from = Math.floor(new Date(fromDateIso + 'T00:00:00Z').getTime() / 1000)
+  const to   = Math.floor(Date.now() / 1000)
+  const endpoint = isCrypto
+    ? `https://finnhub.io/api/v1/crypto/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=D&from=${from}&to=${to}&token=${apiKey}`
+    : `https://finnhub.io/api/v1/forex/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=D&from=${from}&to=${to}&token=${apiKey}`
+  const response = await fetch(endpoint)
+  if (!response.ok) throw new Error(`Finnhub HTTP ${response.status}`)
+  const body: FinnhubCandleResponse = await response.json()
+  if (body.s !== 'ok' || !body.c?.length) throw new Error(`Finnhub status '${body.s}' for ${finnhubSymbol}`)
+  const bars: OhlcBar[] = body.t.map((ts, i) => ({
+    date: new Date(ts * 1000).toISOString().slice(0, 10),
+    open: body.o[i]!, high: body.h[i]!, low: body.l[i]!, close: body.c[i]!,
+  }))
+  bars.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+  return bars
+}
+
 async function main() {
   const SUPABASE_URL              = process.env.SUPABASE_URL
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -100,6 +146,10 @@ async function main() {
     console.error('Missing required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, FINNHUB_API_KEY (or FINNHUB_CANDLE_API_KEY)')
     process.exit(1)
   }
+  if (isHistory && !FINNHUB_CANDLE_API_KEY) {
+    console.error('--history requires FINNHUB_CANDLE_API_KEY specifically (confirmed working back to 2019) -- FINNHUB_API_KEY alone is not confirmed to have that coverage.')
+    process.exit(1)
+  }
   if (!FINNHUB_CANDLE_API_KEY) {
     console.warn('FINNHUB_CANDLE_API_KEY not set -- missing today/yesterday daily candles will NOT be backfilled from 5-min data\n')
   }
@@ -109,8 +159,10 @@ async function main() {
     auth: { persistSession: false }
   })
 
-  console.log(`Mode: ${isDryRun ? 'DRY RUN' : 'LIVE'}`)
-  console.log(`Fetching last ${DAYS_TO_FETCH} days of daily OHLC`)
+  console.log(`Mode: ${isDryRun ? 'DRY RUN' : 'LIVE'}${isHistory ? ' + HISTORY' : ''}`)
+  console.log(isHistory
+    ? `Fetching from ${fromDate} to today (history backfill)`
+    : `Fetching last ${DAYS_TO_FETCH} days of daily OHLC`)
   console.log(`Computing ATR${ATR_PERIOD_PRIMARY} (canonical) + ATR${ATR_PERIOD_LEGACY} (legacy)\n`)
 
   const { data: marketRows, error: marketError } = await db
@@ -144,7 +196,9 @@ async function main() {
     if (!market.price_data_symbol) continue
     try {
       const isCrypto = market.price_data_provider === 'FINNHUB_CRYPTO'
-      const bars = await fetchRecentOhlc(market.price_data_symbol, DAYS_TO_FETCH, FINNHUB_API_KEY, isCrypto)
+      const bars = isHistory
+        ? await fetchHistoricalOhlc(market.price_data_symbol, HISTORY_START, FINNHUB_CANDLE_API_KEY!, isCrypto)
+        : await fetchRecentOhlc(market.price_data_symbol, DAYS_TO_FETCH, FINNHUB_API_KEY, isCrypto)
 
       // Finnhub's daily forex candle lags 1-2 days; fill today/yesterday from
       // 5-minute bars when the daily endpoint hasn't caught up yet. Only
@@ -229,8 +283,8 @@ async function main() {
         parameters: { atrPeriod: ATR_PERIOD_LEGACY, zoneCount: ZONE_COUNT },
       })
       console.log(
-        `  ${market.symbol}: ${rows.length} rows. Latest (${latest.date}):` +
-        ` close=${latest.close}, ATR14=${latestState.atr14?.toFixed(5)}, ATR20=${latestState.atr20?.toFixed(5)}` +
+        `  ${market.symbol}: ${rows.length} rows (${bars[0]?.date} to ${latest.date}).` +
+        ` Latest close=${latest.close}, ATR14=${latestState.atr14?.toFixed(5)}, ATR20=${latestState.atr20?.toFixed(5)}` +
         `${isDryRun ? ' [DRY RUN]' : ''}`
       )
       summary.upserted += rows.length
@@ -238,7 +292,7 @@ async function main() {
       console.error(`  ${market.symbol}: ${(err as Error).message}`)
       summary.errors++
     }
-    await new Promise(r => setTimeout(r, 150))
+    await new Promise(r => setTimeout(r, isHistory ? 200 : 150))
   }
 
   console.log('\n=== SUMMARY ===')
