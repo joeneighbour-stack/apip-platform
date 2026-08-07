@@ -1,13 +1,10 @@
-import { RecommendationHeader } from './RecommendationHeader'
+import { PrimaryRecommendation } from './PrimaryRecommendation'
+import { MarketContext } from './MarketContext'
 import { MajorEventWarning } from './MajorEventWarning'
-import { ZoneStrip } from './ZoneStrip'
-import { TradeContextChart } from './TradeContextChart'
-import { WhySetup } from './WhySetup'
-import { TradePlanCard } from './TradePlanCard'
-import { MarketConditionsCard } from './MarketConditionsCard'
-import { HistoricalEvidenceCard } from './HistoricalEvidenceCard'
-import { PreviousSessionStrip } from './PreviousSessionStrip'
-import { DetailedEvents } from './DetailedEvents'
+import { RecommendationSynthesis } from './RecommendationSynthesis'
+import { EvidencePillars } from './EvidencePillars'
+import { SuggestedTradeStructure } from './SuggestedTradeStructure'
+import { SupportingEvidence } from './SupportingEvidence'
 import { FeedbackButtons } from './FeedbackButtons'
 import type { WorkspaceRow } from './types'
 
@@ -18,75 +15,27 @@ interface Props {
   marketsAllocatedToday: number
 }
 
-// Institutional recommendation card. Header -> Market Context (one understated
-// line) -> Major Event warning (single strip) -> zone valuation -> chart (65%) /
-// Why This Setup (35%) -> compact Trade Plan/Market Conditions/Historical Evidence
-// strip -> previous session -> economic calendar detail -> feedback. Header
-// through the ROW3 strip is the core decision area the layout targets fitting in
-// one viewport; previous session/calendar detail are lower-priority, below the fold.
+// Concise professional recommendation brief -- readable in ~5-10 seconds.
+// Primary recommendation -> market context -> event risk (only when material) ->
+// why this is being recommended -> two evidence pillars (historical profile /
+// today's conditions) -> suggested trade structure -> supporting evidence
+// (collapsed by default). No chart -- analysts already have TradingView for
+// that; this card's value is opportunity selection, analyst-specific evidence,
+// objective conditions, and a starting structure, not charting.
 export function MarketDetailCard({ row, newsHeadline, recommendationsGeneratedToday, marketsAllocatedToday }: Props) {
   return (
     <div className="border-t border-border bg-muted/20 p-5 space-y-4">
-      <div className="space-y-2">
-        <RecommendationHeader row={row} />
-        {newsHeadline && (
-          <p className="text-xs text-muted-foreground">
-            <span className="font-medium text-foreground">Market context</span> &mdash; &ldquo;{newsHeadline}&rdquo;
-          </p>
-        )}
-        <MajorEventWarning eventRiskItems={row.eventRiskItems} />
-        <ZoneStrip
-          currentZone={row.currentZone}
-          preferredZone={row.preferredZone}
-          direction={row.direction}
-          entryLow={row.entryLow}
-          entryHigh={row.entryHigh}
-          displayPrecision={row.displayPrecision}
-          currentPrice={row.currentPrice}
-          currentPriceSource={row.currentPriceSource}
-          triggerProbability={row.triggerProbability}
-        />
-      </div>
-
-      {/* Chart 65% / Why This Setup 35% */}
-      <div className="grid grid-cols-1 lg:grid-cols-[65fr_35fr] gap-4">
-        <div className="rounded-lg border border-border bg-card p-2 min-w-0 flex flex-col">
-          <TradeContextChart
-            data={row.priceHistory}
-            entryLow={row.entryLow}
-            entryHigh={row.entryHigh}
-            riskRange={row.riskRange}
-            targetRange={row.targetRange}
-            currentPrice={row.currentPrice}
-            highImpactEvent={row.eventRiskItems.find(e => e.impact === 'HIGH') ?? null}
-            displayPrecision={row.displayPrecision}
-          />
-        </div>
-        <div className="rounded-lg border border-border bg-card p-3 min-w-0">
-          <WhySetup
-            row={row}
-            recommendationsGeneratedToday={recommendationsGeneratedToday}
-            marketsAllocatedToday={marketsAllocatedToday}
-          />
-        </div>
-      </div>
-
-      {/* Trade Plan / Market Conditions / Historical Evidence -- one strip, not
-          three separate cards; each column owns its info with no restatement
-          elsewhere on the card. */}
-      <div className="rounded-lg border border-border bg-card grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-border">
-        <TradePlanCard row={row} />
-        <MarketConditionsCard row={row} />
-        <HistoricalEvidenceCard row={row} />
-      </div>
-
-      <PreviousSessionStrip row={row} />
-
-      <DetailedEvents
-        eventRiskItems={row.eventRiskItems}
-        eventRiskOverflowCount={row.eventRiskOverflowCount}
+      <PrimaryRecommendation row={row} />
+      <MarketContext newsHeadline={newsHeadline} />
+      <MajorEventWarning eventRiskItems={row.eventRiskItems} />
+      <RecommendationSynthesis row={row} />
+      <EvidencePillars row={row} />
+      <SuggestedTradeStructure row={row} />
+      <SupportingEvidence
+        row={row}
+        recommendationsGeneratedToday={recommendationsGeneratedToday}
+        marketsAllocatedToday={marketsAllocatedToday}
       />
-
       <div className="pt-1 border-t border-border/60">
         <FeedbackButtons opportunityId={row.opportunityId} />
       </div>

@@ -1,5 +1,3 @@
-'use client'
-import { useState } from 'react'
 import { ZONE_LADDER_ORDER, zoneSemanticColour, ZONE_BAND_BG_CLASS, type AtrZone } from '@/lib/workspaceUtils'
 
 interface Props {
@@ -19,15 +17,13 @@ const STRIP_LABEL: Record<AtrZone, string> = {
   ZONE_2: 'VALUE', ZONE_1: 'DEEP VALUE', TOO_DEEP: 'EXTREME',
 }
 
-// Replaces the old vertical zone ladder -- one line, no large bands. ▲ marks the
-// current price's zone, ★ the preferred entry zone; "View zone detail ▼" exposes
-// the entry range + trigger probability that used to live in the always-visible
-// ladder, without bringing the large bands back.
+// Full valuation ladder -- lives inside Supporting Evidence now (that section's own
+// toggle gates visibility, so this no longer needs an internal expand/collapse of
+// its own). ▲ marks the current price's zone, ★ the preferred entry zone.
 export function ZoneStrip({
   currentZone, preferredZone, direction, entryLow, entryHigh, displayPrecision,
   currentPrice, currentPriceSource, triggerProbability,
 }: Props) {
-  const [expanded, setExpanded] = useState(false)
   const precision = displayPrecision ?? 4
 
   return (
@@ -56,20 +52,10 @@ export function ZoneStrip({
           )
         })}
       </div>
-
-      <button
-        type="button"
-        onClick={() => setExpanded(v => !v)}
-        className="text-[10px] text-primary hover:underline"
-      >
-        View zone detail {expanded ? '▴' : '▾'}
-      </button>
-      {expanded && (
-        <div className="text-[11px] text-muted-foreground space-y-0.5 tabular-nums">
-          <p>Entry: {entryLow != null && entryHigh != null ? `${entryLow.toFixed(precision)}–${entryHigh.toFixed(precision)}` : '—'}</p>
-          {triggerProbability != null && <p>Trigger probability: {Math.round(triggerProbability * 100)}%</p>}
-        </div>
-      )}
+      <div className="text-[11px] text-muted-foreground space-y-0.5 tabular-nums">
+        <p>Entry: {entryLow != null && entryHigh != null ? `${entryLow.toFixed(precision)}–${entryHigh.toFixed(precision)}` : '—'}</p>
+        {triggerProbability != null && <p>Trigger probability: {Math.round(triggerProbability * 100)}%</p>}
+      </div>
     </div>
   )
 }

@@ -380,81 +380,6 @@ export function fxPipCount(range: number, displayPrecision: number | null): numb
   return Math.round(range / Math.pow(10, -pipDecimalPlaces))
 }
 
-// ============================================================================
-// Recommendation card redesign -- evidence indicators, block ratings, and
-// event grouping. All pure functions over already-fetched WorkspaceRow data;
-// no new data sources. Colour is restricted to the same 4-value palette used
-// throughout the redesign (green/amber/red/neutral) -- "grey" states from the
-// spec (e.g. expired) render as 'neutral' with a distinguishing label, not a
-// 5th colour, per the design principle that colour is used only for
-// supportive/caution/risk/everything-else.
-// ============================================================================
-
-export type EvidenceStatus = 'green' | 'amber' | 'red' | 'neutral'
-
-export interface EvidenceIndicator {
-  status: EvidenceStatus
-  label: string
-}
-
-export const EVIDENCE_STATUS_CLASS: Record<EvidenceStatus, string> = {
-  green: 'text-green-700',
-  amber: 'text-amber-600',
-  red: 'text-red-600',
-  neutral: 'text-muted-foreground',
-}
-
-export const EVIDENCE_STATUS_ICON: Record<EvidenceStatus, string> = {
-  green: '✓',
-  amber: '⚠',
-  red: '⚠',
-  neutral: '○',
-}
-
-/** Regime aligned: green if trend direction matches trade direction, amber if
- *  counter-trend, neutral (hidden by caller) if no regime/direction data. */
-export function regimeAlignmentEvidence(direction: 'BUY' | 'SELL' | null, trendState: string | null): EvidenceIndicator | null {
-  if (!direction || !trendState) return null
-  if (trendState === 'TRENDING_UP') {
-    return direction === 'BUY' ? { status: 'green', label: 'Regime aligned' } : { status: 'amber', label: 'Counter-trend' }
-  }
-  if (trendState === 'TRENDING_DOWN') {
-    return direction === 'SELL' ? { status: 'green', label: 'Regime aligned' } : { status: 'amber', label: 'Counter-trend' }
-  }
-  return { status: 'neutral', label: 'Ranging market' }
-}
-
-/** Price location: same green/amber/red/neutral thresholds as zoneProximityClass.
- *  Prefers the quantitative ATR distance (e.g. "0.3 ATR above entry") over a vague
- *  "near"/"far" read when it's available (entryDistanceLanguage needs atr20, which
- *  isn't always present -- the qualitative label is the fallback, not the default). */
-export function priceLocationEvidence(
-  currentZone: string | null, preferredZone: string | null, distanceLabel?: string | null,
-): EvidenceIndicator | null {
-  if (!currentZone || !preferredZone) return null
-  const cls = zoneProximityClass(currentZone, preferredZone)
-  if (cls === 'neutral') return null
-  const label = distanceLabel
-    ?? (cls === 'green' ? 'Price at preferred zone' : cls === 'amber' ? 'Price near preferred zone' : 'Price far from preferred zone')
-  return { status: cls, label }
-}
-
-/** Event risk: red if any HIGH-impact event today, amber if events exist but none
- *  are HIGH impact, hidden (null) if no relevant events at all. */
-export function eventRiskEvidence(eventRiskItems: { impact: string }[]): EvidenceIndicator | null {
-  if (eventRiskItems.length === 0) return null
-  const hasHigh = eventRiskItems.some(e => e.impact === 'HIGH')
-  return hasHigh ? { status: 'red', label: 'Major event risk' } : { status: 'amber', label: 'Event risk today' }
-}
-
-/** Entry status: green once price is at the preferred zone (ENTER_NOW), neutral
- *  while waiting, neutral-with-different-label once the session has expired. */
-export function entryStatusEvidence(analystAction: string | null, isExpired: boolean): EvidenceIndicator {
-  if (isExpired) return { status: 'neutral', label: 'Session expired' }
-  if (analystAction === 'ENTER_NOW') return { status: 'green', label: 'Entry triggered' }
-  return { status: 'neutral', label: 'Entry not triggered' }
-}
-
 /** True when the sample behind a historical edge is too thin to trust at face value --
  *  LOW profile_quality, or (when quality wasn't computed at all, e.g. the zone/market_only
  *  tiers) fewer than 20 trades, matching MEDIUM_CONFIDENCE_MIN_TRADES elsewhere. */
@@ -462,127 +387,23 @@ export function isLowSampleEdge(quality: string | null, trades: number): boolean
   return quality === 'LOW' || (quality == null && trades < 20)
 }
 
-/** Historical fit: distinguishes WHETHER the result is positive (avgR) from HOW MUCH to
- *  trust it (sample quality) -- a positive result on a thin sample reads as "positive
- *  historical evidence · low sample", not "strong historical fit", so a small sample
- *  is never overstated as a strong signal. red if avgR<=0 regardless of sample size
- *  (a negative result is a negative result); hidden (null) if there's no data at all. */
-export function historicalFitEvidence(
-  avgR: number | null, winRate: number | null, quality: string | null, trades: number,
-): EvidenceIndicator | null {
-  if (avgR == null) return null
-  if (avgR <= 0) return { status: 'red', label: 'Weak historical fit' }
-  if (isLowSampleEdge(quality, trades)) return { status: 'amber', label: 'Positive historical evidence · low sample' }
-  if (avgR > 0.10 && winRate != null && winRate > 0.50) return { status: 'green', label: 'Strong historical fit' }
-  if (avgR > 0 && winRate != null && winRate > 0.45) return { status: 'amber', label: 'Moderate historical fit' }
-  return { status: 'amber', label: 'Weak historical fit' }
-}
-
-/** Header status line: LEVELS OUTDATED > SESSION EXPIRED > ENTRY PASSED > ENTRY
- *  TRIGGERED > WAITING FOR ENTRY, in that priority order. */
-export function recommendationStatusLabel(
-  isDoNotUse: boolean, isEntryPassed: boolean, analystAction: string | null, isExpired: boolean,
-): string {
-  if (isDoNotUse) return 'LEVELS OUTDATED'
-  if (isExpired) return 'SESSION EXPIRED'
-  if (isEntryPassed) return 'ENTRY PASSED'
-  if (analystAction === 'ENTER_NOW') return 'ENTRY TRIGGERED'
-  return 'WAITING FOR ENTRY'
-}
-
-export type BlockRating = 'Strong' | 'Neutral' | 'Weak' | 'Good' | 'Caution' | 'Positive'
-
-export const BLOCK_RATING_CLASS: Record<BlockRating, string> = {
-  Strong: 'text-green-700', Good: 'text-green-700', Positive: 'text-green-700',
-  Neutral: 'text-muted-foreground',
-  Caution: 'text-amber-600',
-  Weak: 'text-red-600',
-}
-
-/** Section 4 Block 1 -- Price Location rating. Caller only invokes this once
- *  currentZone/preferredZone are both known to be present. */
-export function priceLocationRating(currentZone: string, preferredZone: string): 'Strong' | 'Neutral' | 'Weak' {
-  const cls = zoneProximityClass(currentZone, preferredZone)
-  if (cls === 'green') return 'Strong'
-  if (cls === 'amber') return 'Neutral'
-  return 'Weak'
-}
-
 function isTrendingRegime(trendState: string | null, adx14: number | null): boolean {
   return adx14 != null && adx14 >= 25 && (trendState === 'TRENDING_UP' || trendState === 'TRENDING_DOWN')
-}
-
-/** Section 4/6 -- "Trending"/"Ranging" market label, per the redesign's simplified
- *  two-word framing (regimeTrendLabel() above gives the fuller "Strong Uptrend" style
- *  used elsewhere; this is deliberately blunter for the evidence-block heading). */
-export function isTrendingRegimeLabel(trendState: string | null, adx14: number | null): 'Trending' | 'Ranging' {
-  return isTrendingRegime(trendState, adx14) ? 'Trending' : 'Ranging'
 }
 
 function isRegimeAligned(direction: 'BUY' | 'SELL' | null, trendState: string | null): boolean {
   return (trendState === 'TRENDING_UP' && direction === 'BUY') || (trendState === 'TRENDING_DOWN' && direction === 'SELL')
 }
 
-/** Section 4 Block 2 -- Regime Fit rating. */
-export function regimeFitRating(direction: 'BUY' | 'SELL' | null, trendState: string | null, adx14: number | null): 'Good' | 'Neutral' | 'Caution' {
-  if (!isTrendingRegime(trendState, adx14)) return 'Neutral'
-  return isRegimeAligned(direction, trendState) ? 'Good' : 'Caution'
-}
-
-/** Section 4 Block 2 / Section 6 -- one-line regime interpretation, per the
- *  spec's explicit ranging / trending-aligned / trending-counter rule order. */
-export function regimeFitInterpretation(direction: 'BUY' | 'SELL' | null, trendState: string | null, adx14: number | null): string {
-  if (!isTrendingRegime(trendState, adx14)) return 'Range conditions favour mean-reversion setups.'
-  return isRegimeAligned(direction, trendState)
-    ? 'Trend conditions support directional bias.'
-    : 'Setup trades against prevailing trend — lower probability.'
-}
-
-/** Section 4 Block 3 -- Historical Evidence rating. Caller only invokes this
- *  once avgR is known to be non-null (i.e. some historical data exists). */
-export function historicalEvidenceRating(avgR: number): 'Positive' | 'Neutral' | 'Weak' {
-  if (avgR <= 0) return 'Weak'
-  if (avgR > 0.10) return 'Positive'
-  return 'Neutral'
-}
-
-/** "comparable conditions" / "zone-matched conditions" / "all conditions" -- shared by
- *  the Why This Setup summary line and the full Historical Evidence strip, so the two
- *  name the same tier the same way. */
+/** "comparable conditions" / "zone-matched conditions" / "all conditions" -- names the
+ *  historical-edge tier consistently across the Historical Profile pillar and Supporting
+ *  Evidence's historical breakdown. */
 export function historicalEdgeConditionsLabel(tier: string): string {
   switch (tier) {
     case 'zone': return 'zone-matched conditions'
     case 'regime_direction': return 'comparable conditions'
     default: return 'all conditions'
   }
-}
-
-/** Section 4 Block 3, condensed -- a single qualitative sentence, no numbers (the
- *  numbers -- win rate/expectancy/sample/quality -- live in the Historical Evidence
- *  strip below; this just says whether the edge is positive and how much to trust it). */
-export function historicalEvidenceSummary(avgR: number, quality: string | null, trades: number, tier: string): string {
-  if (avgR <= 0) return `No positive edge in ${historicalEdgeConditionsLabel(tier)}.`
-  const lowSample = isLowSampleEdge(quality, trades)
-  return `Positive edge in ${historicalEdgeConditionsLabel(tier)}${lowSample ? ' (low sample)' : ''}.`
-}
-
-/** Section 6 -- Market Conditions one-line interpretation, per the spec's
- *  explicit rule priority: ranging+aligned, trending+aligned, trending+counter,
- *  low volatility, else none. */
-export function marketConditionsInterpretation(
-  direction: 'BUY' | 'SELL' | null, currentZone: string | null, preferredZone: string | null,
-  trendState: string | null, adx14: number | null, atrPercentile: number | null,
-): string | null {
-  const zoneAligned = currentZone != null && preferredZone != null && currentZone === preferredZone
-  const isRanging = trendState === 'RANGE' || (adx14 != null && adx14 < 15)
-  if (isRanging && zoneAligned) return 'Range conditions support mean-reversion.'
-  if (isTrendingRegime(trendState, adx14)) {
-    return isRegimeAligned(direction, trendState)
-      ? 'Trend direction supports this setup.'
-      : 'Prevailing trend works against this setup.'
-  }
-  if (atrPercentile != null && atrPercentile <= 20) return 'Compressed volatility — potential for directional move.'
-  return null
 }
 
 interface GroupableEvent {
@@ -628,4 +449,200 @@ export function impactBadge(impact: string): string {
     case 'MEDIUM': return '⚠ MEDIUM'
     default: return 'LOW'
   }
+}
+
+// ============================================================================
+// Recommendation-brief redesign -- primary recommendation taxonomy, two
+// evidence-pillar ratings, and a natural-language synthesis. All derived from
+// data/thresholds that already exist elsewhere in this file (isLowSampleEdge,
+// isTrendingRegime, isRegimeAligned, zoneProximityClass) -- no new arbitrary
+// cutoffs invented for the UI.
+// ============================================================================
+
+/** "EURNZD" -> "EUR/NZD". FX-only (same 6-letter detection as marketCurrencies());
+ *  every other asset class is returned unchanged. Presentational only -- the
+ *  underlying symbol/market_id are never touched. */
+export function formatSymbolForDisplay(symbol: string, assetClass: string | null): string {
+  if (assetClass !== 'FX') return symbol
+  const clean = symbol.replace(/[^A-Za-z]/g, '')
+  if (clean.length !== 6) return symbol
+  return `${clean.slice(0, 3).toUpperCase()}/${clean.slice(3, 6).toUpperCase()}`
+}
+
+/**
+ * BUY DIPS / SELL RALLIES -- not a new probabilistic classification, a direct
+ * restatement of the engine's existing zone-entry invariant: BUY setups are only
+ * ever constrained to low zones (Zone 1/2/Too Deep) and SELL setups to high zones
+ * (Zone 3/4/Too High), per templateService.ts's BUY_ZONES/SELL_ZONES constraint
+ * (V1.3 amendment) and clampToValidZone()'s output clamp. Every BUY recommendation
+ * this system can currently produce IS a dip-buy and every SELL IS a rally-sell,
+ * by construction -- there is no code path today that would ever produce a
+ * breakout-style setup, so BUY BREAKOUT/SELL BREAKDOWN are deliberately not
+ * offered here (would be unreachable, not "eventually possible").
+ */
+export function recommendationTypeLabel(direction: 'BUY' | 'SELL' | null): string | null {
+  if (direction === 'BUY') return 'BUY DIPS'
+  if (direction === 'SELL') return 'SELL RALLIES'
+  return null
+}
+
+export type HistoricalProfileRating = 'STRONG FIT' | 'POSITIVE FIT' | 'NEUTRAL' | 'LIMITED EVIDENCE' | 'WEAK FIT'
+
+export const HISTORICAL_RATING_CLASS: Record<HistoricalProfileRating, string> = {
+  'STRONG FIT': 'text-green-700',
+  'POSITIVE FIT': 'text-green-700',
+  NEUTRAL: 'text-muted-foreground',
+  'LIMITED EVIDENCE': 'text-amber-600',
+  'WEAK FIT': 'text-red-600',
+}
+
+/**
+ * YOUR HISTORICAL PROFILE rating. Reuses exactly the same thresholds
+ * historicalFitEvidence()/isLowSampleEdge() already use elsewhere on this card
+ * (avgR>0.10 & winRate>0.50 for the top tier, avgR>0 & winRate>0.45 for the next,
+ * LOW profile_quality or <20 trades for thin samples) -- no new cutoffs. A
+ * positive avgR on a thin sample maps to LIMITED EVIDENCE outright, never to
+ * STRONG/POSITIVE FIT, per the redesign's explicit "don't overstate a small
+ * sample" rule. Returns null when there's no historical data at all (trades=0);
+ * caller shows a "no history yet" line instead of a rating badge.
+ */
+export function historicalProfileRating(
+  avgR: number | null, winRate: number | null, quality: string | null, trades: number,
+): HistoricalProfileRating | null {
+  if (avgR == null || trades === 0) return null
+  if (avgR <= 0) return 'WEAK FIT'
+  if (isLowSampleEdge(quality, trades)) return 'LIMITED EVIDENCE'
+  if (avgR > 0.10 && winRate != null && winRate > 0.50) return 'STRONG FIT'
+  if (avgR > 0 && winRate != null && winRate > 0.45) return 'POSITIVE FIT'
+  return 'NEUTRAL'
+}
+
+export type TodaysConditionsRating = 'SUPPORTIVE' | 'MIXED' | 'NEUTRAL' | 'UNSUPPORTIVE'
+
+export const CONDITIONS_RATING_CLASS: Record<TodaysConditionsRating, string> = {
+  SUPPORTIVE: 'text-green-700',
+  MIXED: 'text-amber-600',
+  NEUTRAL: 'text-muted-foreground',
+  UNSUPPORTIVE: 'text-red-600',
+}
+
+/**
+ * TODAY'S CONDITIONS rating. Combines the two objective signals this card
+ * already computes elsewhere -- regime fit (isTrendingRegime/isRegimeAligned,
+ * the same pair regimeFitRating() uses) and price location (zoneProximityClass,
+ * the same function priceLocationRating() uses) -- into one read. Counter-trend
+ * is always UNSUPPORTIVE (the strongest single negative signal); trend-aligned
+ * + at-zone, or ranging + at-zone (the existing mean-reversion rule from
+ * marketConditionsInterpretation), is SUPPORTIVE; trend-aligned but price not
+ * yet at the preferred zone is MIXED (one signal good, one not there yet);
+ * everything else is NEUTRAL. No thresholds here are new. Returns null when
+ * there's no regime data at all.
+ */
+export function todaysConditionsRating(
+  direction: 'BUY' | 'SELL' | null, currentZone: string | null, preferredZone: string | null,
+  trendState: string | null, adx14: number | null,
+): TodaysConditionsRating | null {
+  if (trendState == null || adx14 == null) return null
+  const trending = isTrendingRegime(trendState, adx14)
+  const aligned = trending && isRegimeAligned(direction, trendState)
+  const proximity = zoneProximityClass(currentZone, preferredZone)
+  const atZone = proximity === 'green'
+
+  if (trending && !aligned) return 'UNSUPPORTIVE'
+  if (aligned && atZone) return 'SUPPORTIVE'
+  if (!trending && atZone) return 'SUPPORTIVE'
+  if (aligned && !atZone) return 'MIXED'
+  if (proximity === 'red') return 'UNSUPPORTIVE'
+  return 'NEUTRAL'
+}
+
+type Polarity = 'positive' | 'neutral' | 'negative'
+
+function historicalPolarity(r: HistoricalProfileRating | null): Polarity {
+  if (r === 'STRONG FIT' || r === 'POSITIVE FIT') return 'positive'
+  if (r === 'WEAK FIT') return 'negative'
+  return 'neutral' // NEUTRAL, LIMITED EVIDENCE, or no data
+}
+
+function conditionsPolarity(r: TodaysConditionsRating | null): Polarity {
+  if (r === 'SUPPORTIVE') return 'positive'
+  if (r === 'UNSUPPORTIVE') return 'negative'
+  return 'neutral' // MIXED, NEUTRAL, or no data
+}
+
+function historicalClauseText(rating: HistoricalProfileRating | null, symbolDisplay: string, dirWord: string): string {
+  switch (rating) {
+    case 'STRONG FIT':
+    case 'POSITIVE FIT':
+      return `your previous ${symbolDisplay} ${dirWord} ideas have produced positive expectancy`
+    case 'NEUTRAL':
+      return `your historical record in ${symbolDisplay} ${dirWord} ideas is roughly break-even`
+    case 'LIMITED EVIDENCE':
+      return `the historical sample for this market is limited`
+    case 'WEAK FIT':
+      return `your previous ${symbolDisplay} ${dirWord} ideas have not been profitable`
+    default:
+      return `there is no trade history yet for ${symbolDisplay} ${dirWord} ideas`
+  }
+}
+
+function conditionsClauseText(rating: TodaysConditionsRating | null, trendState: string | null, adx14: number | null): string {
+  const isRanging = trendState === 'RANGE' || (adx14 != null && adx14 < 15)
+  switch (rating) {
+    case 'SUPPORTIVE':
+      return isRanging
+        ? `today's market is ranging, favouring a mean-reversion entry at this level`
+        : `today's market remains in a ${regimeTrendLabel(trendState, adx14).toLowerCase()}`
+    case 'MIXED':
+      return `today's market conditions provide only partial support`
+    case 'UNSUPPORTIVE':
+      return `today's conditions work against the directional bias`
+    default:
+      return `today's market conditions are broadly neutral`
+  }
+}
+
+function capitalize(s: string): string {
+  return s.length > 0 ? s.charAt(0).toUpperCase() + s.slice(1) : s
+}
+
+/**
+ * "WHY THIS IS BEING RECOMMENDED" -- one to two sentences synthesising the two
+ * evidence pillars. Never manufactures a positive read: if either pillar is
+ * negative or the two disagree, the sentence says so explicitly rather than
+ * defaulting to an upbeat tone. Built entirely from the two ratings above (which
+ * are themselves built from existing thresholds) plus the plain-English trend
+ * label already used elsewhere on this card -- no new data.
+ */
+export function recommendationSynthesis(
+  symbolDisplay: string, direction: 'BUY' | 'SELL' | null,
+  historicalRating: HistoricalProfileRating | null, conditionsRating: TodaysConditionsRating | null,
+  trendState: string | null, adx14: number | null,
+): string {
+  const dirWord = direction ?? ''
+  const hPol = historicalPolarity(historicalRating)
+  const cPol = conditionsPolarity(conditionsRating)
+  const hClause = historicalClauseText(historicalRating, symbolDisplay, dirWord)
+  const cClause = conditionsClauseText(conditionsRating, trendState, adx14)
+
+  if (hPol === 'positive' && cPol === 'positive') {
+    const strength = historicalRating === 'STRONG FIT' ? 'strong' : 'positive'
+    return `This setup combines a ${strength} historical fit with supportive current conditions. ${capitalize(hClause)}, while ${cClause}.`
+  }
+  if (hPol === 'positive' && cPol === 'negative') {
+    return `${capitalize(hClause)}, but ${cClause} today — treat with caution.`
+  }
+  if (cPol === 'positive' && hPol === 'negative') {
+    return `${capitalize(cClause)}, but ${hClause} — treat with caution.`
+  }
+  if (hPol === 'positive') {
+    return `${capitalize(hClause)}, although ${cClause}.`
+  }
+  if (cPol === 'positive') {
+    return `${capitalize(cClause)}, although ${hClause}.`
+  }
+  if (hPol === 'negative' || cPol === 'negative') {
+    return `Neither your historical record nor today's conditions strongly support this setup: ${hClause}, and ${cClause}. Review carefully before proceeding.`
+  }
+  return `The evidence for this setup is mixed: ${hClause}, and ${cClause}.`
 }
