@@ -136,6 +136,53 @@ describe('buildRecommendation', () => {
     expect(opportunity.direction).toBe('BUY');
     expect(opportunity.preferredEntryZone).toBe('ZONE_1');
   });
+
+  it('passes regimeTags through from a live RegimeSnapshot (market_regime_state shape, not MarketRegimeService)', () => {
+    const { recommendationVersion } = buildRecommendation(baseInput({
+      marketRegime: { trendState: 'TRENDING_DOWN', regimeConfidence: 'MEDIUM', regimeTags: ['TRENDING_DOWN', 'LOW_VOL'] },
+    }));
+    expect(recommendationVersion.regimeTags).toEqual(['TRENDING_DOWN', 'LOW_VOL']);
+  });
+
+  describe('confidence-scaled trigger probability (engine review amendment)', () => {
+    // baseInput's 15 triggered BUY/ZONE_2 trades give a raw (pre-scaling) triggerProbability
+    // of exactly 1.0 (15/15 triggered, >= minTriggerSample) -- a clean baseline to scale from.
+    it('applies no discount for HIGH regime confidence', () => {
+      const { opportunity } = buildRecommendation(baseInput({
+        marketRegime: { trendState: 'TRENDING_UP', regimeConfidence: 'HIGH', regimeTags: [] },
+      }));
+      expect(opportunity.triggerProbability).toBeCloseTo(1.0, 10);
+    });
+
+    it('discounts by 0.85 for MEDIUM regime confidence', () => {
+      const { opportunity } = buildRecommendation(baseInput({
+        marketRegime: { trendState: 'TRENDING_UP', regimeConfidence: 'MEDIUM', regimeTags: [] },
+      }));
+      expect(opportunity.triggerProbability).toBeCloseTo(0.85, 10);
+    });
+
+    it('discounts by 0.70 for LOW regime confidence', () => {
+      const { opportunity } = buildRecommendation(baseInput({
+        marketRegime: { trendState: 'RANGE', regimeConfidence: 'LOW', regimeTags: [] },
+      }));
+      expect(opportunity.triggerProbability).toBeCloseTo(0.70, 10);
+    });
+
+    it('defaults to a 0.85 discount when marketRegime is null (no regime data available)', () => {
+      const { opportunity } = buildRecommendation(baseInput({ marketRegime: null }));
+      expect(opportunity.triggerProbability).toBeCloseTo(0.85, 10);
+    });
+
+    it('never scales expectedR -- only the persisted opportunity.triggerProbability', () => {
+      const high = buildRecommendation(baseInput({
+        marketRegime: { trendState: 'TRENDING_UP', regimeConfidence: 'HIGH', regimeTags: [] },
+      }));
+      const low = buildRecommendation(baseInput({
+        marketRegime: { trendState: 'TRENDING_UP', regimeConfidence: 'LOW', regimeTags: [] },
+      }));
+      expect(high.opportunity.expectedR).toBeCloseTo(low.opportunity.expectedR, 10);
+    });
+  });
 });
 
 

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { buildTemplateProfiles, selectBestTemplate, type HistoricalTradeForProfiling } from '../services/templateService.js';
 
 function trade(overrides: Partial<HistoricalTradeForProfiling> = {}): HistoricalTradeForProfiling {
@@ -106,5 +106,53 @@ describe('selectBestTemplate', () => {
     const profiles = buildTemplateProfiles(trades);
     const result = selectBestTemplate('EURUSD', profiles);
     expect(result.templateAvgR).toBeCloseTo(0.5, 10);
+  });
+
+  describe('profitability gate (engine review amendment)', () => {
+    it('selects a profitable template in the preferred direction outright, without checking the opposite direction', () => {
+      const trades = [
+        ...Array.from({ length: 10 }, () => trade({ direction: 'SELL', entryZone: null, resultR: 0.3 })), // profitable SELL
+        ...Array.from({ length: 10 }, () => trade({ direction: 'BUY', entryZone: null, resultR: 5.0 })), // higher avgR, but not preferred
+      ];
+      const profiles = buildTemplateProfiles(trades);
+      const result = selectBestTemplate('EURUSD', profiles, 'SELL');
+      expect(result.direction).toBe('SELL');
+      expect(result.templateAvgR).toBeCloseTo(0.3, 10);
+    });
+
+    it('falls back to a profitable opposite-direction template when the preferred direction has none (real EURUSD shape: losing SELL template, winning BUY template)', () => {
+      const trades = [
+        ...Array.from({ length: 100 }, () => trade({ direction: 'SELL', entryZone: null, resultR: -0.126 })), // losing SELL, regime-preferred
+        ...Array.from({ length: 76 }, () => trade({ direction: 'BUY', entryZone: null, resultR: 0.093 })), // profitable BUY
+      ];
+      const profiles = buildTemplateProfiles(trades);
+      const result = selectBestTemplate('EURUSD', profiles, 'SELL');
+      expect(result.direction).toBe('BUY');
+      expect(result.templateAvgR).toBeCloseTo(0.093, 10);
+    });
+
+    it('falls back to the best (losing) template in the preferred direction, and warns, when neither direction is profitable', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const trades = [
+        ...Array.from({ length: 10 }, () => trade({ direction: 'SELL', entryZone: null, resultR: -0.5 })),
+        ...Array.from({ length: 10 }, () => trade({ direction: 'BUY', entryZone: null, resultR: -0.2 })),
+      ];
+      const profiles = buildTemplateProfiles(trades);
+      const result = selectBestTemplate('EURUSD', profiles, 'SELL');
+      expect(result.direction).toBe('SELL'); // stays with preferred direction, doesn't jump to the also-losing opposite
+      expect(result.templateAvgR).toBeCloseTo(-0.5, 10);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      warnSpy.mockRestore();
+    });
+
+    it('prefers a zone-aligned candidate within the profitable pool, matching the pre-existing V1.3 alignment preference', () => {
+      const trades = [
+        ...Array.from({ length: 10 }, () => trade({ direction: 'BUY', entryZone: 'ZONE_3', resultR: 0.5 })), // profitable but not zone-aligned for BUY
+        ...Array.from({ length: 10 }, () => trade({ direction: 'BUY', entryZone: 'ZONE_1', resultR: 0.2 })), // profitable AND zone-aligned
+      ];
+      const profiles = buildTemplateProfiles(trades);
+      const result = selectBestTemplate('EURUSD', profiles, 'BUY');
+      expect(result.preferredEntryZone).toBe('ZONE_1');
+    });
   });
 });

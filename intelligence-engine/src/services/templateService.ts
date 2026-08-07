@@ -22,6 +22,13 @@
 //   Caller may pass preferredDirection derived from regime/current zone.
 //   When provided, only templates matching that direction are considered.
 //   Falls back to best aligned template if no constrained templates exist.
+//
+// PROFITABILITY GATE (engine review amendment):
+//   Within the preferred direction, only a template with avgR > 0 "wins" outright.
+//   If none is profitable, the opposite direction is tried before falling back to
+//   the best (possibly losing) template in the preferred direction, with a warning.
+//   Zone alignment remains a secondary preference layered within whichever
+//   profitability tier is used -- it was never a hard filter, and still isn't.
 // ============================================================================
 
 import type { AtrZone, Direction } from '../types/domain.js';
@@ -132,26 +139,6 @@ export function selectBestTemplate(
     };
   }
 
-  // Direction constraint: if caller provides preferredDirection (from regime/zone),
-  // only consider templates matching that direction.
-  // Falls back to all aligned templates if constraint yields nothing.
-  const directionFiltered = preferredDirection
-    ? subset.filter(t => t.direction === preferredDirection)
-    : subset
-
-  // Zone alignment filter only applies when a direction constraint is active.
-  // Without preferredDirection, avgR is the sole selection criterion --
-  // the alignment insight belongs in coaching, not as a hard template discard.
-  const candidates = preferredDirection
-    ? (directionFiltered.length > 0
-        ? directionFiltered.filter(t => isZoneAligned(t.direction, t.entryZone)).length > 0
-          ? directionFiltered.filter(t => isZoneAligned(t.direction, t.entryZone))
-          : directionFiltered
-        : subset)
-    : directionFiltered.length > 0
-      ? directionFiltered
-      : subset
-
   function compareDesc(a: number, b: number): number {
     const aIsNaN = Number.isNaN(a), bIsNaN = Number.isNaN(b);
     if (aIsNaN && bIsNaN) return 0;
@@ -160,14 +147,60 @@ export function selectBestTemplate(
     return b - a;
   }
 
-  const sorted = [...candidates].sort((a, b) => {
-    const avgRCmp = compareDesc(a.avgR, b.avgR);
-    if (avgRCmp !== 0) return avgRCmp;
-    if (b.trades !== a.trades) return b.trades - a.trades;
-    return compareDesc(a.winRate, b.winRate);
-  });
+  function bestOf(pool: TemplateProfile[]): TemplateProfile {
+    const sorted = [...pool].sort((a, b) => {
+      const avgRCmp = compareDesc(a.avgR, b.avgR);
+      if (avgRCmp !== 0) return avgRCmp;
+      if (b.trades !== a.trades) return b.trades - a.trades;
+      return compareDesc(a.winRate, b.winRate);
+    });
+    return sorted[0]!;
+  }
 
-  const best = sorted[0]!;
+  // Zone alignment as a secondary preference within a candidate pool -- applied at every
+  // tier below, never as a hard discard (V1.3 amendment: prefer aligned, don't require it).
+  function preferZoneAligned(pool: TemplateProfile[]): TemplateProfile[] {
+    const aligned = pool.filter(t => isZoneAligned(t.direction, t.entryZone));
+    return aligned.length > 0 ? aligned : pool;
+  }
+
+  let best: TemplateProfile;
+
+  if (!preferredDirection) {
+    // No direction constraint -- avgR is the sole selection criterion, any direction.
+    best = bestOf(subset);
+  } else {
+    const directionFiltered = subset.filter(t => t.direction === preferredDirection);
+
+    if (directionFiltered.length === 0) {
+      // No historical sample at all in the preferred direction -- fall back to
+      // best available regardless of direction.
+      best = bestOf(subset);
+    } else {
+      // Profitability gate: a template only "wins" its preferred direction if it's
+      // actually profitable. Templates with entryZone=null are never zone-aligned
+      // (isZoneAligned returns false for null), so preferZoneAligned degrades to a
+      // no-op pass-through until entry_zone is backfilled on actual_trades.
+      const profitableInDirection = directionFiltered.filter(t => t.avgR > 0);
+
+      if (profitableInDirection.length > 0) {
+        best = bestOf(preferZoneAligned(profitableInDirection));
+      } else {
+        // Nothing profitable in the preferred direction -- check the opposite
+        // direction before accepting a losing template.
+        const opposite: Direction = preferredDirection === 'BUY' ? 'SELL' : 'BUY';
+        const oppositeFiltered = subset.filter(t => t.direction === opposite);
+        const profitableOpposite = oppositeFiltered.filter(t => t.avgR > 0);
+
+        if (profitableOpposite.length > 0) {
+          best = bestOf(preferZoneAligned(profitableOpposite));
+        } else {
+          console.warn(`[templateService] No profitable template for ${market} in either direction (preferred: ${preferredDirection})`);
+          best = bestOf(preferZoneAligned(directionFiltered));
+        }
+      }
+    }
+  }
 
   return {
     templateSource: 'historical_template',

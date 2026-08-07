@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto'
 
 import { buildMarketState } from '../services/marketStateService.js'
 import { assessOpportunity } from '../services/opportunityService.js'
-import { buildRecommendation, type RecommendationInputTrade } from '../services/recommendationService.js'
+import { buildRecommendation, type RecommendationInputTrade, type RegimeSnapshot } from '../services/recommendationService.js'
 import { buildCoachingRecommendation } from '../services/coachingService.js'
 import { allocateCoverage, type OpportunityForAllocation } from '../services/allocationService.js'
 import { createShadowTrade } from '../services/shadowTradeService.js'
@@ -302,7 +302,7 @@ async function main() {
     const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
     const { data: regimeRows } = await db
       .from('market_regime_state')
-      .select('market_id, trend_state, volatility_state, regime_confidence, captured_at')
+      .select('market_id, trend_state, volatility_state, regime_confidence, regime_tags, captured_at')
       .gte('captured_at', twoDaysAgo + 'T00:00:00Z')
       .is('session', null)
       .order('captured_at', { ascending: false })
@@ -422,10 +422,18 @@ async function main() {
       const rvId = randomUUID()
       const regime = regimeByMarketId.get(market.market_id)
       const marketCurrentZone = marketStateWithZone.currentZone
-      // Direction: regime first, then current zone for MIXED/absent
+      // Direction priority: regime-matched analyst-profile avgR (preferredDirectionByMarketId,
+      // the more sophisticated signal -- which direction has actually performed better for
+      // THIS analyst pool specifically when the market was in the SAME regime as today) first;
+      // then raw current trend_state; then zone position (mean-reversion) as the last resort
+      // for RANGE/MIXED/no-regime-data markets.
       let preferredDirection: 'BUY' | 'SELL' | null = null
       const trendState = regime?.trend_state
-      if (trendState === 'TRENDING_UP') {
+      const regimeMatchedDirection = preferredDirectionByMarketId.get(market.market_id)
+      if (regimeMatchedDirection) {
+        preferredDirection = regimeMatchedDirection
+        console.log(`    Profile(regime=${trendState ?? 'none'}) → direction: ${preferredDirection}`)
+      } else if (trendState === 'TRENDING_UP') {
         preferredDirection = 'BUY'
         console.log(`    Regime(TRENDING_UP) → direction: BUY`)
       } else if (trendState === 'TRENDING_DOWN') {
@@ -438,6 +446,11 @@ async function main() {
         preferredDirection = 'SELL'
         console.log(`    Zone(${marketCurrentZone}) → direction: SELL`)
       }
+      const regimeSnapshot: RegimeSnapshot | null = regime ? {
+        trendState: regime.trend_state ?? null,
+        regimeConfidence: regime.regime_confidence ?? null,
+        regimeTags: regime.regime_tags ?? [],
+      } : null
 
       const trades = allTrades
 
@@ -452,7 +465,7 @@ async function main() {
           market: symbol,
           session,
           marketState: marketStateWithZone,
-          marketRegime: null,
+          marketRegime: regimeSnapshot,
           eventRisks: [],
           trades,
           activeAnalysts: eligibleAnalysts,

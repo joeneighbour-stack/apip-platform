@@ -133,6 +133,15 @@ jobs:
           cache: 'npm'
           cache-dependency-path: intelligence-engine/package-lock.json
       - run: npm ci
+      # Guarantees fresh regime data for this session regardless of the standalone
+      # derive-regime job's own schedule/timing -- GitHub Actions' `needs:` cannot
+      # bridge separately cron-triggered jobs in this workflow (each job only runs
+      # in the single triggering event that matches its own `if:` condition), so
+      # ordering must be enforced within this job, not across jobs.
+      - run: npx tsx src/scripts/deriveMarketRegime.ts
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       - run: npx tsx src/scripts/runEngineSession.ts --session=EUROPEAN
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -180,6 +189,12 @@ jobs:
           cache: 'npm'
           cache-dependency-path: intelligence-engine/package-lock.json
       - run: npm ci
+      # See engine-european's identical step -- needs: can't bridge separately
+      # cron-triggered jobs, so regime freshness is enforced within this job.
+      - run: npx tsx src/scripts/deriveMarketRegime.ts
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       - run: npx tsx src/scripts/runEngineSession.ts --session=US
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -227,6 +242,12 @@ jobs:
           cache: 'npm'
           cache-dependency-path: intelligence-engine/package-lock.json
       - run: npm ci
+      # See engine-european's identical step -- needs: can't bridge separately
+      # cron-triggered jobs, so regime freshness is enforced within this job.
+      - run: npx tsx src/scripts/deriveMarketRegime.ts
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       - run: npx tsx src/scripts/runEngineSession.ts --session=APAC
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

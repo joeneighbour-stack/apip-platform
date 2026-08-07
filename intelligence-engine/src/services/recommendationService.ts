@@ -30,9 +30,18 @@
 //   Caller may pass preferredDirection derived from market regime and/or
 //   current zone position. This constrains template selection to aligned
 //   direction only, preventing countertrend setups.
+//
+// REGIME SNAPSHOT (engine review amendment):
+//   marketRegime is now populated by the caller from the live market_regime_state
+//   row (deriveMarketRegime.ts's output), NOT from MarketRegimeService -- that
+//   service is unused in the production pipeline (its EMA-crossover methodology
+//   and LOW/MEDIUM-only confidence scale are a different, dead implementation).
+//   RegimeSnapshot below intentionally types trendState/regimeConfidence as
+//   plain strings rather than reusing MarketRegimeOutput's narrower enums,
+//   since deriveMarketRegime.ts produces a MIXED trend state and a HIGH
+//   confidence tier that MarketRegimeOutput's contract doesn't have.
 import type { AtrZone, Direction, SessionType, ImplementedValidityState } from '../types/domain.js';
 import type { MarketStateOutput } from './marketStateService.js';
-import type { MarketRegimeOutput } from './marketRegimeService.js';
 import type { MarketEventRiskOutput } from './economicCalendarService.js';
 import { buildTemplateProfiles, selectBestTemplate, type TemplateProfile, type HistoricalTradeForProfiling } from './templateService.js';
 import { buildAnalystProfiles, selectBestAnalyst, type AnalystProfile, type ActiveAnalyst, type AnalystHistoricalTrade } from './analystProfileService.js';
@@ -42,13 +51,18 @@ import { calculateExpectedR } from './expectedRService.js';
 import { assessCondition } from './recommendationLifecycleService.js';
 import { formatGuidanceRange } from './guidanceRangeFormatter.js';
 export interface RecommendationInputTrade extends HistoricalTradeForProfiling, AnalystHistoricalTrade {}
+export interface RegimeSnapshot {
+  trendState: string | null;
+  regimeConfidence: string | null;
+  regimeTags: string[];
+}
 export interface BuildRecommendationInput {
   recommendationVersionId: string;
   generatedAt: string;
   market: string;
   session: SessionType;
   marketState: MarketStateOutput;
-  marketRegime: MarketRegimeOutput | null;
+  marketRegime: RegimeSnapshot | null;
   eventRisks: MarketEventRiskOutput[];
   trades: RecommendationInputTrade[];
   activeAnalysts: ActiveAnalyst[];
@@ -124,6 +138,19 @@ export interface BuildRecommendationOutput {
   hiddenExecutionLevels: HiddenExecutionLevels;
   diagnostics: RecommendationDiagnostics;
 }
+// Confidence-scaled trigger probability (engine review amendment): a LOW-confidence
+// regime read should produce a more conservative (lower) displayed trigger probability
+// than the same raw historical rate under a HIGH-confidence read. Only scales down --
+// never up -- and only applies to the analyst-facing opportunity.triggerProbability,
+// not to expectedR's calculation (which keeps using the raw, unscaled probability;
+// scaling that too was not requested and risks double-discounting the same signal).
+const MAX_TRIGGER_PROBABILITY = 1.0;
+const CONFIDENCE_MULTIPLIER: Record<string, number> = {
+  HIGH: 1.0,
+  MEDIUM: 0.85,
+  LOW: 0.70,
+};
+const DEFAULT_CONFIDENCE_MULTIPLIER = 0.85; // unknown/missing regime confidence
 export function buildRecommendation(input: BuildRecommendationInput): BuildRecommendationOutput {
   const {
     recommendationVersionId, generatedAt, market, session, marketState, marketRegime, eventRisks,
@@ -147,6 +174,10 @@ export function buildRecommendation(input: BuildRecommendationInput): BuildRecom
     profile: { profileAvgR: profile.profileAvgR, profileTrades: profile.profileTrades },
     trigger: { triggerProbability: trigger.triggerProbability },
   });
+  const confidenceMultiplier = marketRegime?.regimeConfidence
+    ? CONFIDENCE_MULTIPLIER[marketRegime.regimeConfidence] ?? DEFAULT_CONFIDENCE_MULTIPLIER
+    : DEFAULT_CONFIDENCE_MULTIPLIER;
+  const adjustedTriggerProbability = Math.min(trigger.triggerProbability * confidenceMultiplier, MAX_TRIGGER_PROBABILITY);
   const topEventRisk = eventRisks.length > 0 ? [...eventRisks].sort((a, b) => b.riskScore - a.riskScore)[0]! : null;
   const eventRiskStatus = topEventRisk?.eventRiskStatus ?? 'NONE';
   const eventWarning = topEventRisk?.analystWarning ?? '';
@@ -179,7 +210,7 @@ export function buildRecommendation(input: BuildRecommendationInput): BuildRecom
   const opportunity: OpportunityOutput = {
     opportunityId, market, session, date: dateOnly, direction,
     currentZone: marketState.currentZone, preferredEntryZone: zone, analystAction,
-    expectedR: expected.expectedR, triggerProbability: trigger.triggerProbability,
+    expectedR: expected.expectedR, triggerProbability: adjustedTriggerProbability,
     assignedAnalystId: profile.assignedAnalyst, opportunityLifecycleStatus: 'GENERATED',
   };
   const recommendationVersion: RecommendationVersionOutput = {
