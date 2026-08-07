@@ -24,7 +24,13 @@
 // Run:
 //   npx tsx src/scripts/deriveMarketRegime.ts --dry-run
 //   npx tsx src/scripts/deriveMarketRegime.ts
-//   npx tsx src/scripts/deriveMarketRegime.ts --backfill  (process all historical dates)
+//   npx tsx src/scripts/deriveMarketRegime.ts --backfill  (write regime rows for every
+//     historical date, not just the last ~60 days -- see --backfill note below)
+//
+// Bar loading always starts from 2015-01-01 regardless of mode (fixed: markets added
+// later, e.g. FTSE/CAC/DAX from July 2024, have 500+ total bars but were falling under
+// MIN_BARS within a rolling 300-day window and getting skipped intermittently). --backfill
+// only changes which dates get a regime row WRITTEN, not how much history is loaded.
 //
 // Required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 // ============================================================================
@@ -230,19 +236,19 @@ async function main() {
 
   // Load all bars -- need at least 200 for EMA200
   const MIN_BARS = 210 // 200 + buffer
-  const LOOKBACK_DAYS = isBackfill ? 1000 : 300 // full history or recent 300 days for EMA200
-  const windowStart = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000)
-    .toISOString().slice(0, 10)
 
-  // For EMA200 we always need at least 200 bars regardless of window
-  // Load enough bars per market using pagination
+  // Always load from 2015-01-01, not a rolling window: a rolling 300-day window put
+  // markets added later (FTSE/CAC/DAX, tracked since July 2024 -- 500+ bars total but
+  // only ~210 within the last 300 days) right at the MIN_BARS threshold, causing them
+  // to be skipped intermittently. Loading full history costs a few extra seconds of
+  // pagination and guarantees every market always clears MIN_BARS regardless of mode.
   const allBars: any[] = []
   let page = 0, hasMore = true
   process.stdout.write('Loading bars')
   while (hasMore) {
     const { data } = await db.from('market_state_daily')
       .select('market_id, date, high, low, close, atr14')
-      .gte('date', isBackfill ? '2015-01-01' : windowStart)
+      .gte('date', '2015-01-01')
       .order('date', { ascending: true })
       .order('market_id', { ascending: true })
       .range(page * 1000, page * 1000 + 999)
