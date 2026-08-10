@@ -683,12 +683,6 @@ export function evidenceTierClause(
 
 export type TodaysConditionsRating = 'SUPPORTIVE' | 'MIXED' | 'CONFLICTING'
 
-export const CONDITIONS_RATING_CLASS: Record<TodaysConditionsRating, string> = {
-  SUPPORTIVE: 'text-green-700',
-  MIXED: 'text-amber-600',
-  CONFLICTING: 'text-red-600',
-}
-
 /**
  * TODAY'S CONDITIONS rating. Combines the two objective signals this card
  * already computes elsewhere -- regime fit (isTrendingRegime/isRegimeAligned,
@@ -780,4 +774,197 @@ export function recommendationSynthesis(
     return `${tierSentence} However, ${cClause.charAt(0).toLowerCase()}${cClause.slice(1)} A conditional setup to watch rather than an immediate entry.`
   }
   return `${tierSentence} ${cClause}`
+}
+
+// ============================================================================
+// "Today's Conditions" plain-English redesign -- trend/volatility/price
+// location each get a headline (one line, prominent) and an implication
+// (what it means for this trade), replacing raw enum labels and unexplained
+// zone jargon. ADX and the volatility percentile are folded into the
+// headlines themselves (Keep: "ADX number -- always show it") rather than
+// shown as separate rows. `!= null` is used throughout instead of truthy
+// checks -- adx/atrPercentile of exactly 0 is a real, if rare, value and
+// would otherwise be dropped by a `adx && ...` check.
+// ============================================================================
+
+export interface ConditionLabel {
+  headline: string
+  implication: string
+}
+
+export function trendLabel(trendState: string | null, adx: number | null): ConditionLabel {
+  const adxSuffix = adx != null ? ` (ADX ${Math.round(adx)})` : ''
+
+  if (!trendState || trendState === 'RANGE') {
+    if (adx != null && adx < 15) return {
+      headline: `Ranging — no directional bias${adxSuffix}`,
+      implication: 'Suits mean-reversion setups. Price likely to oscillate within its range.',
+    }
+    return {
+      headline: `Ranging${adxSuffix}`,
+      implication: 'No strong trend. Mean-reversion setups favoured over trend-following.',
+    }
+  }
+
+  if (trendState === 'TRENDING_UP') {
+    if (adx != null && adx > 30) return {
+      headline: `Strong uptrend${adxSuffix}`,
+      implication: 'Momentum is firmly bullish. BUY dips favoured, SELL rallies higher risk.',
+    }
+    if (adx != null && adx > 20) return {
+      headline: `Uptrend in progress${adxSuffix}`,
+      implication: 'Bullish bias. BUY setups have trend support, SELL setups are counter-trend.',
+    }
+    return {
+      headline: `Mild upward bias${adxSuffix}`,
+      implication: 'Weak bullish lean. Trend support is limited.',
+    }
+  }
+
+  if (trendState === 'TRENDING_DOWN') {
+    if (adx != null && adx > 30) return {
+      headline: `Strong downtrend${adxSuffix}`,
+      implication: 'Momentum is firmly bearish. SELL rallies favoured, BUY dips higher risk.',
+    }
+    if (adx != null && adx > 20) return {
+      headline: `Downtrend in progress${adxSuffix}`,
+      implication: 'Bearish bias. SELL setups have trend support, BUY setups are counter-trend.',
+    }
+    return {
+      headline: `Mild downward bias${adxSuffix}`,
+      implication: 'Weak bearish lean. Trend support is limited.',
+    }
+  }
+
+  if (trendState === 'MIXED') {
+    if (adx != null && adx < 15) return {
+      headline: `Conflicting signals — low momentum${adxSuffix}`,
+      implication: 'Trend signals disagree and momentum is weak. Lower probability for directional setups.',
+    }
+    if (adx != null && adx > 25) return {
+      headline: `Conflicting signals — momentum present${adxSuffix}`,
+      implication: 'Trend signals disagree despite reasonable momentum. Exercise extra caution on direction.',
+    }
+    return {
+      headline: `Conflicting signals${adxSuffix}`,
+      implication: 'Short and longer-term trend signals are not aligned. Reduce position sizing.',
+    }
+  }
+
+  return { headline: 'Trend unclear', implication: 'Insufficient data to classify trend conditions.' }
+}
+
+/** Named distinctly from the existing volatilityLabel(atrPercentile) -> string
+ *  (still used by SupportingEvidence.tsx's "Detailed regime & volatility"
+ *  subsection, out of scope here) -- this one takes volatility_state directly
+ *  and returns the headline/implication pair for the Today's Conditions block. */
+export function volatilityConditionLabel(volatilityState: string | null, atrPercentile: number | null): ConditionLabel {
+  if (!volatilityState) return { headline: 'Volatility unknown', implication: '' }
+
+  const pctSuffix = atrPercentile != null ? ` (${ordinal(atrPercentile)} percentile)` : ''
+
+  switch (volatilityState) {
+    case 'LOW_VOL': return {
+      headline: `Compressed${pctSuffix}`,
+      implication: 'Price movement is historically quiet. Entry ranges more likely to hold. Potential for sharp move if compressed too long.',
+    }
+    case 'NORMAL_VOL': return {
+      headline: `Normal${pctSuffix}`,
+      implication: 'Typical market conditions. Standard position sizing applies.',
+    }
+    case 'HIGH_VOL': return {
+      headline: `Elevated${pctSuffix}`,
+      implication: 'Price movement is above average. Wider stops may be needed. Reduce position size.',
+    }
+    case 'EXTREME_VOL': return {
+      headline: `Extreme${pctSuffix}`,
+      implication: 'Unusually large price swings. High risk of stop-outs. Consider sitting out or halving position size.',
+    }
+    default: return { headline: volatilityState, implication: '' }
+  }
+}
+
+const BUY_WAITING_ZONES = new Set(['ZONE_3', 'ZONE_4', 'TOO_HIGH', 'ZONE_2'])
+const SELL_WAITING_ZONES = new Set(['ZONE_1', 'ZONE_2', 'TOO_DEEP', 'ZONE_3'])
+
+export function priceLocationLabel(
+  currentZone: string | null, preferredZone: string | null, direction: 'BUY' | 'SELL' | null,
+  entryRangeLow: number | null, entryRangeHigh: number | null, currentPrice: number | null,
+): ConditionLabel {
+  const entryRangeText = entryRangeLow != null && entryRangeHigh != null
+    ? `${entryRangeLow.toFixed(2)}–${entryRangeHigh.toFixed(2)}`
+    : 'the suggested range'
+
+  if (currentZone != null && currentZone === preferredZone) {
+    return {
+      headline: 'At entry zone — consider now',
+      implication: `Price is within the suggested entry range (${entryRangeText}). Setup is active.`,
+    }
+  }
+
+  const waitingForPullback = direction === 'BUY' && currentZone != null && BUY_WAITING_ZONES.has(currentZone)
+  const waitingForRally = direction === 'SELL' && currentZone != null && SELL_WAITING_ZONES.has(currentZone)
+
+  if (waitingForPullback) {
+    const distance = currentPrice != null && entryRangeHigh != null ? ` Currently ${(currentPrice - entryRangeHigh).toFixed(2)} above entry.` : ''
+    return {
+      headline: 'Above entry — waiting for pullback',
+      implication: `Price needs to pull back to ${entryRangeText} to trigger.${distance}`,
+    }
+  }
+
+  if (waitingForRally) {
+    const distance = currentPrice != null && entryRangeLow != null ? ` Currently ${(entryRangeLow - currentPrice).toFixed(2)} below entry.` : ''
+    return {
+      headline: 'Below entry — waiting for rally',
+      implication: `Price needs to rally to ${entryRangeText} to trigger.${distance}`,
+    }
+  }
+
+  if (currentZone === 'TOO_HIGH') return {
+    headline: 'Extremely stretched — above normal range',
+    implication: 'Price is well above its typical range. High-risk area for new longs. SELL setups may be compelling but require confirmation.',
+  }
+  if (currentZone === 'TOO_DEEP') return {
+    headline: 'Extremely oversold — below normal range',
+    implication: 'Price is well below its typical range. High-risk area for new shorts. BUY setups may be compelling but require confirmation.',
+  }
+
+  return { headline: 'In range', implication: 'Price is within normal trading range.' }
+}
+
+/** One paragraph combining trend + direction + zone into a plain-English
+ *  setup description, replacing the static SUPPORTIVE/MIXED/CONFLICTING
+ *  badge -- always says something concrete about this specific setup rather
+ *  than a bare classification word. */
+export function setupContext(
+  direction: 'BUY' | 'SELL' | null, trendState: string | null,
+  currentZone: string | null, preferredZone: string | null, adx: number | null,
+): string {
+  const isTrendAligned =
+    (direction === 'BUY' && trendState === 'TRENDING_UP') ||
+    (direction === 'SELL' && trendState === 'TRENDING_DOWN')
+
+  const isCounterTrend =
+    (direction === 'BUY' && trendState === 'TRENDING_DOWN') ||
+    (direction === 'SELL' && trendState === 'TRENDING_UP')
+
+  const isRanging = trendState === 'RANGE' || (adx != null && adx < 15)
+  const atEntry = currentZone != null && currentZone === preferredZone
+
+  if (isRanging) {
+    if (direction === 'SELL') return `Mean-reversion SELL — price has extended above its normal range. The system is waiting for a rally into resistance before selling. Low trend momentum supports a fade approach.`
+    if (direction === 'BUY') return `Mean-reversion BUY — price has pulled back below its normal range. The system is waiting for a dip into support before buying. Low trend momentum supports a fade approach.`
+  }
+
+  if (isTrendAligned) {
+    if (atEntry) return `Trend-following ${direction} — price has pulled back into the entry zone with the broader trend still intact. This is a ${direction === 'BUY' ? 'buy the dip' : 'sell the rally'} opportunity within an established ${direction === 'BUY' ? 'uptrend' : 'downtrend'}.`
+    return `Trend-following ${direction} — waiting for price to pull back into the entry zone. The broader trend supports this direction once entry triggers.`
+  }
+
+  if (isCounterTrend) {
+    return `Counter-trend ${direction} — this setup trades against the prevailing ${direction === 'BUY' ? 'downtrend' : 'uptrend'}. Higher risk than a trend-aligned setup. The historical edge for this analyst in these conditions drives the recommendation despite the trend headwind.`
+  }
+
+  return `${direction ?? 'This'} setup — price approaching the suggested entry zone. Monitor for confirmation before acting.`
 }

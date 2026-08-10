@@ -1,8 +1,6 @@
 import { formatR, formatPercent } from '@/lib/format'
 import {
-  todaysConditionsRating, CONDITIONS_RATING_CLASS,
-  regimeTrendLabel, volatilityLabel, volatilityTooltip, zonePlainLabel,
-  evidenceTierSubtext,
+  evidenceTierSubtext, trendLabel, volatilityConditionLabel, priceLocationLabel, setupContext,
 } from '@/lib/workspaceUtils'
 import type { WorkspaceRow } from './types'
 
@@ -27,7 +25,12 @@ function MetricRow({ label, value, valueClass }: { label: string; value: React.R
 export function EvidencePillars({ row }: Props) {
   const tier = row.evidenceTier
   const regime = row.regime
-  const conditionsRating = todaysConditionsRating(row.direction, row.currentZone, row.preferredZone, regime?.trendState ?? null, regime?.adx14 ?? null)
+  const trend = regime ? trendLabel(regime.trendState, regime.adx14) : null
+  const volatility = regime ? volatilityConditionLabel(regime.volatilityState, regime.atrPercentile) : null
+  const priceLocation = regime
+    ? priceLocationLabel(row.currentZone, row.preferredZone, row.direction, row.entryLow, row.entryHigh, row.currentPrice)
+    : null
+  const setup = regime ? setupContext(row.direction, regime.trendState, row.currentZone, row.preferredZone, regime.adx14) : null
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
@@ -56,21 +59,31 @@ export function EvidencePillars({ row }: Props) {
         )}
       </div>
 
-      <div className="space-y-2">
-        <div className="flex items-baseline justify-between">
-          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Today&apos;s Conditions</p>
-          {conditionsRating && <span className={`text-xs font-semibold px-1.5 py-0.5 rounded bg-current/10 ${CONDITIONS_RATING_CLASS[conditionsRating]}`}>{conditionsRating}</span>}
-        </div>
-        {regime ? (
-          <div className="space-y-1">
-            <MetricRow label="Trend" value={regimeTrendLabel(regime.trendState, regime.adx14)} />
-            <MetricRow label="ADX" value={regime.adx14 != null ? regime.adx14.toFixed(0) : '—'} />
-            <MetricRow
-              label="Volatility"
-              value={<span className="cursor-help" title={volatilityTooltip(regime.atrPercentile)}>{volatilityLabel(regime.atrPercentile)}</span>}
-            />
-            <MetricRow label="Current location" value={zonePlainLabel(row.currentZone)} />
-            <MetricRow label="Preferred entry" value={zonePlainLabel(row.preferredZone)} />
+      <div>
+        <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-2">Today&apos;s Conditions</p>
+        {regime && trend && volatility && priceLocation && setup ? (
+          <div className="space-y-3">
+            <div>
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Trend</p>
+              <p className="text-sm font-medium">{trend.headline}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">{trend.implication}</p>
+            </div>
+
+            <div>
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Volatility</p>
+              <p className="text-sm font-medium">{volatility.headline}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">{volatility.implication}</p>
+            </div>
+
+            <div>
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Price Location</p>
+              <p className="text-sm font-medium">{priceLocation.headline}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">{priceLocation.implication}</p>
+            </div>
+
+            <div className="pt-1 border-t border-border">
+              <p className="text-xs text-muted-foreground">{setup}</p>
+            </div>
           </div>
         ) : (
           <p className="text-xs text-muted-foreground">Regime data updates each morning. Check back after 05:00 UTC.</p>
