@@ -113,6 +113,48 @@ export function zonePlainLabel(zone: string | null): string {
   }
 }
 
+/**
+ * Actionable price-location label for the coverage strip's Zone column,
+ * replacing the raw "Fair Value -> Stretched" zone-jargon pairing with what
+ * it means for whether to act now. Distance is measured on ZONE_LADDER_ORDER's
+ * ascending-price ordering (not display order) between currentZone and
+ * preferredZone; direction determines which side of "needs to move" applies.
+ */
+export function coverageZoneLabel(
+  currentZone: string | null, preferredZone: string | null, direction: string | null,
+): { label: string; className: string } {
+  if (!currentZone || !preferredZone) return { label: '—', className: 'text-muted-foreground' }
+
+  if (currentZone === preferredZone) return { label: 'At entry', className: 'text-green-600 font-medium' }
+
+  const currentIdx = ZONE_PRICE_ORDER.indexOf(currentZone as AtrZone)
+  const preferredIdx = ZONE_PRICE_ORDER.indexOf(preferredZone as AtrZone)
+  if (currentIdx < 0 || preferredIdx < 0) return { label: '—', className: 'text-muted-foreground' }
+  const distance = Math.abs(currentIdx - preferredIdx)
+
+  if (direction === 'BUY') {
+    // Preferred entry is the lower zone -- price needs to fall to reach it.
+    if (currentIdx > preferredIdx) {
+      if (distance === 1) return { label: 'Near entry', className: 'text-amber-600' }
+      if (distance === 2) return { label: 'Pullback needed', className: 'text-muted-foreground' }
+      return { label: 'Extended above', className: 'text-muted-foreground' }
+    }
+    return { label: 'Below entry', className: 'text-muted-foreground' }
+  }
+
+  if (direction === 'SELL') {
+    // Preferred entry is the higher zone -- price needs to rise to reach it.
+    if (currentIdx < preferredIdx) {
+      if (distance === 1) return { label: 'Near entry', className: 'text-amber-600' }
+      if (distance === 2) return { label: 'Rally needed', className: 'text-muted-foreground' }
+      return { label: 'Extended below', className: 'text-muted-foreground' }
+    }
+    return { label: 'Above entry', className: 'text-muted-foreground' }
+  }
+
+  return { label: '—', className: 'text-muted-foreground' }
+}
+
 export type ZoneSemanticColour = 'green' | 'amber' | 'red' | 'neutral' | 'muted'
 
 /**
@@ -562,16 +604,6 @@ function trendStateWord(trendState: string | null): string {
   }
 }
 
-function volatilityStateWord(volatilityState: string | null): string {
-  switch (volatilityState) {
-    case 'LOW_VOL': return 'low-vol'
-    case 'NORMAL_VOL': return 'normal-vol'
-    case 'HIGH_VOL': return 'high-vol'
-    case 'EXTREME_VOL': return 'extreme-vol'
-    default: return 'unclassified-vol'
-  }
-}
-
 /**
  * Picks which evidence tier to show for an already-decided direction, trying
  * the most specific first and falling through -- same tier boundaries and
@@ -611,11 +643,19 @@ export function selectEvidenceTier(
     }
   }
 
-  // Tier 2 -- REGIME rollup, same asset class
+  // Tier 2 -- REGIME rollup, same asset class, matched on trend_state only
+  // (not volatility_state too). generateAnalystProfiles.ts buckets by
+  // trend+volatility+zone, so requiring an exact volatility match here on top
+  // of the trend match double-filters an already-thin per-market sample --
+  // confirmed live for EURUSD/Ian Coleman: TRENDING_DOWN+LOW_VOL had only 3
+  // matching FX-wide trades (below REGIME_MIN_TRADES), while TRENDING_DOWN
+  // alone (any volatility) had 37, a perfectly usable sample. This tier's own
+  // label/subtext already call it "comparable conditions", not "identical
+  // conditions" -- MARKET (tier 1) remains the tier that requires an exact
+  // volatility match.
   const regimeProfiles = hasRegimeReading ? allProfiles.filter(p =>
     p.direction === direction &&
     p.profile_data.regime === trendState &&
-    p.profile_data.volatility_state === volatilityState &&
     p.asset_class === assetClass
   ) : []
   const regimeTotalTrades = regimeProfiles.reduce((s, p) => s + p.profile_data.trade_count, 0)
@@ -627,7 +667,8 @@ export function selectEvidenceTier(
       tradeCount: regimeTotalTrades,
       marketCount: new Set(regimeProfiles.map(p => p.market_id)).size,
       profileQuality: tierQualityFromCount(regimeTotalTrades),
-      label: `${direction} in ${trendStateWord(trendState)} ${volatilityStateWord(volatilityState)} ${assetClass} markets`,
+      // Volatility dropped from the label to match what's actually matched now (trend only).
+      label: `${direction} in ${trendStateWord(trendState)} ${assetClass} markets`,
     }
   }
 
@@ -814,60 +855,58 @@ export interface ConditionLabel {
 }
 
 export function trendLabel(trendState: string | null, adx: number | null): ConditionLabel {
-  const adxSuffix = adx != null ? ` (ADX ${Math.round(adx)})` : ''
-
   if (!trendState || trendState === 'RANGE') {
     if (adx != null && adx < 15) return {
-      headline: `Ranging — no directional bias${adxSuffix}`,
-      implication: 'Suits mean-reversion setups. Price likely to oscillate within its range.',
+      headline: `Ranging — no directional bias`,
+      implication: `Suits mean-reversion setups. Price likely to oscillate within its range. ADX ${Math.round(adx)} confirms the lack of a directional trend.`,
     }
     return {
-      headline: `Ranging${adxSuffix}`,
+      headline: `Ranging`,
       implication: 'No strong trend. Mean-reversion setups favoured over trend-following.',
     }
   }
 
   if (trendState === 'TRENDING_UP') {
     if (adx != null && adx > 30) return {
-      headline: `Strong uptrend${adxSuffix}`,
-      implication: 'Momentum is firmly bullish. BUY dips favoured, SELL rallies higher risk.',
+      headline: `Strong uptrend`,
+      implication: `Momentum is firmly bullish. BUY dips favoured, SELL rallies higher risk. ADX ${Math.round(adx)} confirms strong trend strength.`,
     }
     if (adx != null && adx > 20) return {
-      headline: `Uptrend in progress${adxSuffix}`,
-      implication: 'Bullish bias. BUY setups have trend support, SELL setups are counter-trend.',
+      headline: `Uptrend in progress`,
+      implication: `Bullish bias. BUY setups have trend support, SELL setups are counter-trend. ADX ${Math.round(adx)} confirms meaningful trend strength.`,
     }
     return {
-      headline: `Mild upward bias${adxSuffix}`,
+      headline: `Mild upward bias`,
       implication: 'Weak bullish lean. Trend support is limited.',
     }
   }
 
   if (trendState === 'TRENDING_DOWN') {
     if (adx != null && adx > 30) return {
-      headline: `Strong downtrend${adxSuffix}`,
-      implication: 'Momentum is firmly bearish. SELL rallies favoured, BUY dips higher risk.',
+      headline: `Strong downtrend`,
+      implication: `Momentum is firmly bearish. SELL rallies favoured, BUY dips higher risk. ADX ${Math.round(adx)} confirms strong trend strength.`,
     }
     if (adx != null && adx > 20) return {
-      headline: `Downtrend in progress${adxSuffix}`,
-      implication: 'Bearish bias. SELL setups have trend support, BUY setups are counter-trend.',
+      headline: `Downtrend in progress`,
+      implication: `Bearish bias. SELL setups have trend support, BUY setups are counter-trend. ADX ${Math.round(adx)} confirms meaningful trend strength.`,
     }
     return {
-      headline: `Mild downward bias${adxSuffix}`,
+      headline: `Mild downward bias`,
       implication: 'Weak bearish lean. Trend support is limited.',
     }
   }
 
   if (trendState === 'MIXED') {
     if (adx != null && adx < 15) return {
-      headline: `Conflicting signals — low momentum${adxSuffix}`,
-      implication: 'Trend signals disagree and momentum is weak. Lower probability for directional setups.',
+      headline: `Conflicting signals — low momentum`,
+      implication: `Trend signals disagree and momentum is weak. Lower probability for directional setups. ADX ${Math.round(adx)} confirms weak momentum.`,
     }
     if (adx != null && adx > 25) return {
-      headline: `Conflicting signals — momentum present${adxSuffix}`,
-      implication: 'Trend signals disagree despite reasonable momentum. Exercise extra caution on direction.',
+      headline: `Conflicting signals — momentum present`,
+      implication: `Trend signals disagree despite reasonable momentum. Exercise extra caution on direction. ADX ${Math.round(adx)} confirms momentum is present.`,
     }
     return {
-      headline: `Conflicting signals${adxSuffix}`,
+      headline: `Conflicting signals`,
       implication: 'Short and longer-term trend signals are not aligned. Reduce position sizing.',
     }
   }
@@ -882,24 +921,24 @@ export function trendLabel(trendState: string | null, adx: number | null): Condi
 export function volatilityConditionLabel(volatilityState: string | null, atrPercentile: number | null): ConditionLabel {
   if (!volatilityState) return { headline: 'Volatility unknown', implication: '' }
 
-  const pctSuffix = atrPercentile != null ? ` (${ordinal(atrPercentile)} percentile)` : ''
+  const pctClause = atrPercentile != null ? ` ATR sits at the ${ordinal(atrPercentile)} percentile of recent history.` : ''
 
   switch (volatilityState) {
     case 'LOW_VOL': return {
-      headline: `Compressed${pctSuffix}`,
-      implication: 'Price movement is historically quiet. Entry ranges more likely to hold. Potential for sharp move if compressed too long.',
+      headline: `Compressed`,
+      implication: `Price movement is historically quiet. Entry ranges more likely to hold. Potential for sharp move if compressed too long.${pctClause}`,
     }
     case 'NORMAL_VOL': return {
-      headline: `Normal${pctSuffix}`,
+      headline: `Normal`,
       implication: 'Typical market conditions. Standard position sizing applies.',
     }
     case 'HIGH_VOL': return {
-      headline: `Elevated${pctSuffix}`,
-      implication: 'Price movement is above average. Wider stops may be needed. Reduce position size.',
+      headline: `Elevated`,
+      implication: `Price movement is above average. Wider stops may be needed. Reduce position size.${pctClause}`,
     }
     case 'EXTREME_VOL': return {
-      headline: `Extreme${pctSuffix}`,
-      implication: 'Unusually large price swings. High risk of stop-outs. Consider sitting out or halving position size.',
+      headline: `Extreme`,
+      implication: `Unusually large price swings. High risk of stop-outs. Consider sitting out or halving position size.${pctClause}`,
     }
     default: return { headline: volatilityState, implication: '' }
   }

@@ -177,10 +177,15 @@ export function scoreAnalystForMarket(
   if (marketPick) return buildScore(analystId, marketId, 'MARKET', marketPick)
 
   // Tier 2 -- REGIME: same asset class, same regime, rolled up across markets,
-  // aggregate trade_count >= REGIME_MIN_TRADES
+  // aggregate trade_count >= REGIME_MIN_TRADES. Matched on trend_state only,
+  // not volatility_state -- generateAnalystProfiles.ts already buckets by
+  // trend+volatility+zone, so an additional exact volatility match here
+  // double-filters an already-thin per-market sample down to near nothing
+  // (confirmed live: EURUSD TRENDING_DOWN+LOW_VOL had 3 FX-wide matching
+  // trades vs. 37 for TRENDING_DOWN alone). Mirrors the identical change in
+  // workspaceUtils.ts's selectEvidenceTier() -- see that file's comment.
   const regimeProfiles = hasRegimeReading ? own.filter(p =>
     p.profile_data.regime === trendState &&
-    p.profile_data.volatility_state === volatilityState &&
     p.asset_class === assetClass
   ) : []
   const regimeTotalTrades = regimeProfiles.reduce((s, p) => s + p.profile_data.trade_count, 0)

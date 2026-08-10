@@ -2,7 +2,7 @@
 import { Fragment, useEffect, useState } from 'react'
 import { MarketDetailCard } from './MarketDetailCard'
 import {
-  zonePlainLabel, zoneProximityClass, ZONE_PROXIMITY_TEXT_CLASS,
+  coverageZoneLabel,
   regimeTrendLabel, confidenceBadgeLabel, estimateSessionEnd, countdownLabel,
 } from '@/lib/workspaceUtils'
 import type { WorkspaceRow } from './types'
@@ -70,7 +70,7 @@ export function CoverageStrip({ rows, recommendationsGeneratedToday = 0 }: Props
           <tbody>
             {rows.map((row, i) => {
               const isExpanded = expandedId === row.recommendationId
-              const proximity = zoneProximityClass(row.currentZone, row.preferredZone)
+              const zoneLabel = coverageZoneLabel(row.currentZone, row.preferredZone, row.direction)
               const precision = row.displayPrecision ?? 4
               const sessionEnd = estimateSessionEnd(row.session, row.assetClass, row.sessionEndIso)
               const headline = newsBySymbol[row.symbol]
@@ -88,8 +88,8 @@ export function CoverageStrip({ rows, recommendationsGeneratedToday = 0 }: Props
                         {row.direction ?? '—'}
                       </span>
                     </td>
-                    <td className={`py-2 px-3 font-medium whitespace-nowrap ${ZONE_PROXIMITY_TEXT_CLASS[proximity]}`}>
-                      {zonePlainLabel(row.currentZone)} → {zonePlainLabel(row.preferredZone)}
+                    <td className={`py-2 px-3 font-medium whitespace-nowrap ${zoneLabel.className}`}>
+                      {zoneLabel.label}
                     </td>
                     <td className="py-2 px-3 text-muted-foreground">
                       {row.entryLow != null && row.entryHigh != null
