@@ -1,4 +1,4 @@
-import type { ZoneBoundaries } from '@/lib/workspaceUtils'
+import type { ZoneBoundaries, EvidenceTier } from '@/lib/workspaceUtils'
 
 export interface RegimeInfo {
   trendState: string | null
@@ -90,6 +90,12 @@ export interface WorkspaceRow {
   previousDay: PreviousDaySummary | null
   yesterdayTradeOutcome: YesterdayTradeOutcome | null
   historicalEdge: HistoricalEdge
+  // Tiered evidence (MARKET/REGIME/DIRECTION/NONE) -- mirrors
+  // intelligence-engine/src/services/analystScoringService.ts's own tiers.
+  // Drives the "Your Historical Profile" pillar and "Why This Is Being
+  // Recommended" synthesis; historicalEdge above stays as-is for Supporting
+  // Evidence's separate "Historical breakdown" subsection.
+  evidenceTier: EvidenceTier
   // Section 4 Block 4 ("Why You're Seeing This") -- derived from analyst_profiles
   // only, never fabricated. Null when there's no meaningful differentiation to
   // report (caller falls back to a neutral, still-honest statement in that case).

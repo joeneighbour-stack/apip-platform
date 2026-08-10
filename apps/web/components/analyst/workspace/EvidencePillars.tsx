@@ -1,7 +1,8 @@
 import { formatR, formatPercent } from '@/lib/format'
 import {
-  historicalProfileRating, HISTORICAL_RATING_CLASS, todaysConditionsRating, CONDITIONS_RATING_CLASS,
+  todaysConditionsRating, CONDITIONS_RATING_CLASS,
   regimeTrendLabel, volatilityLabel, volatilityTooltip, zonePlainLabel,
+  evidenceTierSubtext,
 } from '@/lib/workspaceUtils'
 import type { WorkspaceRow } from './types'
 
@@ -24,27 +25,31 @@ function MetricRow({ label, value, valueClass }: { label: string; value: React.R
 // A subtle vertical divider (not two separate bordered cards) keeps the pairing
 // obvious without adding card nesting.
 export function EvidencePillars({ row }: Props) {
-  const edge = row.historicalEdge
-  const historicalRating = historicalProfileRating(edge.avgR, edge.winRate, edge.quality, edge.trades)
+  const tier = row.evidenceTier
   const regime = row.regime
   const conditionsRating = todaysConditionsRating(row.direction, row.currentZone, row.preferredZone, regime?.trendState ?? null, regime?.adx14 ?? null)
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
       <div className="sm:pr-6 sm:border-r sm:border-border space-y-2">
-        <div className="flex items-baseline justify-between">
-          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Your Historical Profile</p>
-          {historicalRating && <span className={`text-xs font-semibold px-1.5 py-0.5 rounded bg-current/10 ${HISTORICAL_RATING_CLASS[historicalRating]}`}>{historicalRating}</span>}
-        </div>
-        {edge.trades > 0 ? (
-          <div className="space-y-1">
-            <MetricRow label="Win rate" value={formatPercent(edge.winRate)} />
-            <MetricRow label="Expectancy" value={formatR(edge.avgR)} valueClass={(edge.avgR ?? 0) >= 0 ? 'text-green-700' : 'text-red-700'} />
-            <MetricRow label="Sample" value={`${edge.trades} trades`} />
-            <MetricRow label="Evidence quality" value={edge.quality ?? '—'} />
-          </div>
+        <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+          Your Historical Profile
+          {tier.tier !== 'NONE' && <span className="normal-case tracking-normal text-foreground"> · {tier.label}</span>}
+        </p>
+        {tier.tier === 'NONE' ? (
+          <p className="text-xs text-muted-foreground">No meaningful history available for this setup.</p>
         ) : (
-          <p className="text-xs text-muted-foreground">No trade history yet for this market.</p>
+          <div className="space-y-1">
+            <MetricRow label="Win rate" value={formatPercent(tier.winRate)} />
+            <MetricRow label="Expectancy" value={formatR(tier.avgR)} valueClass={tier.avgR >= 0 ? 'text-green-700' : 'text-red-700'} />
+            <MetricRow
+              label="Sample"
+              value={tier.tier === 'REGIME'
+                ? `${tier.tradeCount} trades across ${tier.marketCount} market${tier.marketCount === 1 ? '' : 's'}`
+                : `${tier.tradeCount} trades`}
+            />
+            <p className="text-[11px] text-muted-foreground pt-0.5">{evidenceTierSubtext(tier, row.symbol)}</p>
+          </div>
         )}
         {row.personalisation && (
           <p className="text-xs text-muted-foreground pt-1">{row.personalisation}</p>

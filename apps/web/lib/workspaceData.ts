@@ -1,5 +1,8 @@
 import { createClient, createAdminClient } from '@/lib/supabase/server'
-import { entryDistanceLanguage, parseGuidanceRange, atrDistanceFromEntry, marketCurrencies, computeZoneBoundaries, trendLabelFull } from '@/lib/workspaceUtils'
+import {
+  entryDistanceLanguage, parseGuidanceRange, atrDistanceFromEntry, marketCurrencies, computeZoneBoundaries, trendLabelFull,
+  selectEvidenceTier, type EvidenceTier, type TierProfile,
+} from '@/lib/workspaceUtils'
 import type { WorkspaceRow, RegimeInfo, EventRiskItem, HistoricalEdge, PriceBar } from '@/components/analyst/workspace/types'
 
 const EVENT_CAP = 4
@@ -300,6 +303,37 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
     profilesByMarketDirection.get(key)!.push(p.profile_data)
   }
 
+  // This analyst's FULL profile set, every market (not scoped to marketIds) --
+  // needed for the tiered evidence system's REGIME tier, which deliberately
+  // rolls up across every market in the same asset class, not just today's
+  // recommended ones. asset_class comes from the market:market_id FK embed
+  // rather than a separate markets query. Mirrors
+  // intelligence-engine/src/services/analystScoringService.ts's own tiers.
+  const { data: allAnalystProfileRowsRaw } = await adminDb
+    .from('analyst_profiles')
+    .select('market_id, direction, profile_data, market:market_id ( asset_class )')
+    .eq('analyst_id', analystId)
+
+  const allProfilesForTier: TierProfile[] = []
+  for (const p of (allAnalystProfileRowsRaw ?? []) as any[]) {
+    const assetClass = p.market?.asset_class
+    if (!p.market_id || !p.direction || !p.profile_data || !assetClass) continue
+    allProfilesForTier.push({
+      market_id: p.market_id,
+      direction: p.direction,
+      asset_class: assetClass,
+      profile_data: {
+        trade_count: p.profile_data.trade_count ?? 0,
+        avg_r: p.profile_data.avg_r ?? 0,
+        win_rate: p.profile_data.win_rate ?? 0,
+        profile_quality: p.profile_data.profile_quality ?? 'LOW',
+        regime: p.profile_data.regime ?? null,
+        volatility_state: p.profile_data.volatility_state ?? null,
+        has_regime_data: !!p.profile_data.has_regime_data,
+      },
+    })
+  }
+
   // Trade-count-weighted blend across every profile row for a market+direction,
   // regardless of regime -- "all conditions", not just whichever row happened to be
   // fetched last. Quality is taken from whichever single row has the most trades (a
@@ -422,6 +456,19 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
     const allEventItems = marketId ? todayEventsByMarket.get(marketId) ?? [] : []
     const zoneBoundaries = marketId ? resolveZoneBoundaries(marketId, currentPrice) : null
     const trendState = marketId ? regimeByMarket.get(marketId)?.trendState ?? null : null
+    const volatilityState = marketId ? regimeByMarket.get(marketId)?.volatilityState ?? null : null
+
+    const evidenceTier: EvidenceTier = (marketId && direction)
+      ? selectEvidenceTier(
+          allProfilesForTier.filter(p => p.market_id === marketId),
+          allProfilesForTier,
+          market?.asset_class ?? '',
+          direction,
+          trendState,
+          volatilityState,
+          market?.symbol ?? '',
+        )
+      : { tier: 'NONE', avgR: 0, winRate: 0, tradeCount: 0, profileQuality: 'LOW', label: '' }
 
     return {
       recommendationId: rec.recommendation_id,
@@ -465,6 +512,7 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
       historicalEdge: marketId
         ? historicalEdge(marketId, direction, opp?.preferred_entry_zone ?? null, trendState)
         : { tier: 'none', avgR: null, winRate: null, trades: 0, quality: null, regimeLabel: null },
+      evidenceTier,
       personalisation: marketId ? personalisationMessage(marketId, direction, trendState) : null,
       coachingNote: rec.coaching_note || null,
       shownAt: rec.shown_at,

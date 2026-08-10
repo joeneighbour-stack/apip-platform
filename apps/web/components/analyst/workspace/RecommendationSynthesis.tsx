@@ -1,5 +1,5 @@
 import {
-  formatSymbolForDisplay, historicalProfileRating, todaysConditionsRating, recommendationSynthesis,
+  todaysConditionsRating, evidenceTierClause, recommendationSynthesis,
 } from '@/lib/workspaceUtils'
 import type { WorkspaceRow } from './types'
 
@@ -7,17 +7,16 @@ interface Props {
   row: WorkspaceRow
 }
 
-// Section 4 -- the core intelligence section. One or two sentences synthesising
-// the two evidence pillars below. Never manufactures a positive read: built from
-// recommendationSynthesis(), which states mixed/negative evidence honestly rather
-// than defaulting to an upbeat tone.
+// Section 4 -- the core intelligence section. Leads with the evidence tier's
+// own template clause (MARKET/REGIME/DIRECTION/NONE), then a plain factual
+// statement of today's conditions. Never hedges about how much to trust the
+// numbers shown -- built from recommendationSynthesis(), which states
+// conflicting evidence honestly rather than apologising for it.
 export function RecommendationSynthesis({ row }: Props) {
-  const symbolDisplay = formatSymbolForDisplay(row.symbol, row.assetClass)
-  const historicalRating = historicalProfileRating(row.historicalEdge.avgR, row.historicalEdge.winRate, row.historicalEdge.quality, row.historicalEdge.trades)
   const conditionsRating = todaysConditionsRating(row.direction, row.currentZone, row.preferredZone, row.regime?.trendState ?? null, row.regime?.adx14 ?? null)
+  const tierClause = evidenceTierClause(row.evidenceTier, row.direction, row.assetClass, row.symbol)
   const synthesis = recommendationSynthesis(
-    symbolDisplay, row.direction, historicalRating, conditionsRating,
-    row.regime?.trendState ?? null, row.regime?.adx14 ?? null, row.currentZone, row.preferredZone,
+    row.evidenceTier, tierClause, conditionsRating, row.regime?.trendState ?? null, row.regime?.adx14 ?? null,
   )
 
   return (

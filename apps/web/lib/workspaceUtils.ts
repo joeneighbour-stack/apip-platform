@@ -1,6 +1,8 @@
 // Pure helpers for the analyst "My Workspace" coverage strip + detail card.
 // No I/O -- everything here takes already-fetched, already-computed values.
 
+import { formatR, formatPercent } from './format'
+
 export type AtrZone = 'TOO_DEEP' | 'ZONE_1' | 'ZONE_2' | 'ZONE_3' | 'ZONE_4' | 'TOO_HIGH'
 
 // Ladder order matches the visual spec: highest price on the left.
@@ -380,13 +382,6 @@ export function fxPipCount(range: number, displayPrecision: number | null): numb
   return Math.round(range / Math.pow(10, -pipDecimalPlaces))
 }
 
-/** True when the sample behind a historical edge is too thin to trust at face value --
- *  LOW profile_quality, or (when quality wasn't computed at all, e.g. the zone/market_only
- *  tiers) fewer than 20 trades, matching MEDIUM_CONFIDENCE_MIN_TRADES elsewhere. */
-export function isLowSampleEdge(quality: string | null, trades: number): boolean {
-  return quality === 'LOW' || (quality == null && trades < 20)
-}
-
 function isTrendingRegime(trendState: string | null, adx14: number | null): boolean {
   return adx14 != null && adx14 >= 25 && (trendState === 'TRENDING_UP' || trendState === 'TRENDING_DOWN')
 }
@@ -452,11 +447,11 @@ export function impactBadge(impact: string): string {
 }
 
 // ============================================================================
-// Recommendation-brief redesign -- primary recommendation taxonomy, two
-// evidence-pillar ratings, and a natural-language synthesis. All derived from
-// data/thresholds that already exist elsewhere in this file (isLowSampleEdge,
-// isTrendingRegime, isRegimeAligned, zoneProximityClass) -- no new arbitrary
-// cutoffs invented for the UI.
+// Recommendation-brief redesign -- primary recommendation taxonomy and a
+// natural-language synthesis. The historical pillar's rating is now the
+// tiered EvidenceTier system above; this section covers the conditions
+// pillar (isTrendingRegime, isRegimeAligned, zoneProximityClass) and the
+// combined synthesis sentence.
 // ============================================================================
 
 /** "EURNZD" -> "EUR/NZD". FX-only (same 6-letter detection as marketCurrencies());
@@ -486,35 +481,196 @@ export function recommendationTypeLabel(direction: 'BUY' | 'SELL' | null): strin
   return null
 }
 
-export type HistoricalProfileRating = 'STRONG FIT' | 'POSITIVE FIT' | 'NEUTRAL' | 'LIMITED EVIDENCE' | 'WEAK FIT'
+// ============================================================================
+// Tiered evidence -- MARKET / REGIME / DIRECTION / NONE. Mirrors
+// intelligence-engine/src/services/analystScoringService.ts's tier system
+// exactly (same names, same MARKET/REGIME/DIRECTION minimum-trade thresholds,
+// same asset-class-scoped regime rollup for the REGIME tier) so the direction
+// the engine picked and the evidence shown for it come from the same logic,
+// not two independently-tuned readings of the same data.
+// ============================================================================
 
-export const HISTORICAL_RATING_CLASS: Record<HistoricalProfileRating, string> = {
-  'STRONG FIT': 'text-green-700',
-  'POSITIVE FIT': 'text-green-700',
-  NEUTRAL: 'text-muted-foreground',
-  'LIMITED EVIDENCE': 'text-amber-600',
-  'WEAK FIT': 'text-red-600',
+export type EvidenceTierName = 'MARKET' | 'REGIME' | 'DIRECTION' | 'NONE'
+
+export interface EvidenceTier {
+  tier: EvidenceTierName
+  avgR: number
+  winRate: number
+  tradeCount: number
+  marketCount?: number // set only for REGIME -- how many markets were rolled up
+  profileQuality: 'HIGH' | 'MEDIUM' | 'LOW'
+  label: string // e.g. "EURUSD SELL" / "SELL in ranging low-vol FX markets"
+}
+
+interface TierProfileData {
+  trade_count: number
+  avg_r: number
+  win_rate: number
+  profile_quality: 'HIGH' | 'MEDIUM' | 'LOW'
+  regime: string | null
+  volatility_state: string | null
+  has_regime_data: boolean
+}
+
+export interface TierProfile {
+  market_id: string
+  direction: 'BUY' | 'SELL'
+  asset_class: string
+  profile_data: TierProfileData
+}
+
+const MARKET_MIN_TRADES = 20
+const REGIME_MIN_TRADES = 10
+const DIRECTION_MIN_TRADES = 10
+// Same thresholds generateAnalystProfiles.ts's profileQuality() uses -- reused
+// (not reinvented) to grade the REGIME tier's aggregated sample, which has no
+// single stored profile_quality of its own.
+const TIER_HIGH_MIN_TRADES = 50
+const TIER_MEDIUM_MIN_TRADES = 20
+
+function tierQualityFromCount(tradeCount: number): 'HIGH' | 'MEDIUM' | 'LOW' {
+  if (tradeCount >= TIER_HIGH_MIN_TRADES) return 'HIGH'
+  if (tradeCount >= TIER_MEDIUM_MIN_TRADES) return 'MEDIUM'
+  return 'LOW'
+}
+
+function weightedAvg(rows: TierProfile[], field: 'avg_r' | 'win_rate'): number {
+  const total = rows.reduce((s, p) => s + p.profile_data.trade_count, 0)
+  if (total === 0) return 0
+  return rows.reduce((s, p) => s + p.profile_data[field] * p.profile_data.trade_count, 0) / total
+}
+
+function trendStateWord(trendState: string | null): string {
+  switch (trendState) {
+    case 'TRENDING_UP': return 'trending up'
+    case 'TRENDING_DOWN': return 'trending down'
+    case 'RANGE': return 'ranging'
+    case 'MIXED': return 'mixed'
+    default: return 'unclassified'
+  }
+}
+
+function volatilityStateWord(volatilityState: string | null): string {
+  switch (volatilityState) {
+    case 'LOW_VOL': return 'low-vol'
+    case 'NORMAL_VOL': return 'normal-vol'
+    case 'HIGH_VOL': return 'high-vol'
+    case 'EXTREME_VOL': return 'extreme-vol'
+    default: return 'unclassified-vol'
+  }
 }
 
 /**
- * YOUR HISTORICAL PROFILE rating. Reuses exactly the same thresholds
- * historicalFitEvidence()/isLowSampleEdge() already use elsewhere on this card
- * (avgR>0.10 & winRate>0.50 for the top tier, avgR>0 & winRate>0.45 for the next,
- * LOW profile_quality or <20 trades for thin samples) -- no new cutoffs. A
- * positive avgR on a thin sample maps to LIMITED EVIDENCE outright, never to
- * STRONG/POSITIVE FIT, per the redesign's explicit "don't overstate a small
- * sample" rule. Returns null when there's no historical data at all (trades=0);
- * caller shows a "no history yet" line instead of a rating badge.
+ * Picks which evidence tier to show for an already-decided direction, trying
+ * the most specific first and falling through -- same tier boundaries and
+ * minimum-trade thresholds as analystScoringService.ts's scoreAnalystForMarket().
  */
-export function historicalProfileRating(
-  avgR: number | null, winRate: number | null, quality: string | null, trades: number,
-): HistoricalProfileRating | null {
-  if (avgR == null || trades === 0) return null
-  if (avgR <= 0) return 'WEAK FIT'
-  if (isLowSampleEdge(quality, trades)) return 'LIMITED EVIDENCE'
-  if (avgR > 0.10 && winRate != null && winRate > 0.50) return 'STRONG FIT'
-  if (avgR > 0 && winRate != null && winRate > 0.45) return 'POSITIVE FIT'
-  return 'NEUTRAL'
+export function selectEvidenceTier(
+  marketProfiles: TierProfile[], // this market's own profile rows
+  allProfiles: TierProfile[],    // this analyst's full profile set, every market
+  assetClass: string,
+  direction: 'BUY' | 'SELL',
+  trendState: string | null,
+  volatilityState: string | null,
+  marketSymbol: string,
+): EvidenceTier {
+  // Tiers 1-2 require a genuine today's-regime reading. Without one, matching
+  // on trendState/volatilityState === null would accidentally pick up the
+  // regime-agnostic fallback profile rows (regime: null means "we don't have
+  // regime data for this historical bucket", not "today is unclassified") --
+  // that's what Tier 3 already handles explicitly, so a null reading here
+  // skips straight to it rather than double-counting under the wrong label.
+  const hasRegimeReading = trendState !== null && volatilityState !== null
+
+  // Tier 1 -- MARKET specific
+  const marketProfile = hasRegimeReading ? marketProfiles.find(p =>
+    p.direction === direction &&
+    p.profile_data.regime === trendState &&
+    p.profile_data.volatility_state === volatilityState
+  ) : undefined
+  if (marketProfile && marketProfile.profile_data.trade_count >= MARKET_MIN_TRADES) {
+    return {
+      tier: 'MARKET',
+      avgR: marketProfile.profile_data.avg_r,
+      winRate: marketProfile.profile_data.win_rate,
+      tradeCount: marketProfile.profile_data.trade_count,
+      profileQuality: marketProfile.profile_data.profile_quality,
+      label: `${marketSymbol} ${direction}`,
+    }
+  }
+
+  // Tier 2 -- REGIME rollup, same asset class
+  const regimeProfiles = hasRegimeReading ? allProfiles.filter(p =>
+    p.direction === direction &&
+    p.profile_data.regime === trendState &&
+    p.profile_data.volatility_state === volatilityState &&
+    p.asset_class === assetClass
+  ) : []
+  const regimeTotalTrades = regimeProfiles.reduce((s, p) => s + p.profile_data.trade_count, 0)
+  if (regimeTotalTrades >= REGIME_MIN_TRADES) {
+    return {
+      tier: 'REGIME',
+      avgR: weightedAvg(regimeProfiles, 'avg_r'),
+      winRate: weightedAvg(regimeProfiles, 'win_rate'),
+      tradeCount: regimeTotalTrades,
+      marketCount: new Set(regimeProfiles.map(p => p.market_id)).size,
+      profileQuality: tierQualityFromCount(regimeTotalTrades),
+      label: `${direction} in ${trendStateWord(trendState)} ${volatilityStateWord(volatilityState)} ${assetClass} markets`,
+    }
+  }
+
+  // Tier 3 -- DIRECTION fallback, market specific, regime-agnostic
+  const directionProfile = marketProfiles.find(p =>
+    p.direction === direction && !p.profile_data.has_regime_data
+  )
+  if (directionProfile && directionProfile.profile_data.trade_count >= DIRECTION_MIN_TRADES) {
+    return {
+      tier: 'DIRECTION',
+      avgR: directionProfile.profile_data.avg_r,
+      winRate: directionProfile.profile_data.win_rate,
+      tradeCount: directionProfile.profile_data.trade_count,
+      profileQuality: directionProfile.profile_data.profile_quality,
+      label: `${direction} setups (all conditions)`,
+    }
+  }
+
+  return { tier: 'NONE', avgR: 0, winRate: 0, tradeCount: 0, profileQuality: 'LOW', label: '' }
+}
+
+/** The one-line explanation shown under the win rate/expectancy/sample row --
+ *  factual context for why this tier was used, never a hedge about how much
+ *  to trust the numbers just shown. */
+export function evidenceTierSubtext(tier: EvidenceTier, marketSymbol: string): string {
+  switch (tier.tier) {
+    case 'MARKET': return 'Market + direction + regime matched'
+    case 'REGIME': return `${marketSymbol}-specific history is limited — showing comparable conditions`
+    case 'DIRECTION': return 'No regime-matched history available for this market'
+    default: return ''
+  }
+}
+
+/** "Why This Is Being Recommended" opening clause -- one of exactly four
+ *  shapes depending on which tier supplied the evidence. Always states what
+ *  the data says; never hedges about whether to trust it. */
+export function evidenceTierClause(
+  tier: EvidenceTier, direction: 'BUY' | 'SELL' | null, assetClass: string | null, marketSymbol: string,
+): string {
+  const dirWord = direction ?? ''
+  switch (tier.tier) {
+    case 'MARKET':
+      return `Based on your ${tier.tradeCount} trades on ${marketSymbol} in these conditions, `
+        + `you've achieved ${formatPercent(tier.winRate)} win rate and ${formatR(tier.avgR)} expectancy`
+    case 'REGIME': {
+      const marketCount = tier.marketCount ?? 0
+      return `Based on your ${tier.tradeCount} ${dirWord} setups in comparable ${assetClass ?? ''} conditions `
+        + `across ${marketCount} market${marketCount === 1 ? '' : 's'}, you've achieved ${formatPercent(tier.winRate)} win rate and ${formatR(tier.avgR)} expectancy`
+    }
+    case 'DIRECTION':
+      return `Based on your overall ${dirWord} track record (${tier.tradeCount} trades), `
+        + `you've achieved ${formatPercent(tier.winRate)} win rate and ${formatR(tier.avgR)} expectancy`
+    default:
+      return 'This market is new territory for you — no historical pattern available'
+  }
 }
 
 export type TodaysConditionsRating = 'SUPPORTIVE' | 'MIXED' | 'CONFLICTING'
@@ -559,44 +715,17 @@ export function todaysConditionsRating(
 
 type Polarity = 'positive' | 'neutral' | 'negative'
 
-function historicalPolarity(r: HistoricalProfileRating | null): Polarity {
-  if (r === 'STRONG FIT' || r === 'POSITIVE FIT') return 'positive'
-  if (r === 'WEAK FIT') return 'negative'
-  return 'neutral' // NEUTRAL, LIMITED EVIDENCE, or no data
+function evidenceTierPolarity(tier: EvidenceTier): Polarity {
+  if (tier.tier === 'NONE') return 'neutral'
+  if (tier.avgR > 0) return 'positive'
+  if (tier.avgR < 0) return 'negative'
+  return 'neutral'
 }
 
 function conditionsPolarity(r: TodaysConditionsRating | null): Polarity {
   if (r === 'SUPPORTIVE') return 'positive'
   if (r === 'CONFLICTING') return 'negative'
   return 'neutral' // MIXED or no data
-}
-
-function historicalClauseText(rating: HistoricalProfileRating | null, symbolDisplay: string, dirWord: string): string {
-  switch (rating) {
-    case 'STRONG FIT':
-    case 'POSITIVE FIT':
-      return `your previous ${symbolDisplay} ${dirWord} ideas have produced positive expectancy`
-    case 'NEUTRAL':
-      return `your historical record in ${symbolDisplay} ${dirWord} ideas is roughly break-even`
-    case 'LIMITED EVIDENCE':
-      return `the historical sample for this market is limited`
-    case 'WEAK FIT':
-      return `your previous ${symbolDisplay} ${dirWord} ideas have not been profitable`
-    default:
-      return `there is no trade history yet for ${symbolDisplay} ${dirWord} ideas`
-  }
-}
-
-/** "Your historical DOW SELL ideas show a strong positive edge from the Stretched
- *  zone" -- the lead clause for the two hPol==='positive' synthesis branches, tying
- *  the historical edge to the specific zone it was earned from (reuses zonePlainLabel,
- *  no new vocabulary). */
-function historicalEdgeZoneClause(
-  rating: HistoricalProfileRating | null, symbolDisplay: string, dirWord: string, preferredZone: string | null,
-): string {
-  const strength = rating === 'STRONG FIT' ? 'a strong positive' : 'a positive'
-  const zonePhrase = preferredZone ? ` from the ${zonePlainLabel(preferredZone)} zone` : ''
-  return `Your historical ${symbolDisplay} ${dirWord} ideas show ${strength} edge${zonePhrase}`
 }
 
 function conditionsClauseText(rating: TodaysConditionsRating | null, trendState: string | null, adx14: number | null): string {
@@ -620,59 +749,27 @@ function capitalize(s: string): string {
 }
 
 /**
- * "WHY THIS IS BEING RECOMMENDED" -- one to two sentences synthesising the two
- * evidence pillars. Never manufactures a positive read: if either pillar is
- * negative, thin, or the two disagree, the sentence says so explicitly rather
- * than defaulting to an upbeat tone. Critically, when the historical edge is
- * positive but today's conditions conflict, the sentence doesn't just report the
- * conflict and stop -- it explains *why* the setup still has a starting point
- * (the zone the edge was earned from) and *what* would need to happen for it to
- * become relevant (price reaching that zone), reusing zoneProximityClass/
- * zonePlainLabel rather than inventing new language. Built entirely from the two
- * ratings above (which are themselves built from existing thresholds) plus the
- * plain-English trend/zone labels already used elsewhere on this card -- no new
- * data, no new thresholds.
+ * "WHY THIS IS BEING RECOMMENDED" -- leads with the evidence tier's own
+ * template clause (evidenceTierClause(), one of exactly four shapes depending
+ * on MARKET/REGIME/DIRECTION/NONE), then states today's conditions as a plain
+ * factual sentence. Never hedges about how much to trust the numbers just
+ * shown -- if a tier has data, the data speaks for itself; the only place
+ * this reads as cautious is when conditions genuinely conflict with the
+ * historical bias, which is a real signal, not an apology.
  */
 export function recommendationSynthesis(
-  symbolDisplay: string, direction: 'BUY' | 'SELL' | null,
-  historicalRating: HistoricalProfileRating | null, conditionsRating: TodaysConditionsRating | null,
-  trendState: string | null, adx14: number | null,
-  currentZone: string | null, preferredZone: string | null,
+  evidenceTier: EvidenceTier, tierClause: string,
+  conditionsRating: TodaysConditionsRating | null, trendState: string | null, adx14: number | null,
 ): string {
-  const dirWord = direction ?? ''
-  const hPol = historicalPolarity(historicalRating)
-  const cPol = conditionsPolarity(conditionsRating)
-  const hClause = historicalClauseText(historicalRating, symbolDisplay, dirWord)
-  const cClause = conditionsClauseText(conditionsRating, trendState, adx14)
-  const atZone = zoneProximityClass(currentZone, preferredZone) === 'green'
-  const approachVerb = direction === 'BUY' ? 'dips' : 'rallies'
+  const tierSentence = `${capitalize(tierClause)}.`
+  if (evidenceTier.tier === 'NONE') return tierSentence
 
-  if (hPol === 'positive' && cPol === 'positive') {
-    const strength = historicalRating === 'STRONG FIT' ? 'strong' : 'positive'
-    return `This setup combines a ${strength} historical fit with supportive current conditions. ${capitalize(hClause)}, while ${cClause}.`
-  }
+  const hPol = evidenceTierPolarity(evidenceTier)
+  const cPol = conditionsPolarity(conditionsRating)
+  const cClause = `${capitalize(conditionsClauseText(conditionsRating, trendState, adx14))}.`
+
   if (hPol === 'positive' && cPol === 'negative') {
-    const lead = historicalEdgeZoneClause(historicalRating, symbolDisplay, dirWord, preferredZone)
-    if (atZone) {
-      return `${lead}. Price is already in the preferred entry area despite conflicting trend conditions — treat with extra caution.`
-    }
-    return `${lead}. Current trend conditions conflict with the ${dirWord} bias, so this is a conditional setup to review if price ${approachVerb} into the preferred entry area.`
+    return `${tierSentence} However, ${cClause.charAt(0).toLowerCase()}${cClause.slice(1)} A conditional setup to watch rather than an immediate entry.`
   }
-  if (hPol === 'positive' && cPol === 'neutral') {
-    const lead = historicalEdgeZoneClause(historicalRating, symbolDisplay, dirWord, preferredZone)
-    return `${lead}. However, ${cClause}, so this stays a conditional setup to review rather than an immediate entry.`
-  }
-  if (cPol === 'positive' && hPol === 'negative') {
-    return `${capitalize(cClause)}, but ${hClause} — today's conditions look favourable, though your own record in this setup argues for caution.`
-  }
-  if (cPol === 'positive' && hPol === 'neutral') {
-    return `${capitalize(cClause)}, though ${hClause} — this is more about today's conditions than a proven personal edge, so weight it accordingly.`
-  }
-  if (hPol === 'negative' && cPol === 'negative') {
-    return `Neither your historical record nor today's conditions support this setup: ${hClause}, and ${cClause}. This is a weak candidate — consider skipping unless something changes.`
-  }
-  if (hPol === 'negative' || cPol === 'negative') {
-    return `Neither your historical record nor today's conditions strongly support this setup: ${hClause}, and ${cClause}. Review carefully before proceeding.`
-  }
-  return `The evidence for this setup is mixed: ${hClause}, and ${cClause}. Neither pillar gives a strong signal either way — treat this as a lower-conviction idea and rely on your own read of the market.`
+  return `${tierSentence} ${cClause}`
 }

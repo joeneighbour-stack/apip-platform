@@ -279,8 +279,9 @@ async function main() {
       }
     }
 
-    const { data: allMarketRows } = await db.from('markets').select('market_id, symbol')
+    const { data: allMarketRows } = await db.from('markets').select('market_id, symbol, asset_class')
     const symbolByMarketId = new Map((allMarketRows ?? []).map(m => [m.market_id, m.symbol]))
+    const assetClassByMarketId = new Map((allMarketRows ?? []).map(m => [m.market_id, m.asset_class as string]))
 
     // tradesBySymbol: all analysts pooled -- still needed for markets that fall
     // through to the team-wide fallback path (Step 5) when no analyst has a
@@ -315,10 +316,14 @@ async function main() {
       .in('analyst_id', eligibleAnalysts.map(a => a.analyst))
 
     // Grouped by analyst for scoreAnalystForMarket()'s per-analyst scoring pass.
+    // asset_class is joined in here (analyst_profiles itself has no such column)
+    // so the REGIME tier's cross-market, same-asset-class rollup can filter on it.
     const profilesByAnalyst = new Map<string, AnalystProfileRow[]>()
     for (const p of (profileRows ?? [])) {
+      const assetClass = assetClassByMarketId.get(p.market_id)
+      if (!assetClass) continue
       if (!profilesByAnalyst.has(p.analyst_id)) profilesByAnalyst.set(p.analyst_id, [])
-      profilesByAnalyst.get(p.analyst_id)!.push(p as unknown as AnalystProfileRow)
+      profilesByAnalyst.get(p.analyst_id)!.push({ ...p, asset_class: assetClass } as unknown as AnalystProfileRow)
     }
 
     const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
@@ -461,7 +466,7 @@ async function main() {
         let bestValue = -Infinity
         for (const a of eligibleAnalysts) {
           const score = scoreAnalystForMarket(
-            a.analyst, market.market_id, trendState, volatilityState, marketCurrentZone,
+            a.analyst, market.market_id, market.asset_class, trendState, volatilityState, marketCurrentZone,
             profilesByAnalyst.get(a.analyst) ?? [],
           )
           const value = score.confidence * score.avgR
