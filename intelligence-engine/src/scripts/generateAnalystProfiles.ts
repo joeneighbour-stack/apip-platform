@@ -38,12 +38,14 @@ import path from 'node:path'
 
 const HIGH_CONFIDENCE_MIN_TRADES = 50
 const MEDIUM_CONFIDENCE_MIN_TRADES = 20
-// Kept at 5 even though grouping by trend_state x volatility_state x entry_zone
-// (instead of trend_state alone) produces smaller per-bucket sample sizes -- a
-// LOW profile_quality (5-19 trades, see profileQuality()) is still a real, if
-// less certain, signal. Consumers already weight/read profile_quality rather
-// than filtering below a fixed sample floor, so this doesn't need to move.
-const MIN_PROFILE_TRADES = 5
+// Lowered from 5 to 1: individual market+regime+volatility+zone buckets with
+// as few as 1-4 trades are too thin to act on alone, but they must still get
+// a row so the cross-market REGIME rollup in analystScoringService.ts /
+// workspaceUtils.ts's selectEvidenceTier() can aggregate them into a denser,
+// genuinely usable signal -- a bucket excluded here can never be rolled up.
+// profile_quality (LOW below 20 trades, see profileQuality()) is what
+// communicates confidence to consumers; it isn't a reason to drop the row.
+const MIN_PROFILE_TRADES = 1
 
 // market_state_daily.zone (the source backfillEntryZone.ts copies onto
 // actual_trades.entry_zone) is ZONE_2 on 99.8% of rows before this date --

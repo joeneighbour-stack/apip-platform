@@ -520,8 +520,16 @@ export interface TierProfile {
 }
 
 const MARKET_MIN_TRADES = 20
-const REGIME_MIN_TRADES = 10
-const DIRECTION_MIN_TRADES = 10
+// Lowered from 10 to 5, mirroring the identical change in
+// intelligence-engine/src/services/analystScoringService.ts: generateAnalystProfiles.ts
+// now writes a row for every bucket down to 1 trade (MIN_PROFILE_TRADES), so
+// the aggregate this rolls up is denser than before -- 5 real trades is
+// still a thin sample (tierQualityFromCount grades it LOW), but a real one.
+const REGIME_MIN_TRADES = 5
+// Lowered from 10 to 5 alongside REGIME_MIN_TRADES so the two tiers stay on
+// the same footing, and to keep this file mirroring analystScoringService.ts's
+// scoreAnalystForMarket() exactly (same tier boundaries, same thresholds).
+const DIRECTION_MIN_TRADES = 5
 // Same thresholds generateAnalystProfiles.ts's profileQuality() uses -- reused
 // (not reinvented) to grade the REGIME tier's aggregated sample, which has no
 // single stored profile_quality of its own.

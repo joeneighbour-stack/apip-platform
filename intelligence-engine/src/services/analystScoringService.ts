@@ -58,8 +58,17 @@ const QUALITY_WEIGHT: Record<'HIGH' | 'MEDIUM' | 'LOW', number> = { HIGH: 1.0, M
 const CONFIDENCE_TRADE_CAP = 50
 
 const MARKET_MIN_TRADES = 20
-const REGIME_MIN_TRADES = 10
-const DIRECTION_MIN_TRADES = 10
+// Lowered from 10 to 5: generateAnalystProfiles.ts now writes a row for
+// every bucket down to 1 trade (MIN_PROFILE_TRADES), so the aggregate this
+// rolls up is denser than before -- 5 real trades across a rollup is still
+// a thin sample (profileQuality/qualityFromCount grades it LOW), but a real
+// one, not a threshold tuned for a since-relaxed per-bucket floor.
+const REGIME_MIN_TRADES = 5
+// Lowered from 10 to 5 alongside REGIME_MIN_TRADES so the two tiers stay on
+// the same footing, and to keep this file mirroring workspaceUtils.ts's
+// selectEvidenceTier() exactly (same tier boundaries, same thresholds) --
+// see that file's identical change.
+const DIRECTION_MIN_TRADES = 5
 
 // Same thresholds profileQuality() in generateAnalystProfiles.ts already uses
 // -- reused here (not reinvented) to grade the REGIME tier's aggregated
