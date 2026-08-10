@@ -104,6 +104,11 @@ export function CoverageStrip({ rows, recommendationsGeneratedToday = 0 }: Props
                       {row.regime ? (
                         <span className="inline-flex items-center gap-1.5">
                           <span>{regimeTrendLabel(row.regime.trendState, row.regime.adx14, true)}</span>
+                          {row.directionAlignment === 'COUNTER_TREND' && (
+                            <span className="text-[9px] font-medium px-1 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200 whitespace-nowrap">
+                              ↙ Counter
+                            </span>
+                          )}
                           {row.regime.confidence && (
                             <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] border ${
                               row.regime.confidence === 'HIGH' ? 'bg-green-50 border-green-200 text-green-800'

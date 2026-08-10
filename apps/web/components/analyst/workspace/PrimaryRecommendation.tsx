@@ -19,7 +19,14 @@ export function PrimaryRecommendation({ row }: Props) {
     <div>
       <p className="text-xl font-semibold text-foreground tracking-tight">{symbolDisplay}</p>
       {typeLabel && (
-        <p className="text-sm font-medium text-foreground mt-0.5">{typeLabel}</p>
+        <p className="text-sm font-medium text-foreground mt-0.5 flex items-center gap-2">
+          {typeLabel}
+          {row.directionAlignment === 'COUNTER_TREND' && (
+            <span className="text-[9px] font-medium px-1 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200 whitespace-nowrap">
+              ↙ Counter
+            </span>
+          )}
+        </p>
       )}
       {row.isDoNotUse && (
         <p className="text-xs font-medium text-red-600 mt-1">Levels outdated — awaiting recalculation.</p>
