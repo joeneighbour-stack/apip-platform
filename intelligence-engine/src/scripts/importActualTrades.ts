@@ -208,6 +208,29 @@ async function main() {
   console.log(`\nAnalysts mapped: ${analystIdByCode.size}/${Object.keys(ANALYST_CODE_MAP).length}`)
   console.log(`Markets in DB: ${markets?.length ?? 0}`)
 
+  // ── Load entry-zone map ──────────────────────────────────────────────────
+  // market_state_daily.zone at the trade's published date, loaded once as a
+  // market_id+date -> zone map (not queried per trade) so the import stays
+  // fast. Only from 2026-01-01 onwards -- pre-2026 zone data is a known
+  // artifact (99.8% ZONE_2, confirmed -- same boundary generateAnalystProfiles.ts's
+  // ZONE_VALID_FROM already enforces). fromDate is always >= MIN_API_DATE
+  // (2026-06-19), itself already past 2026-01-01, so this floor is a
+  // defensive belt-and-braces bound rather than the one actually binding today.
+  const ZONE_VALID_FROM = '2026-01-01'
+  const zoneMapFromDate = fromDate > ZONE_VALID_FROM ? fromDate : ZONE_VALID_FROM
+  const zoneMap = new Map<string, string>()
+  if (zoneMapFromDate <= toDate) {
+    const { data: dailyStates } = await db
+      .from('market_state_daily')
+      .select('market_id, date, zone')
+      .gte('date', zoneMapFromDate)
+      .lte('date', toDate)
+    for (const row of dailyStates ?? []) {
+      if (row.zone) zoneMap.set(`${row.market_id}:${row.date}`, row.zone)
+    }
+  }
+  console.log(`Zone map loaded: ${zoneMap.size} market/date entries (from ${zoneMapFromDate})`)
+
   // ── Load existing MANUAL_BACKFILL trades for the sync window ────────────────
   // The webhook feed and the historical CSV backfill can both cover the same real
   // trade for dates at/after MIN_API_DATE (the backfill file wasn't cut off exactly
@@ -370,6 +393,11 @@ async function main() {
     const dedupKey = `${analystId}::${marketId}::${direction}::${tradeDate}`
     if (tradeDate < LIVE_API_START && backfillKeys.has(dedupKey)) { skippedBackfill++; continue }
 
+    // 'LIVE_COMPUTED' matches migration 028's documented provenance for zone
+    // derived from market_state_daily at import time -- entry_zone_source
+    // must stay null whenever entry_zone does (chk_entry_zone_source_requires_zone).
+    const entryZone = zoneMap.get(`${marketId}:${tradeDate}`) ?? null
+
     tradeRows.push({
       source_system: 'ACUITY_PERFORMANCE_API',
       source_record_id: t.ReportId,
@@ -388,6 +416,8 @@ async function main() {
       triggered,
       closed_at: t.ExitDate ?? null,
       result_r: resultR,
+      entry_zone: entryZone,
+      entry_zone_source: entryZone ? 'LIVE_COMPUTED' : null,
       raw_payload: t,
     })
 
