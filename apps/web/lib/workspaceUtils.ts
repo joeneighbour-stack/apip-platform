@@ -553,7 +553,11 @@ function trendStateWord(trendState: string | null): string {
     case 'TRENDING_UP': return 'trending up'
     case 'TRENDING_DOWN': return 'trending down'
     case 'RANGE': return 'ranging'
-    case 'MIXED': return 'mixed'
+    // "mixed-trend" rather than bare "mixed" so this tier label reads
+    // consistently with trendLabel()'s "Conflicting signals" headline for the
+    // same MIXED trend_state -- both now name the trend explicitly instead of
+    // one saying "mixed" and the other "conflicting".
+    case 'MIXED': return 'mixed-trend'
     default: return 'unclassified'
   }
 }
@@ -730,13 +734,30 @@ function conditionsPolarity(r: TodaysConditionsRating | null): Polarity {
   return 'neutral' // MIXED or no data
 }
 
+/** Full-sentence regime phrase, each shape grammatically complete on its own
+ *  (no trailing bare adjective) -- used where regimeTrendLabel()'s short noun
+ *  phrase ("Ranging", "Strong Uptrend") would otherwise get spliced into a
+ *  sentence like "remains in a ranging", which reads as truncated. Keyed off
+ *  trendState directly rather than regimeTrendLabel()'s output because
+ *  regimeTrendLabel() collapses both RANGE and MIXED to "Ranging", which would
+ *  mislabel a genuinely MIXED (conflicting-signal) regime as ranging here. */
+function conditionsRegimePhrase(trendState: string | null): string {
+  switch (trendState) {
+    case 'TRENDING_UP': return 'an uptrending market'
+    case 'TRENDING_DOWN': return 'a downtrending market'
+    case 'MIXED': return 'mixed conditions'
+    case 'RANGE': return 'a ranging market'
+    default: return 'unclear conditions'
+  }
+}
+
 function conditionsClauseText(rating: TodaysConditionsRating | null, trendState: string | null, adx14: number | null): string {
   const isRanging = trendState === 'RANGE' || (adx14 != null && adx14 < 15)
   switch (rating) {
     case 'SUPPORTIVE':
       return isRanging
         ? `today's market is ranging, favouring a mean-reversion entry at this level`
-        : `today's market remains in a ${regimeTrendLabel(trendState, adx14).toLowerCase()}`
+        : `today's market remains in ${conditionsRegimePhrase(trendState)}`
     case 'MIXED':
       return `today's market conditions provide only partial support`
     case 'CONFLICTING':
@@ -950,7 +971,21 @@ export function setupContext(
     (direction === 'SELL' && trendState === 'TRENDING_UP')
 
   const isRanging = trendState === 'RANGE' || (adx != null && adx < 15)
+  // != null-guarded, not the bare `currentZone === preferredZone` a naive
+  // check would use -- two nulls would otherwise read as "at entry" when
+  // neither zone is actually known.
   const atEntry = currentZone != null && currentZone === preferredZone
+
+  // Price already being at the entry zone overrides every other framing below:
+  // "approaching" or "waiting for" language would directly contradict
+  // priceLocationLabel()'s "At entry zone — consider now" headline shown
+  // alongside this text.
+  if (atEntry) {
+    if (isRanging) return `Mean-reversion ${direction} — price is now at the entry zone. Ranging conditions support a fade. Consider acting now.`
+    if (isTrendAligned) return `Trend-following ${direction} — price has pulled back into the entry zone with trend intact. Setup is active — consider acting now.`
+    if (isCounterTrend) return `Counter-trend ${direction} — price is at the entry zone. This trades against the prevailing trend — apply strict risk management.`
+    return `${direction ?? 'This'} setup — price is at the suggested entry zone. Setup is active.`
+  }
 
   if (isRanging) {
     if (direction === 'SELL') return `Mean-reversion SELL — price has extended above its normal range. The system is waiting for a rally into resistance before selling. Low trend momentum supports a fade approach.`
@@ -958,7 +993,6 @@ export function setupContext(
   }
 
   if (isTrendAligned) {
-    if (atEntry) return `Trend-following ${direction} — price has pulled back into the entry zone with the broader trend still intact. This is a ${direction === 'BUY' ? 'buy the dip' : 'sell the rally'} opportunity within an established ${direction === 'BUY' ? 'uptrend' : 'downtrend'}.`
     return `Trend-following ${direction} — waiting for price to pull back into the entry zone. The broader trend supports this direction once entry triggers.`
   }
 

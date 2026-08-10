@@ -102,10 +102,10 @@ export function CoverageStrip({ rows, recommendationsGeneratedToday = 0 }: Props
                     </td>
                     <td className="py-2 px-3 whitespace-nowrap">
                       {row.regime ? (
-                        <span>
-                          {regimeTrendLabel(row.regime.trendState, row.regime.adx14, true)}
+                        <span className="inline-flex items-center gap-1.5">
+                          <span>{regimeTrendLabel(row.regime.trendState, row.regime.adx14, true)}</span>
                           {row.regime.confidence && (
-                            <span className={`ml-1.5 inline-block px-1.5 py-0.5 rounded-full text-[10px] border ${
+                            <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] border ${
                               row.regime.confidence === 'HIGH' ? 'bg-green-50 border-green-200 text-green-800'
                                 : row.regime.confidence === 'MEDIUM' ? 'bg-amber-50 border-amber-200 text-amber-800'
                                 : 'bg-muted border-border text-muted-foreground'
