@@ -19,7 +19,14 @@ import { scoreAnalystForMarket, type AnalystScore, type AnalystProfileRow } from
 import type { SessionType } from '../types/domain.js'
 
 const SYSTEM_ENGINE_ID = 'ab9359b6-0e78-49fc-8a0a-1cf589552280'
-const ATR_PERIOD = 20
+// Governs marketState.atr14 (entryOptimizerService.ts's stop/target distance
+// input) and the minimum-bars floor below -- NOT the zone bands, which are
+// always sourced from atr20FromDaily/precomputedAtr20 independently of this
+// constant (see the buildMarketState() call below). Was previously 20, which
+// silently made "atr14" a 20-period ATR -- entryOptimizerService.ts's
+// DEFAULT_PROFILES stop/target multipliers were calibrated against genuine
+// ATR14, so every live stop/target was systematically too wide.
+const ATR_PERIOD = 14
 const ZONE_COUNT = 4
 const MINIMUM_RR = 2.0
 const MIN_TRIGGER_SAMPLE = 20
@@ -418,10 +425,17 @@ async function main() {
       // Pine-style band construction using session anchors from intraday snapshot.
       // previous_close: final 5-min OANDA bar before APIP session open (22:00 UTC)
       // session_high/low: max/min of 5-min bar highs/lows since session open
-      // atr20: from market_state_daily Wilder RMA period 20
+      // atr20: from market_state_daily Wilder RMA period 20 -- zone bands only.
+      // atr14: from market_state_daily Wilder RMA period 14 -- stop/target
+      // distances only (entryOptimizerService.ts), read directly rather than
+      // falling back to atr20 the way atr20FromDaily falls back to atr14 below --
+      // that fallback exists to keep the ZONE calc alive when atr20 is missing;
+      // reusing it here would silently reintroduce the exact atr20-standing-in-
+      // for-atr14 bug this fix removes.
       const prevClose = intraday.previous_close != null ? Number(intraday.previous_close) : null
       const lastBar = bars.length > 0 ? bars[bars.length - 1] : null
       const atr20FromDaily = lastBar?.atr20 != null ? Number(lastBar.atr20) : lastBar?.atr14 != null ? Number(lastBar.atr14) : null
+      const atr14FromDaily = lastBar?.atr14 != null ? Number(lastBar.atr14) : null
       const marketState = buildMarketState({
         marketId: market.market_id,
         ohlcSeries: bars,
@@ -432,6 +446,7 @@ async function main() {
           todayHighSoFar:   Number(intraday.session_high),
           todayLowSoFar:    Number(intraday.session_low),
           precomputedAtr20: atr20FromDaily,
+          precomputedAtr14: atr14FromDaily ?? undefined,
         } : undefined,
       })
       const currentZone = intraday.current_zone ?? marketState.currentZone

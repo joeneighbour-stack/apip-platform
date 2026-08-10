@@ -48,12 +48,19 @@ export interface OhlcBar {
  * todayLowSoFar:  min(bar.low)  from all 5-min bars since session open.
  * precomputedAtr20: if provided, skips recomputing ATR from ohlcSeries and uses
  *   this value directly (e.g. loaded from market_state_daily.atr20).
+ * precomputedAtr14: same idea, for atr14 (e.g. loaded from market_state_daily.atr14).
+ *   Prefer this over relying on parameters.atrPeriod + a local ohlcSeries recompute
+ *   when a genuinely period-14 value is available -- Wilder RMA is seed-path-dependent,
+ *   so a fresh recompute over just the caller's (often truncated) ohlcSeries window
+ *   only approximates the value populateMarketStateDaily.ts already computed with a
+ *   full historical lookback, it doesn't reproduce it exactly.
  */
 export interface SessionAnchors {
   previousClose: number;
   todayHighSoFar: number;
   todayLowSoFar: number;
   precomputedAtr20?: number;
+  precomputedAtr14?: number;
 }
 
 export interface MarketStateInput {
@@ -189,7 +196,7 @@ function classifyZone(price: number, lowerBand: number, upperBand: number, step:
 export function buildMarketState(input: MarketStateInput): MarketStateOutput {
   const { marketId, ohlcSeries, currentPrice, parameters, sessionAnchors } = input;
 
-  if (ohlcSeries.length === 0 && !sessionAnchors?.precomputedAtr20) {
+  if (ohlcSeries.length === 0 && !sessionAnchors?.precomputedAtr20 && !sessionAnchors?.precomputedAtr14) {
     return {
       marketId, atr14: null, atr20: null,
       lowerBand: null, zone1Top: null, zone2Top: null, zone3Top: null,
@@ -199,11 +206,13 @@ export function buildMarketState(input: MarketStateInput): MarketStateOutput {
     };
   }
 
-  // Always compute both ATR values from ohlcSeries for output/storage
-  const atr14 = ohlcSeries.length > 0 ? calculateAtr(ohlcSeries, parameters.atrPeriod) : null;
+  // Compute both ATR values from ohlcSeries for output/storage, as a fallback
+  // for whichever one isn't precomputed.
+  const atr14Computed = ohlcSeries.length > 0 ? calculateAtr(ohlcSeries, parameters.atrPeriod) : null;
   const atr20Computed = ohlcSeries.length > 0 ? calculateAtr(ohlcSeries, 20) : null;
 
-  // Use precomputed ATR20 from DB when provided (intraday path), else computed
+  // Use precomputed values from DB when provided (intraday/live path), else computed
+  const atr14 = sessionAnchors?.precomputedAtr14 ?? atr14Computed;
   const atr20 = sessionAnchors?.precomputedAtr20 ?? atr20Computed;
 
   let bottomAnchor: number;
