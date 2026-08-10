@@ -18,7 +18,7 @@ export async function POST(req: Request) {
     session: session ?? null,
     available: false,
     status: 'PENDING',
-    requested_by: user.userId,
+    requested_by: user.appUserId,
   }))
 
   const { data, error } = await supabase

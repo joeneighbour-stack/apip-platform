@@ -4,7 +4,7 @@ import { useState } from 'react'
 
 interface EngineRun {
   engine_run_id: string
-  session: string
+  session: string | null
   status: string
   started_at: string
   finished_at: string | null

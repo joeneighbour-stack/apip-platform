@@ -9,13 +9,15 @@ export async function POST(req: Request) {
   const { engineRunId } = await req.json()
   const supabase = await createClient()
 
-  // Reset failed run to PENDING so engine can retry
+  // Reset failed run to QUEUED (the enum's own initial state, per
+  // engine_run_status in migrations/001_schema.sql) so the engine can retry --
+  // 'PENDING' is not a valid engine_run_status value.
   const { error } = await supabase
     .from('engine_runs')
-    .update({ status: 'PENDING', error_summary: null })
+    .update({ status: 'QUEUED', error_summary: null })
     .eq('engine_run_id', engineRunId)
     .eq('status', 'FAILED')
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ ok: true, message: 'Run reset to PENDING. Trigger engine manually to retry.' })
+  return NextResponse.json({ ok: true, message: 'Run reset to QUEUED. Trigger engine manually to retry.' })
 }

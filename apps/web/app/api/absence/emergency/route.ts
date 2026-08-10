@@ -20,7 +20,7 @@ export async function POST(req: Request) {
       session,
       available: false,
       status: 'APPROVED',
-      approved_by: user.userId,
+      approved_by: user.appUserId,
       approved_at: new Date().toISOString(),
     }, { onConflict: 'analyst_id,date,session' })
 

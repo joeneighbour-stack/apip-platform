@@ -18,13 +18,18 @@ export async function POST(req: Request) {
   }
 
   const supabase = await createClient()
-  // as any: analyst_opportunity_feedback is a brand-new table (migrations/045) not yet
-  // in the generated Supabase types -- same "insert payload infers as never" pattern as
-  // every other untyped-schema insert/upsert call in this codebase.
-  const { error } = await supabase
+  // (supabase as any): migrations/045_analyst_opportunity_feedback.sql defines this
+  // table, but it has never actually been applied to the live database (confirmed
+  // via PostgREST schema introspection -- the table genuinely does not exist yet,
+  // not just a stale-types gap). This call will fail at runtime with a real
+  // PostgREST "schema cache" error until that migration is run. Escaping the whole
+  // client (not just the payload) because .from()'s own table-name argument -- not
+  // just the upsert payload -- fails to type-check against a table absent from
+  // types/database.ts.
+  const { error } = await (supabase as any)
     .from('analyst_opportunity_feedback')
     .upsert(
-      { opportunity_id: opportunityId, analyst_id: user.analystId, feedback } as any,
+      { opportunity_id: opportunityId, analyst_id: user.analystId, feedback },
       { onConflict: 'analyst_id,opportunity_id' },
     )
 

@@ -23,7 +23,7 @@ interface Availability {
   analyst_id: string
   available: boolean
   workload_cap: number | null
-  session: string
+  session: string | null
 }
 
 interface WorkloadPanelProps {

@@ -1,8 +1,11 @@
 import { createClient } from '@/lib/supabase/server'
 import { getCurrentUser } from '@/lib/auth'
 import { NextResponse } from 'next/server'
+import type { Database } from '@/types/database'
 
-const ACTION_STATUS: Record<string, string> = {
+type NotificationStatus = Database['public']['Enums']['notification_status']
+
+const ACTION_STATUS: Record<string, NotificationStatus> = {
   acknowledge: 'ACKNOWLEDGED',
   resolve:     'RESOLVED',
   dismiss:     'DISMISSED',

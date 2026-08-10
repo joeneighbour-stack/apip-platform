@@ -230,13 +230,18 @@ export async function getAnalystProfileData(
     ...(detailsByTradeId.get(t.trade_id) ?? {}),
   }))
 
-  // Post-trade reviews
-  const { data: reviews } = await supabase
-    .from('post_trade_reviews')
-    .select('review_id, market, session, direction_alignment, entry_alignment, alignment_score, review_status, created_at')
-    .eq('analyst_id', analystId)
-    .order('created_at', { ascending: false })
-    .limit(50)
+  // Post-trade reviews -- post_trade_reviews has no analyst_id column, only
+  // trade_id (FK to actual_trades), so it's scoped to this analyst via the
+  // trade_id list already fetched above, not a direct analyst_id filter.
+  const allTradeIds = allTrades.map((t: any) => t.trade_id)
+  const { data: reviews } = allTradeIds.length > 0
+    ? await supabase
+        .from('post_trade_reviews')
+        .select('review_id, market, session, direction_alignment, entry_alignment, alignment_score, review_status, created_at')
+        .in('trade_id', allTradeIds)
+        .order('created_at', { ascending: false })
+        .limit(50)
+    : { data: [] }
 
   // Disputes
   const { data: disputes } = await supabase

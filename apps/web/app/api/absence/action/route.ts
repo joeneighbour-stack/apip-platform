@@ -17,7 +17,7 @@ export async function POST(req: Request) {
     .from('analyst_availability')
     .update({
       status: action === 'approve' ? 'APPROVED' : 'REJECTED',
-      approved_by: user.userId,
+      approved_by: user.appUserId,
       approved_at: new Date().toISOString(),
     })
     .eq('availability_id', availabilityId)

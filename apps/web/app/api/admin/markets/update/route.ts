@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { getCurrentUser } from '@/lib/auth'
 import { NextResponse } from 'next/server'
+import type { Database } from '@/types/database'
 
 export async function POST(req: Request) {
   const user = await getCurrentUser()
@@ -9,7 +10,7 @@ export async function POST(req: Request) {
   const { marketId, active, price_data_provider, price_data_symbol } = await req.json()
   const supabase = await createClient()
 
-  const updates: Record<string, any> = {}
+  const updates: Database['public']['Tables']['markets']['Update'] = {}
   if (active !== undefined) updates.active = active
   if (price_data_provider !== undefined) updates.price_data_provider = price_data_provider
   if (price_data_symbol !== undefined) updates.price_data_symbol = price_data_symbol
