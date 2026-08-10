@@ -43,6 +43,8 @@ export interface AnalystProfileRow {
 
 export type ProfileTier = 'MARKET' | 'REGIME' | 'DIRECTION' | 'NONE'
 
+export type DirectionAlignment = 'TREND_ALIGNED' | 'COUNTER_TREND' | 'NEUTRAL' | 'NONE'
+
 export interface AnalystScore {
   analystId: string
   marketId: string
@@ -51,6 +53,14 @@ export interface AnalystScore {
   profileTier: ProfileTier
   profileQuality: 'HIGH' | 'MEDIUM' | 'LOW' | null
   confidence: number // 0-1
+  // How this analyst's preferred direction relates to today's trend regime --
+  // TREND_ALIGNED/COUNTER_TREND/NEUTRAL (RANGE or MIXED, where neither side
+  // is favoured) or NONE (no direction picked, or no regime reading at all).
+  directionAlignment: DirectionAlignment
+  // Multiplies confidence x avgR at the call site so a counter-trend pick
+  // needs a meaningfully stronger historical edge to outrank a trend-aligned
+  // one, rather than the two competing on raw edge alone.
+  alignmentMultiplier: number
 }
 
 const TIER_WEIGHT: Record<ProfileTier, number> = { MARKET: 1.0, REGIME: 0.75, DIRECTION: 0.50, NONE: 0.0 }
@@ -129,11 +139,52 @@ function pickBetween(buy: DirectionCandidate | null, sell: DirectionCandidate | 
   return null
 }
 
-function buildScore(analystId: string, marketId: string, tier: ProfileTier, pick: DirectionPick): AnalystScore {
+/**
+ * How preferredDirection relates to today's trend regime. RANGE/MIXED are
+ * NEUTRAL, not COUNTER_TREND -- there's no trend to be counter to, and
+ * mean-reversion setups are valid either direction in those regimes. A
+ * missing direction or regime reading is NONE, distinct from NEUTRAL, since
+ * there's nothing to grade alignment on at all (multiplier still applies a
+ * mild discount rather than 1.0, since an ungraded pick shouldn't score as
+ * well as a confirmed trend-aligned one).
+ */
+function computeDirectionAlignment(
+  preferredDirection: 'BUY' | 'SELL' | null,
+  trendState: string | null,
+): { alignment: DirectionAlignment, multiplier: number } {
+  if (!preferredDirection || !trendState) {
+    return { alignment: 'NONE', multiplier: 0.85 }
+  }
+
+  const trendBullish = trendState === 'TRENDING_UP'
+  const trendBearish = trendState === 'TRENDING_DOWN'
+  const ranging = trendState === 'RANGE' || trendState === 'MIXED'
+
+  if (ranging) {
+    return { alignment: 'NEUTRAL', multiplier: 1.0 }
+  }
+
+  const aligned =
+    (preferredDirection === 'BUY' && trendBullish) ||
+    (preferredDirection === 'SELL' && trendBearish)
+
+  const counter =
+    (preferredDirection === 'BUY' && trendBearish) ||
+    (preferredDirection === 'SELL' && trendBullish)
+
+  if (aligned) return { alignment: 'TREND_ALIGNED', multiplier: 1.0 }
+  if (counter) return { alignment: 'COUNTER_TREND', multiplier: 0.7 }
+
+  return { alignment: 'NEUTRAL', multiplier: 0.85 }
+}
+
+function buildScore(analystId: string, marketId: string, tier: ProfileTier, pick: DirectionPick, trendState: string | null): AnalystScore {
   const confidence = TIER_WEIGHT[tier] * QUALITY_WEIGHT[pick.quality] * Math.min(pick.tradeCount / CONFIDENCE_TRADE_CAP, 1.0)
+  const { alignment, multiplier } = computeDirectionAlignment(pick.direction, trendState)
   return {
     analystId, marketId, preferredDirection: pick.direction, avgR: pick.avgR,
     profileTier: tier, profileQuality: pick.quality, confidence,
+    directionAlignment: alignment, alignmentMultiplier: multiplier,
   }
 }
 
@@ -174,7 +225,7 @@ export function scoreAnalystForMarket(
     marketBuy ? fromProfile(marketBuy) : null,
     marketSell ? fromProfile(marketSell) : null,
   )
-  if (marketPick) return buildScore(analystId, marketId, 'MARKET', marketPick)
+  if (marketPick) return buildScore(analystId, marketId, 'MARKET', marketPick, trendState)
 
   // Tier 2 -- REGIME: same asset class, same regime, rolled up across markets,
   // aggregate trade_count >= REGIME_MIN_TRADES. Matched on trend_state only,
@@ -193,7 +244,7 @@ export function scoreAnalystForMarket(
     const buyRegime = regimeProfiles.filter(p => p.direction === 'BUY')
     const sellRegime = regimeProfiles.filter(p => p.direction === 'SELL')
     const rollupPick = pickBetween(fromRollup(buyRegime), fromRollup(sellRegime))
-    if (rollupPick) return buildScore(analystId, marketId, 'REGIME', rollupPick)
+    if (rollupPick) return buildScore(analystId, marketId, 'REGIME', rollupPick, trendState)
   }
 
   // Tier 3 -- DIRECTION: this market, regime-agnostic fallback, trade_count >= DIRECTION_MIN_TRADES
@@ -203,7 +254,10 @@ export function scoreAnalystForMarket(
     directionBuy ? fromProfile(directionBuy) : null,
     directionSell ? fromProfile(directionSell) : null,
   )
-  if (directionPick) return buildScore(analystId, marketId, 'DIRECTION', directionPick)
+  if (directionPick) return buildScore(analystId, marketId, 'DIRECTION', directionPick, trendState)
 
-  return { analystId, marketId, preferredDirection: null, avgR: 0, profileTier: 'NONE', profileQuality: null, confidence: 0 }
+  return {
+    analystId, marketId, preferredDirection: null, avgR: 0, profileTier: 'NONE', profileQuality: null, confidence: 0,
+    directionAlignment: 'NONE', alignmentMultiplier: 0.85,
+  }
 }

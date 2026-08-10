@@ -96,6 +96,15 @@ export interface WorkspaceRow {
   // Recommended" synthesis; historicalEdge above stays as-is for Supporting
   // Evidence's separate "Historical breakdown" subsection.
   evidenceTier: EvidenceTier
+  // The engine's own verdict on how evidenceTier's direction relates to
+  // today's trend regime -- read from recommendation_versions.regime_tags,
+  // set by scoreAnalystForMarket()'s computeDirectionAlignment() at
+  // generation time. Null when the fallback (non-analyst-first) allocation
+  // path was used, since no AnalystScore existed to grade it. Drives "Why
+  // This Is Being Recommended"'s counter-trend commentary -- deliberately
+  // NOT recomputed from row.regime/row.direction client-side, so the stated
+  // reason always matches what actually drove the allocation.
+  directionAlignment: 'TREND_ALIGNED' | 'COUNTER_TREND' | 'NEUTRAL' | 'NONE' | null
   // Section 4 Block 4 ("Why You're Seeing This") -- derived from analyst_profiles
   // only, never fabricated. Null when there's no meaningful differentiation to
   // report (caller falls back to a neutral, still-honest statement in that case).

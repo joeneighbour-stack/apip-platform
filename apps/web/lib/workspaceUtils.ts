@@ -705,8 +705,22 @@ export function evidenceTierSubtext(tier: EvidenceTier, marketSymbol: string): s
 /** "Why This Is Being Recommended" opening clause -- one of exactly four
  *  shapes depending on which tier supplied the evidence. Always states what
  *  the data says; never hedges about whether to trust it. */
+export type DirectionAlignment = 'TREND_ALIGNED' | 'COUNTER_TREND' | 'NEUTRAL' | 'NONE'
+
+/**
+ * directionAlignment/trendState are optional and, when present, only change
+ * the REGIME-tier branch's wording -- MARKET/DIRECTION/NONE are unaffected.
+ * Sourced from the engine's own computeDirectionAlignment() verdict (see
+ * runEngineSession.ts's recommendation_versions.regime_tags write and
+ * WorkspaceRow.directionAlignment's comment) rather than re-derived from
+ * trendState/direction here, so the stated reason always matches what
+ * actually drove the allocation. Omitted (older recommendations, or the
+ * fallback allocation path with no AnalystScore) falls through to the
+ * original tier-only REGIME wording.
+ */
 export function evidenceTierClause(
   tier: EvidenceTier, direction: 'BUY' | 'SELL' | null, assetClass: string | null, marketSymbol: string,
+  directionAlignment?: DirectionAlignment | null, trendState?: string | null,
 ): string {
   const dirWord = direction ?? ''
   switch (tier.tier) {
@@ -715,6 +729,19 @@ export function evidenceTierClause(
         + `you've achieved ${formatPercent(tier.winRate)} win rate and ${formatR(tier.avgR)} expectancy`
     case 'REGIME': {
       const marketCount = tier.marketCount ?? 0
+      if (directionAlignment === 'TREND_ALIGNED') {
+        return `Based on your ${tier.tradeCount} ${dirWord} setups in comparable ${assetClass ?? ''} conditions `
+          + `— trend supports this direction`
+      }
+      if (directionAlignment === 'NEUTRAL') {
+        return `Based on your ${tier.tradeCount} ${dirWord} setups in ranging ${assetClass ?? ''} conditions `
+          + `— no strong trend bias either way`
+      }
+      if (directionAlignment === 'COUNTER_TREND') {
+        return `Your ${dirWord} results in ${trendStateWord(trendState ?? null)} conditions (${formatR(tier.avgR)} across ${tier.tradeCount} trades) `
+          + `represent the strongest available edge on this market today. This is a counter-trend setup `
+          + `— the trend works against the direction but your historical results support the setup`
+      }
       return `Based on your ${tier.tradeCount} ${dirWord} setups in comparable ${assetClass ?? ''} conditions `
         + `across ${marketCount} market${marketCount === 1 ? '' : 's'}, you've achieved ${formatPercent(tier.winRate)} win rate and ${formatR(tier.avgR)} expectancy`
     }

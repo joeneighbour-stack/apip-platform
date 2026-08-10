@@ -469,7 +469,9 @@ async function main() {
             a.analyst, market.market_id, market.asset_class, trendState, volatilityState, marketCurrentZone,
             profilesByAnalyst.get(a.analyst) ?? [],
           )
-          const value = score.confidence * score.avgR
+          // Direction-aware: a counter-trend pick (alignmentMultiplier 0.7) needs
+          // a meaningfully stronger edge than a trend-aligned one (1.0) to win.
+          const value = score.confidence * score.avgR * score.alignmentMultiplier
           if (score.profileTier !== 'NONE' && value > bestValue) { bestValue = value; bestScore = score }
         }
       } catch (err) {
@@ -484,7 +486,7 @@ async function main() {
         assignedAnalystId = bestScore.analystId
         preferredDirection = bestScore.preferredDirection
         const name = analystNameById.get(bestScore.analystId) ?? bestScore.analystId
-        console.log(`    Analyst-first: ${name} tier=${bestScore.profileTier} dir=${preferredDirection ?? 'none'} avgR=${bestScore.avgR.toFixed(3)} confidence=${bestScore.confidence.toFixed(2)}`)
+        console.log(`    ${symbol}: ${name} (${bestScore.profileTier} / ${bestScore.directionAlignment} / avgR=${bestScore.avgR.toFixed(3)}) dir=${preferredDirection ?? 'none'} confidence=${bestScore.confidence.toFixed(2)}`)
       } else {
         // Fallback: no analyst has any profile match for this market (all
         // NONE tier) or scoring threw -- team-wide direction cascade,
@@ -618,8 +620,9 @@ async function main() {
           allocationId: randomUUID(),
           assignedAnalystId: score.analystId,
           eligibleAnalysts: eligibleAnalysts.map(a => a.analyst),
-          allocationScore: score.confidence * score.avgR,
-          reasonSummary: `Assigned via analyst-first profile scoring (tier: ${score.profileTier}, avgR: ${score.avgR.toFixed(3)}, confidence: ${score.confidence.toFixed(2)}).`,
+          // Matches the value actually used to rank/select this analyst in Step 3.
+          allocationScore: score.confidence * score.avgR * score.alignmentMultiplier,
+          reasonSummary: `Assigned via analyst-first profile scoring (tier: ${score.profileTier}, alignment: ${score.directionAlignment}, avgR: ${score.avgR.toFixed(3)}, confidence: ${score.confidence.toFixed(2)}).`,
         })
       }
 
@@ -697,6 +700,15 @@ async function main() {
           risk_range: rv.riskRange, target_range: rv.targetRange,
           volatility_warning: rv.volatilityWarning ?? '',
           atr_move_since_generation: rv.atrMoveSinceGeneration,
+          // recommendation_versions.regime_tags is otherwise unwritten today --
+          // used here to carry the engine's own direction-alignment verdict
+          // through to the workspace, so its "Why This Is Being Recommended"
+          // commentary can state when a counter-trend analyst was chosen
+          // using the same value that drove the allocation, rather than
+          // re-deriving alignment from trend+direction client-side. Null when
+          // the fallback (non-analyst-first) path was used -- no AnalystScore
+          // exists to grade alignment on in that case.
+          regime_tags: item.analystScore ? { direction_alignment: (item.analystScore as AnalystScore).directionAlignment } : null,
         }, { onConflict: 'recommendation_version_id' }).select('recommendation_version_id').single()
 
         if (rvErr || !rvRow) { console.error(`  ${market.symbol} rv error: ${rvErr?.message}`); continue }

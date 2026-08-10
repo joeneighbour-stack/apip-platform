@@ -54,7 +54,7 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
         market:market_id ( symbol, market_id, asset_class, display_precision )
       ),
       recommendation_version:active_recommendation_version_id (
-        recommendation_validity_status, volatility_warning, requires_refresh
+        recommendation_validity_status, volatility_warning, requires_refresh, regime_tags
       )
     `)
     .eq('analyst_id', analystId)
@@ -470,6 +470,12 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
         )
       : { tier: 'NONE', avgR: 0, winRate: 0, tradeCount: 0, profileQuality: 'LOW', label: '' }
 
+    // Set by the engine's scoreAnalystForMarket() at generation time (see
+    // runEngineSession.ts's recommendation_versions upsert) -- null when the
+    // fallback allocation path was used, not recomputed here.
+    const directionAlignment: WorkspaceRow['directionAlignment'] =
+      (rv?.regime_tags as { direction_alignment?: string } | null)?.direction_alignment as WorkspaceRow['directionAlignment'] ?? null
+
     return {
       recommendationId: rec.recommendation_id,
       opportunityId: rec.opportunity_id ?? null,
@@ -513,6 +519,7 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
         ? historicalEdge(marketId, direction, opp?.preferred_entry_zone ?? null, trendState)
         : { tier: 'none', avgR: null, winRate: null, trades: 0, quality: null, regimeLabel: null },
       evidenceTier,
+      directionAlignment,
       personalisation: marketId ? personalisationMessage(marketId, direction, trendState) : null,
       coachingNote: rec.coaching_note || null,
       shownAt: rec.shown_at,

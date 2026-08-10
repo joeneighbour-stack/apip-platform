@@ -14,7 +14,9 @@ interface Props {
 // conflicting evidence honestly rather than apologising for it.
 export function RecommendationSynthesis({ row }: Props) {
   const conditionsRating = todaysConditionsRating(row.direction, row.currentZone, row.preferredZone, row.regime?.trendState ?? null, row.regime?.adx14 ?? null)
-  const tierClause = evidenceTierClause(row.evidenceTier, row.direction, row.assetClass, row.symbol)
+  const tierClause = evidenceTierClause(
+    row.evidenceTier, row.direction, row.assetClass, row.symbol, row.directionAlignment, row.regime?.trendState ?? null,
+  )
   const synthesis = recommendationSynthesis(
     row.evidenceTier, tierClause, conditionsRating, row.regime?.trendState ?? null, row.regime?.adx14 ?? null,
   )
