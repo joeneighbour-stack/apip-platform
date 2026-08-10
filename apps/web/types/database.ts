@@ -284,6 +284,45 @@ export type Database = {
           },
         ]
       }
+      analyst_opportunity_feedback: {
+        Row: {
+          analyst_id: string
+          created_at: string
+          feedback: string
+          feedback_id: string
+          opportunity_id: string
+        }
+        Insert: {
+          analyst_id: string
+          created_at?: string
+          feedback: string
+          feedback_id?: string
+          opportunity_id: string
+        }
+        Update: {
+          analyst_id?: string
+          created_at?: string
+          feedback?: string
+          feedback_id?: string
+          opportunity_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "analyst_opportunity_feedback_analyst_id_fkey"
+            columns: ["analyst_id"]
+            isOneToOne: false
+            referencedRelation: "analysts"
+            referencedColumns: ["analyst_id"]
+          },
+          {
+            foreignKeyName: "analyst_opportunity_feedback_opportunity_id_fkey"
+            columns: ["opportunity_id"]
+            isOneToOne: false
+            referencedRelation: "opportunities"
+            referencedColumns: ["opportunity_id"]
+          },
+        ]
+      }
       analyst_profiles: {
         Row: {
           analyst_id: string
