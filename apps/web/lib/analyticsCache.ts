@@ -76,39 +76,69 @@ async function computeDefaultAnalyticsView() {
   }))
   const pubs: MetricsPublication[] = rawPubs
 
+  // Dedup: identical logic to calculateKpis.ts (lines ~154-184) -- MANUAL_BACKFILL is the
+  // authoritative, complete history for every date before the live feed took over, so any
+  // ACUITY_PERFORMANCE_API row before LIVE_API_START is either a duplicate of a backfill
+  // trade or an incomplete/incorrect webhook capture and is dropped outright rather than
+  // merged (confirmed there: Ian Coleman's July 2026 summed both sources to +15.95R against
+  // backfill's real +7.84R for that month). From LIVE_API_START onwards the live feed is
+  // primary: a triggered API row wins, and MANUAL_BACKFILL is kept only to fill days the API
+  // has no triggered trade for that analyst. Key is analyst_id::date only (no market_id) --
+  // matches calculateKpis.ts exactly, not a re-derivation.
+  const LIVE_API_START = '2026-08-01'
+  const dedupedTrades: MetricsTrade[] = []
+  const apiKeySet = new Set(
+    trades
+      .filter(t => t.source_system === 'ACUITY_PERFORMANCE_API' && t.triggered && t.result_r !== null && t.published_at.slice(0, 10) >= LIVE_API_START)
+      .map(t => `${t.analyst_id}::${t.published_at.slice(0, 10)}`)
+  )
+  for (const t of trades) {
+    const tradeDate = t.published_at.slice(0, 10)
+    if (tradeDate < LIVE_API_START) {
+      if (t.source_system === 'ACUITY_PERFORMANCE_API') continue
+    } else {
+      if (t.source_system === 'MANUAL_BACKFILL') {
+        const key = `${t.analyst_id}::${tradeDate}`
+        if (apiKeySet.has(key)) continue
+      }
+    }
+    dedupedTrades.push(t)
+  }
+  console.log(`Deduped ${trades.length - dedupedTrades.length} trades (MANUAL_BACKFILL authoritative before ${LIVE_API_START})`)
+
   const today = new Date().toISOString().slice(0, 10)
   const filters: AnalyticsFilterState = DEFAULT_FILTERS // product/analyst/market/direction/session/trigger all unfiltered
   const range = { start: SINCE_INCEPTION_FLOOR, end: today }
 
-  const summary = computeSummary(trades, pubs)
-  const cumulative = cumulativeSeries(trades)
-  const drawdown = drawdownSeries(trades)
-  const rolling = rollingWindows(trades, new Date())
-  const monthly = monthlyMatrix(trades)
-  const tradeStats = computeTradeStatistics(trades, pubs)
-  const distribution = resultDistribution(trades)
+  const summary = computeSummary(dedupedTrades, pubs)
+  const cumulative = cumulativeSeries(dedupedTrades)
+  const drawdown = drawdownSeries(dedupedTrades)
+  const rolling = rollingWindows(dedupedTrades, new Date())
+  const monthly = monthlyMatrix(dedupedTrades)
+  const tradeStats = computeTradeStatistics(dedupedTrades, pubs)
+  const distribution = resultDistribution(dedupedTrades)
 
-  const byAnalyst = attributionBy(trades, t => ({ key: t.analyst_id, label: analystNameById.get(t.analyst_id) ?? 'Unknown' }))
-  const byAssetClass = attributionBy(trades, t => ({ key: t.asset_class, label: t.asset_class }))
-  const byMarket = attributionBy(trades, t => ({ key: t.market_id, label: t.symbol }))
+  const byAnalyst = attributionBy(dedupedTrades, t => ({ key: t.analyst_id, label: analystNameById.get(t.analyst_id) ?? 'Unknown' }))
+  const byAssetClass = attributionBy(dedupedTrades, t => ({ key: t.asset_class, label: t.asset_class }))
+  const byMarket = attributionBy(dedupedTrades, t => ({ key: t.market_id, label: t.symbol }))
   const bestMarkets = rankAttribution(byMarket, MIN_TRADES_FOR_MARKET_RANKING, 'best')
   const worstMarkets = rankAttribution(byMarket, MIN_TRADES_FOR_MARKET_RANKING, 'worst')
 
   const qualifyingMarketIds = new Set(byMarket.filter(r => r.trades >= MIN_TRADES_FOR_MARKET_RANKING).map(r => r.key))
-  const { best } = bestWorstTrades(trades.filter(t => qualifyingMarketIds.has(t.market_id)), 10)
+  const { best } = bestWorstTrades(dedupedTrades.filter(t => qualifyingMarketIds.has(t.market_id)), 10)
   const bestTrades = best.map(t => ({
     date: t.published_at.slice(0, 10), symbol: t.symbol,
     analystName: analystNameById.get(t.analyst_id) ?? 'Unknown', direction: t.direction, resultR: t.result_r ?? 0,
   }))
 
   const universe = describeUniverse(filters, range, markets, analysts)
-  const dataThroughDate = trades.length === 0 ? today
-    : trades.reduce((max, t) => t.published_at > max ? t.published_at : max, trades[0]!.published_at).slice(0, 10)
+  const dataThroughDate = dedupedTrades.length === 0 ? today
+    : dedupedTrades.reduce((max, t) => t.published_at > max ? t.published_at : max, dedupedTrades[0]!.published_at).slice(0, 10)
 
   return {
     summary, cumulative, drawdown, rolling, monthly, tradeStats, distribution,
     byAnalyst, byAssetClass, byMarket, bestMarkets, worstMarkets, bestTrades,
-    universe, dataThroughDate, tradeCount: trades.filter(t => t.triggered && t.result_r !== null).length,
+    universe, dataThroughDate, tradeCount: dedupedTrades.filter(t => t.triggered && t.result_r !== null).length,
     computedAt: new Date().toISOString(),
   }
 }
