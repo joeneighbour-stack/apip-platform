@@ -81,8 +81,8 @@ export function EvidencePillars({ row }: Props) {
           <p className="text-xs text-muted-foreground">No meaningful history available for this setup.</p>
         ) : (
           <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2">
-            <div className="flex items-center gap-1.5">
-              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${tierBadgeClass(tier.tier)}`}>
+            <div className="flex items-center gap-2">
+              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border flex-shrink-0 ${tierBadgeClass(tier.tier)}`}>
                 {tier.tier}
               </span>
               <span className="text-xs font-medium text-foreground">{tier.label}</span>

@@ -1,4 +1,4 @@
-import { formatSymbolForDisplay, recommendationTypeLabel } from '@/lib/workspaceUtils'
+import { formatSymbolForDisplay, recommendationTypeLabel, deriveAlignment } from '@/lib/workspaceUtils'
 import type { WorkspaceRow } from './types'
 
 interface Props {
@@ -17,6 +17,10 @@ export function PrimaryRecommendation({ row }: Props) {
   const precision = row.displayPrecision ?? 4
   const symbolDisplay = formatSymbolForDisplay(row.symbol, row.assetClass)
   const typeLabel = recommendationTypeLabel(row.direction)
+  // Falls back to a locally-derived alignment when regime_tags.directionAlignment is null
+  // (recommendations generated before that field started being written) -- see
+  // deriveAlignment()'s comment for why this is scoped to just the badge below.
+  const alignment = deriveAlignment(row.directionAlignment, row.direction, row.regime?.trendState ?? null)
 
   return (
     <div>
@@ -30,7 +34,7 @@ export function PrimaryRecommendation({ row }: Props) {
           </span>
         )}
         {typeLabel && <span className="text-sm font-medium text-foreground">{typeLabel}</span>}
-        {row.directionAlignment === 'COUNTER_TREND' && (
+        {alignment === 'COUNTER_TREND' && (
           <span className="text-[9px] font-medium px-1 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200 whitespace-nowrap">
             ↙ Counter-trend
           </span>

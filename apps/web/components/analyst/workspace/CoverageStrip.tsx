@@ -3,7 +3,7 @@ import { Fragment, useEffect, useState } from 'react'
 import { MarketDetailCard } from './MarketDetailCard'
 import {
   coverageZoneLabel,
-  regimeTrendLabel, confidenceBadgeLabel, estimateSessionEnd, countdownLabel,
+  regimeTrendLabel, confidenceBadgeLabel, estimateSessionEnd, countdownLabel, deriveAlignment,
 } from '@/lib/workspaceUtils'
 import type { WorkspaceRow } from './types'
 
@@ -107,7 +107,7 @@ export function CoverageStrip({ rows, recommendationsGeneratedToday = 0 }: Props
                       {row.regime ? (
                         <span className="inline-flex items-center gap-1.5">
                           <span>{regimeTrendLabel(row.regime.trendState, row.regime.adx14, true)}</span>
-                          {row.directionAlignment === 'COUNTER_TREND' && (
+                          {deriveAlignment(row.directionAlignment, row.direction, row.regime.trendState) === 'COUNTER_TREND' && (
                             <span className="text-[9px] font-medium px-1 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200 whitespace-nowrap">
                               ↙ Counter
                             </span>

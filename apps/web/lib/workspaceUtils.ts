@@ -492,9 +492,15 @@ export function formatSymbolForDisplay(symbol: string, assetClass: string | null
  * breakout-style setup, so BUY BREAKOUT/SELL BREAKDOWN are deliberately not
  * offered here (would be unreachable, not "eventually possible").
  */
+// Sentence case ("Buy dips"), not the earlier all-caps "BUY DIPS" -- the header
+// already shows an all-caps coloured pill for the bare direction (BUY/SELL) right
+// before this, and two all-caps direction words back to back read as one
+// concatenated run without very deliberate spacing. Sentence case keeps this
+// visually distinct from the pill even though the word itself still appears once
+// more, as plain descriptive text rather than a second badge.
 export function recommendationTypeLabel(direction: 'BUY' | 'SELL' | null): string | null {
-  if (direction === 'BUY') return 'BUY DIPS'
-  if (direction === 'SELL') return 'SELL RALLIES'
+  if (direction === 'BUY') return 'Buy dips'
+  if (direction === 'SELL') return 'Sell rallies'
   return null
 }
 
@@ -726,6 +732,33 @@ export function evidenceTierClause(
     default:
       return 'This market is new territory for you — no historical pattern available'
   }
+}
+
+/**
+ * Fallback for the counter-trend BADGE only (PrimaryRecommendation.tsx) -- NOT used by
+ * evidenceTierClause() above, which deliberately only trusts the engine's own verdict for
+ * its prose ("your results represent the strongest available edge... this is a counter-
+ * trend setup"); a locally re-derived value there could misstate what actually drove the
+ * allocation, which is exactly the failure mode that function's own comment guards
+ * against. The badge is a much lighter-weight visual cue, and regime_tags.directionAlignment
+ * is null on every recommendation generated before that field started being written --
+ * new engine runs only touch new rows, so that backlog would otherwise show no badge
+ * indefinitely rather than catching up on its own. Derives a reasonable equivalent from
+ * trendState + direction so the badge still works for it in the meantime.
+ */
+export function deriveAlignment(
+  engineAlignment: DirectionAlignment | null | undefined,
+  direction: 'BUY' | 'SELL' | null,
+  trendState: string | null,
+): DirectionAlignment | null {
+  if (engineAlignment) return engineAlignment
+  if (!direction) return null
+  if (!trendState || trendState === 'RANGE' || trendState === 'MIXED') return 'NEUTRAL'
+  if (direction === 'BUY' && trendState === 'TRENDING_DOWN') return 'COUNTER_TREND'
+  if (direction === 'SELL' && trendState === 'TRENDING_UP') return 'COUNTER_TREND'
+  if (direction === 'BUY' && trendState === 'TRENDING_UP') return 'TREND_ALIGNED'
+  if (direction === 'SELL' && trendState === 'TRENDING_DOWN') return 'TREND_ALIGNED'
+  return null
 }
 
 export type TodaysConditionsRating = 'SUPPORTIVE' | 'MIXED' | 'CONFLICTING'
