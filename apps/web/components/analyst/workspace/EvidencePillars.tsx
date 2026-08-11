@@ -76,30 +76,28 @@ export function EvidencePillars({ row }: Props) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
       <div className="sm:pr-6 sm:border-r sm:border-border space-y-2">
-        <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
-          Your Historical Profile
-          {tier.tier !== 'NONE' && (
-            <>
-              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border normal-case tracking-normal ${tierBadgeClass(tier.tier)}`}>
-                {tier.tier}
-              </span>
-              <span className="normal-case tracking-normal text-foreground">{tier.label}</span>
-            </>
-          )}
-        </p>
+        <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Your Historical Profile</p>
         {tier.tier === 'NONE' ? (
           <p className="text-xs text-muted-foreground">No meaningful history available for this setup.</p>
         ) : (
-          <div className="space-y-1">
-            <MetricRow label="Win rate" value={formatPercent(tier.winRate)} valueClass={winRateColorClass(tier.winRate)} />
-            <MetricRow label="Expectancy" value={formatR(tier.avgR)} valueClass={expectancyColorClass(tier.avgR)} />
-            <MetricRow
-              label="Sample"
-              value={tier.tier === 'REGIME'
-                ? `${tier.tradeCount} trades across ${tier.marketCount} market${tier.marketCount === 1 ? '' : 's'}`
-                : `${tier.tradeCount} trades`}
-            />
-            <p className="text-[11px] text-muted-foreground pt-0.5">{evidenceTierSubtext(tier, row.symbol)}</p>
+          <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2">
+            <div className="flex items-center gap-1.5">
+              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${tierBadgeClass(tier.tier)}`}>
+                {tier.tier}
+              </span>
+              <span className="text-xs font-medium text-foreground">{tier.label}</span>
+            </div>
+            <p className="text-[11px] text-muted-foreground">{evidenceTierSubtext(tier, row.symbol)}</p>
+            <div className="space-y-1">
+              <MetricRow label="Win rate" value={formatPercent(tier.winRate)} valueClass={winRateColorClass(tier.winRate)} />
+              <MetricRow label="Expectancy" value={formatR(tier.avgR)} valueClass={expectancyColorClass(tier.avgR)} />
+              <MetricRow
+                label="Sample"
+                value={tier.tier === 'REGIME'
+                  ? `${tier.tradeCount} trades across ${tier.marketCount} market${tier.marketCount === 1 ? '' : 's'}`
+                  : `${tier.tradeCount} trades`}
+              />
+            </div>
           </div>
         )}
         {row.personalisation && (

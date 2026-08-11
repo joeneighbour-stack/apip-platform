@@ -10,7 +10,9 @@ interface Props {
 // entry, current price. No ATR references here -- that detail lives in Supporting
 // Evidence. This reads as an analytical view ("we believe this is worth
 // reviewing"), not an instruction -- the pill is coloured for quick scanning, not
-// styled as a BUY/SELL command button.
+// styled as a BUY/SELL command button. Direction pill, type label, and counter-trend
+// badge all sit inline with the symbol on one header line -- a previous pass put the
+// pill around the type-label text on its own line below the symbol instead.
 export function PrimaryRecommendation({ row }: Props) {
   const precision = row.displayPrecision ?? 4
   const symbolDisplay = formatSymbolForDisplay(row.symbol, row.assetClass)
@@ -18,21 +20,22 @@ export function PrimaryRecommendation({ row }: Props) {
 
   return (
     <div>
-      <p className="text-xl font-semibold text-foreground tracking-tight">{symbolDisplay}</p>
-      {typeLabel && (
-        <p className="mt-0.5 flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <p className="text-xl font-semibold text-foreground tracking-tight">{symbolDisplay}</p>
+        {row.direction && (
           <span className={`text-[11px] font-medium px-2 py-0.5 rounded border ${
             row.direction === 'SELL' ? 'bg-red-50 text-red-700 border-red-200' : 'bg-green-50 text-green-700 border-green-200'
           }`}>
-            {typeLabel}
+            {row.direction}
           </span>
-          {row.directionAlignment === 'COUNTER_TREND' && (
-            <span className="text-[9px] font-medium px-1 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200 whitespace-nowrap">
-              ↙ Counter
-            </span>
-          )}
-        </p>
-      )}
+        )}
+        {typeLabel && <span className="text-sm font-medium text-foreground">{typeLabel}</span>}
+        {row.directionAlignment === 'COUNTER_TREND' && (
+          <span className="text-[9px] font-medium px-1 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200 whitespace-nowrap">
+            ↙ Counter-trend
+          </span>
+        )}
+      </div>
       {row.isDoNotUse && (
         <p className="text-xs font-medium text-red-600 mt-1">Levels outdated — awaiting recalculation.</p>
       )}

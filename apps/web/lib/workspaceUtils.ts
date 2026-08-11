@@ -947,12 +947,28 @@ export function volatilityConditionLabel(volatilityState: string | null, atrPerc
 const BUY_WAITING_ZONES = new Set(['ZONE_3', 'ZONE_4', 'TOO_HIGH', 'ZONE_2'])
 const SELL_WAITING_ZONES = new Set(['ZONE_1', 'ZONE_2', 'TOO_DEEP', 'ZONE_3'])
 
+// priceLocationLabel() has no market's display_precision available to it (unlike
+// PrimaryRecommendation.tsx/SuggestedTradeStructure.tsx, which format off
+// row.displayPrecision directly) -- a hardcoded .toFixed(2) here rounded FX pairs
+// like 0.9803/0.9806 down to identical "0.98" text, reading as "pull back to
+// 0.98–0.98" (a zero-width, meaningless range). Derives precision from the value's
+// own magnitude instead: a real per-market precision would be more accurate, but
+// that needs a signature change (threading displayPrecision through every caller)
+// out of scope for this fix.
+function formatPrice(price: number): string {
+  const abs = Math.abs(price)
+  if (abs < 10) return price.toFixed(4)
+  if (abs < 100) return price.toFixed(3)
+  if (abs < 1000) return price.toFixed(2)
+  return price.toFixed(0)
+}
+
 export function priceLocationLabel(
   currentZone: string | null, preferredZone: string | null, direction: 'BUY' | 'SELL' | null,
   entryRangeLow: number | null, entryRangeHigh: number | null, currentPrice: number | null,
 ): ConditionLabel {
   const entryRangeText = entryRangeLow != null && entryRangeHigh != null
-    ? `${entryRangeLow.toFixed(2)}–${entryRangeHigh.toFixed(2)}`
+    ? `${formatPrice(entryRangeLow)}–${formatPrice(entryRangeHigh)}`
     : 'the suggested range'
 
   if (currentZone != null && currentZone === preferredZone) {
@@ -966,7 +982,7 @@ export function priceLocationLabel(
   const waitingForRally = direction === 'SELL' && currentZone != null && SELL_WAITING_ZONES.has(currentZone)
 
   if (waitingForPullback) {
-    const distance = currentPrice != null && entryRangeHigh != null ? ` Currently ${(currentPrice - entryRangeHigh).toFixed(2)} above entry.` : ''
+    const distance = currentPrice != null && entryRangeHigh != null ? ` Currently ${formatPrice(currentPrice - entryRangeHigh)} above entry.` : ''
     return {
       headline: 'Above entry — waiting for pullback',
       implication: `Price needs to pull back to ${entryRangeText} to trigger.${distance}`,
@@ -974,7 +990,7 @@ export function priceLocationLabel(
   }
 
   if (waitingForRally) {
-    const distance = currentPrice != null && entryRangeLow != null ? ` Currently ${(entryRangeLow - currentPrice).toFixed(2)} below entry.` : ''
+    const distance = currentPrice != null && entryRangeLow != null ? ` Currently ${formatPrice(entryRangeLow - currentPrice)} below entry.` : ''
     return {
       headline: 'Below entry — waiting for rally',
       implication: `Price needs to rally to ${entryRangeText} to trigger.${distance}`,
