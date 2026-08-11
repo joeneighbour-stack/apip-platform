@@ -472,9 +472,15 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
 
     // Set by the engine's scoreAnalystForMarket() at generation time (see
     // runEngineSession.ts's recommendation_versions upsert) -- null when the
-    // fallback allocation path was used, not recomputed here.
+    // fallback allocation path was used, not recomputed here. Key is
+    // camelCase (directionAlignment) to match runEngineSession.ts's write,
+    // which was itself just changed from a mismatched direction_alignment
+    // (an unrelated audit query expecting the camelCase key was reading null
+    // off it -- this reader here happened to already match the old key, so
+    // updating both together keeps them in sync rather than trading one
+    // consumer's correctness for another's).
     const directionAlignment: WorkspaceRow['directionAlignment'] =
-      (rv?.regime_tags as { direction_alignment?: string } | null)?.direction_alignment as WorkspaceRow['directionAlignment'] ?? null
+      (rv?.regime_tags as { directionAlignment?: string } | null)?.directionAlignment as WorkspaceRow['directionAlignment'] ?? null
 
     return {
       recommendationId: rec.recommendation_id,

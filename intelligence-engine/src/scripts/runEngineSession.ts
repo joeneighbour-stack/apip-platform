@@ -32,6 +32,13 @@ const MINIMUM_RR = 2.0
 const MIN_TRIGGER_SAMPLE = 20
 const FALLBACK_TRIGGER_PROBABILITY = 0.5
 const STALE_ATR_THRESHOLD = 0.25
+// Analyst-first (Step 5) had no workload limit at all: the highest-scoring analyst per
+// market wins, market by market, so a strong all-round profile (Ian, Mona) could sweep
+// every market in a session while others got zero -- confirmed live, all 28 EUROPEAN
+// markets going to just two analysts. MIN is a soft target the progressive penalty below
+// works toward, not enforced directly; MAX is the hard stop.
+const MAX_MARKETS_PER_ANALYST = 11
+const MIN_MARKETS_PER_ANALYST = 8
 const FORCE_RECALC_ATR_THRESHOLD = 0.5
 
 const SESSION_WINDOWS: Record<string, { windowStartHour: number; windowEndHour: number }> = {
@@ -92,6 +99,38 @@ async function completeStep(
     status, output_summary: outputSummary,
     error_detail: errorDetail ?? null,
   }).eq('engine_run_step_id', stepId)
+}
+
+// Workload-aware ranking for the analyst-first scoring loop (Step 3/5) -- targetPerAnalyst
+// is an even split of this session's markets across its analysts, floored at
+// MIN_MARKETS_PER_ANALYST so a session with many analysts relative to its market count
+// doesn't start penalising someone before they've even reached the soft target (e.g. 28
+// EUROPEAN markets / 5 analysts is an even split of 6, below the 8 floor -- without the
+// floor, penalties would kick in two markets earlier than intended). hardCap tightens
+// further to whichever is smaller of MAX_MARKETS_PER_ANALYST or target+2, so a session with
+// few analysts/many markets still can't let one analyst take an unbounded share. Below
+// target: score is untouched. Between target and hardCap: a 15%-per-market-over-target
+// penalty makes an already-busy analyst progressively less attractive to the ranking without
+// excluding them outright, so a market with no other decent match still goes to someone. At
+// or above hardCap: excluded entirely (-1 sentinel), full stop.
+function workloadAdjustedScore(
+  baseScore: number,
+  currentWorkload: number,
+  totalMarkets: number,
+  totalAnalysts: number
+): number {
+  const targetPerAnalyst = Math.max(MIN_MARKETS_PER_ANALYST, Math.ceil(totalMarkets / totalAnalysts))
+  const hardCap = Math.min(MAX_MARKETS_PER_ANALYST, targetPerAnalyst + 2)
+
+  if (currentWorkload >= hardCap) return -1
+
+  if (currentWorkload >= targetPerAnalyst) {
+    const overTarget = currentWorkload - targetPerAnalyst
+    const penalty = 0.15 * overTarget
+    return baseScore * (1 - penalty)
+  }
+
+  return baseScore
 }
 
 async function main() {
@@ -412,6 +451,15 @@ async function main() {
 
     const generatedItems: any[] = []
 
+    // Tracks analyst-first assignments across this whole markets loop (not per-market) so
+    // workloadAdjustedScore() can see how loaded an analyst already is before handing them
+    // another market. Fallback (non-analyst-first) assignments in Step 4 go through the
+    // separate, already workload-balanced allocateCoverage() and aren't counted here.
+    const analystWorkload = new Map<string, number>()
+    for (const a of eligibleAnalysts) {
+      analystWorkload.set(a.analyst, 0)
+    }
+
     for (const symbol of sessionMarkets) {
       const market = marketBySymbol.get(symbol)
       if (!market) { console.log(`  ${symbol}: not in markets table`); continue }
@@ -478,16 +526,31 @@ async function main() {
       let bestScore: AnalystScore | null = null
       let scoringFailed = false
       try {
-        let bestValue = -Infinity
-        for (const a of eligibleAnalysts) {
-          const score = scoreAnalystForMarket(
+        // For each market, score all analysts. Direction-aware: a counter-trend pick
+        // (alignmentMultiplier 0.7) needs a meaningfully stronger edge than a trend-aligned
+        // one (1.0) to win. profileTier==='NONE' is excluded before the workload adjustment
+        // even runs -- an analyst with no real match for this market shouldn't win just
+        // because everyone else happens to be near their workload cap.
+        const scored = eligibleAnalysts.map(a => {
+          const raw = scoreAnalystForMarket(
             a.analyst, market.market_id, market.asset_class, trendState, volatilityState, marketCurrentZone,
             profilesByAnalyst.get(a.analyst) ?? [],
           )
-          // Direction-aware: a counter-trend pick (alignmentMultiplier 0.7) needs
-          // a meaningfully stronger edge than a trend-aligned one (1.0) to win.
-          const value = score.confidence * score.avgR * score.alignmentMultiplier
-          if (score.profileTier !== 'NONE' && value > bestValue) { bestValue = value; bestScore = score }
+          const workload = analystWorkload.get(a.analyst) ?? 0
+          const baseValue = raw.confidence * raw.avgR * raw.alignmentMultiplier
+          const adjustedValue = raw.profileTier === 'NONE'
+            ? -1
+            : workloadAdjustedScore(baseValue, workload, sessionMarkets.length, eligibleAnalysts.length)
+          return { score: raw, adjustedValue }
+        })
+
+        // Filter out capped (or NONE-tier) analysts and pick the highest adjusted score.
+        const eligible = scored.filter(s => s.adjustedValue >= 0)
+        const selected = eligible.sort((a, b) => b.adjustedValue - a.adjustedValue)[0]
+
+        if (selected) {
+          bestScore = selected.score
+          analystWorkload.set(selected.score.analystId, (analystWorkload.get(selected.score.analystId) ?? 0) + 1)
         }
       } catch (err) {
         console.log(`    ${symbol}: analyst scoring failed (${(err as Error).message}) -- falling back to team-wide behaviour`)
@@ -503,9 +566,9 @@ async function main() {
         const name = analystNameById.get(bestScore.analystId) ?? bestScore.analystId
         console.log(`    ${symbol}: ${name} (${bestScore.profileTier} / ${bestScore.directionAlignment} / avgR=${bestScore.avgR.toFixed(3)}) dir=${preferredDirection ?? 'none'} confidence=${bestScore.confidence.toFixed(2)}`)
       } else {
-        // Fallback: no analyst has any profile match for this market (all
-        // NONE tier) or scoring threw -- team-wide direction cascade,
-        // exactly as before Step 5. Analyst assignment is deferred to the
+        // Fallback: no analyst has any profile match for this market (all NONE tier), every
+        // matched analyst is already at their workload hard cap, or scoring threw -- team-wide
+        // direction cascade, exactly as before Step 5. Analyst assignment is deferred to the
         // workload-balanced allocateCoverage() pass in Step 4.
         const regimeMatchedDirection = preferredDirectionByMarketId.get(market.market_id)
         if (regimeMatchedDirection) {
@@ -524,7 +587,7 @@ async function main() {
           preferredDirection = 'SELL'
           console.log(`    Fallback: Zone(${marketCurrentZone}) → direction: SELL`)
         }
-        console.log(`    Fallback: no analyst profile match (NONE tier) for ${symbol} -- assignment deferred to workload-balanced allocation`)
+        console.log(`    Fallback: no eligible analyst-first pick for ${symbol} (no profile match or all matched analysts at workload cap) -- assignment deferred to workload-balanced allocation`)
       }
 
       const regimeSnapshot: RegimeSnapshot | null = regime ? {
@@ -723,7 +786,13 @@ async function main() {
           // re-deriving alignment from trend+direction client-side. Null when
           // the fallback (non-analyst-first) path was used -- no AnalystScore
           // exists to grade alignment on in that case.
-          regime_tags: item.analystScore ? { direction_alignment: (item.analystScore as AnalystScore).directionAlignment } : null,
+          // Was writing direction_alignment (snake_case) while every reader queries
+          // regime_tags->>'directionAlignment' (camelCase) -- silently always null.
+          regime_tags: item.analystScore ? {
+            directionAlignment: (item.analystScore as AnalystScore).directionAlignment,
+            alignmentMultiplier: (item.analystScore as AnalystScore).alignmentMultiplier,
+            profileTier: (item.analystScore as AnalystScore).profileTier,
+          } : null,
         }, { onConflict: 'recommendation_version_id' }).select('recommendation_version_id').single()
 
         if (rvErr || !rvRow) { console.error(`  ${market.symbol} rv error: ${rvErr?.message}`); continue }
