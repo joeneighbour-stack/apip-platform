@@ -332,6 +332,24 @@ async function main() {
 
   if (delError) { console.error('Delete error:', delError.message); process.exit(1) }
 
+  // Also delete stale NULL analyst_id rows for the same window (e.g. old team-level
+  // aggregate rows this script no longer writes but that were never cleaned up) --
+  // .in('analyst_id', analystIds) above skips them entirely, since NULL never matches
+  // an IN list, so they accumulate and corrupt team-total queries that don't expect them.
+  // Excludes kpi_visibility='INTERNAL_ONLY' deliberately: that's calculateShadowKpis.ts's
+  // namespace (analyst_id IS NULL is how it marks a shadow-system row, see that script's
+  // own delete+insert), a completely separate batch job this script must not clobber --
+  // an unscoped NULL-analyst delete here would silently wipe the shadow benchmark every
+  // time this script runs, restored only whenever calculateShadowKpis.ts next happens to run.
+  const { error: delNullError } = await db
+    .from('executive_kpis')
+    .delete()
+    .is('analyst_id', null)
+    .neq('kpi_visibility', 'INTERNAL_ONLY')
+    .gte('period_start', windowStart)
+
+  if (delNullError) { console.error('Delete null-analyst error:', delNullError.message); process.exit(1) }
+
   const BATCH = 500
   let inserted = 0
   for (let i = 0; i < kpiRows.length; i += BATCH) {
