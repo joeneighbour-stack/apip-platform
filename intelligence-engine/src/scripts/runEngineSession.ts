@@ -32,7 +32,9 @@ const ATR_PERIOD = 14
 const ZONE_COUNT = 4
 const MINIMUM_RR = 2.0
 const MIN_TRIGGER_SAMPLE = 20
-const FALLBACK_TRIGGER_PROBABILITY = 0.5
+// Used when an analyst has no executive_kpis triggered_rate row at all (new analyst,
+// KPI batch hasn't run yet) -- not the old market-level actual_trades-derived figure.
+const FALLBACK_TRIGGER_PROBABILITY = 0.35
 const STALE_ATR_THRESHOLD = 0.25
 // Analyst-first (Step 5) had no workload limit at all: the highest-scoring analyst per
 // market wins, market by market, so a strong all-round profile (Ian, Mona) could sweep
@@ -299,6 +301,26 @@ async function main() {
 
     const eligibleAnalysts = activeAnalysts.filter(a => !unavailableIds.has(a.analyst))
 
+    // Each analyst's most recent triggered_rate KPI (executive_kpis), used as the trigger
+    // probability model's baseline (see triggerProbabilityService.ts) -- actual_trades.triggered
+    // itself is unusable for this: MANUAL_BACKFILL only ever contains trades that DID trigger,
+    // so a historical triggered/total calculation off that data is always ~100%, not a real rate.
+    const { data: triggerKpis } = await db
+      .from('executive_kpis')
+      .select('analyst_id, kpi_value, period_start')
+      .eq('kpi_name', 'triggered_rate')
+      .order('period_start', { ascending: false })
+
+    const analystTriggerRates = new Map<string, number>()
+    const seenTriggerKpiAnalyst = new Set<string>()
+    for (const row of (triggerKpis ?? [])) {
+      if (!row.analyst_id || seenTriggerKpiAnalyst.has(row.analyst_id)) continue
+      seenTriggerKpiAnalyst.add(row.analyst_id)
+      const rate = (row.kpi_value as any)?.value ?? FALLBACK_TRIGGER_PROBABILITY
+      analystTriggerRates.set(row.analyst_id, rate)
+    }
+    console.log(`  Analyst trigger-rate KPIs loaded: ${analystTriggerRates.size}`)
+
     const twoYearsAgo = new Date(Date.now() - 2 * 365 * 24 * 60 * 60 * 1000).toISOString()
     const PAGE_SIZE = 1000
     const allTradeRows: any[] = []
@@ -438,18 +460,6 @@ async function main() {
       }
     }
     console.log(`  Regime-preferred directions set: ${preferredDirectionByMarketId.size} markets`)
-
-    // Build market-level trigger rate lookup from analyst_profiles
-    const marketTriggerRateByMarketId = new Map<string, number>()
-    for (const p of (profileRows ?? [])) {
-      if (!p.profile_data?.trigger_rate) continue
-      const existing = marketTriggerRateByMarketId.get(p.market_id)
-      if (existing === undefined) {
-        marketTriggerRateByMarketId.set(p.market_id, p.profile_data.trigger_rate)
-      } else {
-        marketTriggerRateByMarketId.set(p.market_id, (existing + p.profile_data.trigger_rate) / 2)
-      }
-    }
 
     if (unavailableIds.size > 0) console.log(`  Absent today: ${unavailableIds.size} analyst(s)`)
     console.log(`  Historical trades loaded: ${allTradeRows.length} (${page} pages)`)
@@ -638,10 +648,6 @@ async function main() {
         ? (tradesByAnalystSymbol.get(`${assignedAnalystId}::${symbol}`) ?? [])
         : (tradesBySymbol.get(symbol) ?? [])
 
-      // Profile-based trigger rate -- used as both fallback and cap
-      // Backfill has triggered=true for all trades → 100% without cap
-      const profileTriggerRate = marketTriggerRateByMarketId.get(market.market_id) ?? FALLBACK_TRIGGER_PROBABILITY
-
       try {
         const result = buildRecommendation({
           recommendationVersionId: rvId,
@@ -655,7 +661,7 @@ async function main() {
           activeAnalysts: eligibleAnalysts,
           minimumRr: MINIMUM_RR,
           minTriggerSample: MIN_TRIGGER_SAMPLE,
-          fallbackTriggerProbability: profileTriggerRate,
+          fallbackTriggerProbability: FALLBACK_TRIGGER_PROBABILITY,
           staleAtrThreshold: STALE_ATR_THRESHOLD,
           forceRecalcAtrThreshold: FORCE_RECALC_ATR_THRESHOLD,
           parameterSnapshot,
@@ -663,6 +669,7 @@ async function main() {
           marketDisplayPrecision: market.display_precision ?? null,
           preferredDirection,
           atrProfileMap,
+          analystTriggerRateMap: analystTriggerRates,
         })
 
         const { opportunity: opp, recommendationVersion: rv, hiddenExecutionLevels: hidden, diagnostics } = result
@@ -672,13 +679,9 @@ async function main() {
           continue
         }
 
-        // Cap trigger probability at profile rate
-        // Backfill data has triggered=true for all trades → service returns 100%
-        // Profile rate (20-40%) is a more accurate approximation until shadow
-        // outcomes accumulate enough data for a real probability
-        const cappedTriggerProbability = Math.min(opp.triggerProbability, profileTriggerRate)
+        const triggerProbability = opp.triggerProbability
 
-        console.log(`  ${symbol}: zone=${marketStateWithZone.currentZone}, dir=${opp.direction}, action=${opp.analystAction}, entry=${rv.entryRangeLow?.toFixed(4)}-${rv.entryRangeHigh?.toFixed(4)}, R=${opp.expectedR?.toFixed(2)}, trigger=${Math.round(cappedTriggerProbability * 100)}%, template=${diagnostics.templateSource}(${diagnostics.templateTrades} trades)`)
+        console.log(`  ${symbol}: zone=${marketStateWithZone.currentZone}, dir=${opp.direction}, action=${opp.analystAction}, entry=${rv.entryRangeLow?.toFixed(4)}-${rv.entryRangeHigh?.toFixed(4)}, R=${opp.expectedR?.toFixed(2)}, trigger=${Math.round(triggerProbability * 100)}%, template=${diagnostics.templateSource}(${diagnostics.templateTrades} trades)`)
 
         const ENTRY_DISTANCE_THRESHOLD_ATR = 1.5
         let validityOverride: string | null = null
@@ -694,7 +697,7 @@ async function main() {
 
         generatedItems.push({
           market, marketState: marketStateWithZone, opp, rv, hidden, diagnostics,
-          rvId, validityOverride, cappedTriggerProbability,
+          rvId, validityOverride, triggerProbability,
           preAssignedAnalystId: assignedAnalystId, // null => deferred to fallback allocation (Step 4)
           analystScore: bestScore, // null when the fallback path was used
         })
@@ -773,7 +776,7 @@ async function main() {
       }
 
       for (const item of generatedItems) {
-        const { market, marketState, opp, rv, hidden, diagnostics, validityOverride, cappedTriggerProbability } = item
+        const { market, marketState, opp, rv, hidden, diagnostics, validityOverride, triggerProbability } = item
         const allocation = allocationByRvId.get(item.rvId)
         if (!allocation) {
           console.log(`  ⚠ ${market.symbol}: no analyst could be assigned -- skipping recommendation`)
@@ -790,7 +793,7 @@ async function main() {
           preferred_entry_zone: opp.preferredEntryZone,
           direction: item.opp.direction,
           expected_r: opp.expectedR,
-          trigger_probability: cappedTriggerProbability,
+          trigger_probability: triggerProbability,
           opportunity_lifecycle_status: 'ASSIGNED',
           analyst_action: opp.analystAction,
           assigned_analyst_id: allocation.assignedAnalystId,
@@ -881,7 +884,7 @@ async function main() {
             entryRangeHigh: rv.entryRangeHigh ?? 0,
             riskRange: rv.riskRange,
             targetRange: rv.targetRange,
-            triggerProbability: cappedTriggerProbability,
+            triggerProbability,
             expectedR: opp.expectedR,
             eventWarning: '',
             recommendationValidityStatus: validityOverride ?? rv.recommendationValidityStatus,

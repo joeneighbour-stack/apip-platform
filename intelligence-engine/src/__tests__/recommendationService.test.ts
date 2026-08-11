@@ -144,43 +144,44 @@ describe('buildRecommendation', () => {
     expect(recommendationVersion.regimeTags).toEqual(['TRENDING_DOWN', 'LOW_VOL']);
   });
 
-  describe('confidence-scaled trigger probability (engine review amendment)', () => {
-    // baseInput's 15 triggered BUY/ZONE_2 trades give a raw (pre-scaling) triggerProbability
-    // of exactly 1.0 (15/15 triggered, >= minTriggerSample) -- a clean baseline to scale from.
-    it('applies no discount for HIGH regime confidence', () => {
+  describe('analyst KPI trigger rate x zone distance', () => {
+    // baseInput's trades resolve assignedAnalystId to 'TIV' and preferredEntryZone to
+    // 'ZONE_2' (see the assignedAnalystId/analystAction tests above) -- the default
+    // marketState() also has currentZone 'ZONE_2', so distance 0 (the 1.3x tier) applies
+    // unless a test overrides currentZone.
+    it('uses the analyst trigger-rate map entry for the assigned analyst, scaled by zone distance', () => {
       const { opportunity } = buildRecommendation(baseInput({
-        marketRegime: { trendState: 'TRENDING_UP', regimeConfidence: 'HIGH', regimeTags: [] },
+        analystTriggerRateMap: new Map([['TIV', 0.425]]),
       }));
-      expect(opportunity.triggerProbability).toBeCloseTo(1.0, 10);
+      expect(opportunity.triggerProbability).toBeCloseTo(0.425 * 1.3, 10);
     });
 
-    it('discounts by 0.85 for MEDIUM regime confidence', () => {
+    it('falls back to fallbackTriggerProbability when the assigned analyst has no map entry', () => {
+      const { opportunity } = buildRecommendation(baseInput({ analystTriggerRateMap: new Map() }));
+      expect(opportunity.triggerProbability).toBeCloseTo(0.5 * 1.3, 10);
+    });
+
+    it('falls back to fallbackTriggerProbability when no map is provided at all', () => {
+      const { opportunity } = buildRecommendation(baseInput());
+      expect(opportunity.triggerProbability).toBeCloseTo(0.5 * 1.3, 10);
+    });
+
+    it('scales down when currentZone is further from preferredEntryZone', () => {
       const { opportunity } = buildRecommendation(baseInput({
-        marketRegime: { trendState: 'TRENDING_UP', regimeConfidence: 'MEDIUM', regimeTags: [] },
+        marketState: marketState({ currentZone: 'ZONE_4' }),
+        analystTriggerRateMap: new Map([['TIV', 0.425]]),
       }));
-      expect(opportunity.triggerProbability).toBeCloseTo(0.85, 10);
+      // preferredEntryZone stays ZONE_2 (from template selection); ZONE_2 -> ZONE_4 is
+      // distance 2 on the ladder, the 0.7x tier.
+      expect(opportunity.preferredEntryZone).toBe('ZONE_2');
+      expect(opportunity.triggerProbability).toBeCloseTo(0.425 * 0.7, 10);
     });
 
-    it('discounts by 0.70 for LOW regime confidence', () => {
-      const { opportunity } = buildRecommendation(baseInput({
-        marketRegime: { trendState: 'RANGE', regimeConfidence: 'LOW', regimeTags: [] },
+    it('expectedR moves with the same triggerProbability the opportunity persists -- no separate raw/scaled split', () => {
+      const { opportunity, diagnostics } = buildRecommendation(baseInput({
+        analystTriggerRateMap: new Map([['TIV', 0.425]]),
       }));
-      expect(opportunity.triggerProbability).toBeCloseTo(0.70, 10);
-    });
-
-    it('defaults to a 0.85 discount when marketRegime is null (no regime data available)', () => {
-      const { opportunity } = buildRecommendation(baseInput({ marketRegime: null }));
-      expect(opportunity.triggerProbability).toBeCloseTo(0.85, 10);
-    });
-
-    it('never scales expectedR -- only the persisted opportunity.triggerProbability', () => {
-      const high = buildRecommendation(baseInput({
-        marketRegime: { trendState: 'TRENDING_UP', regimeConfidence: 'HIGH', regimeTags: [] },
-      }));
-      const low = buildRecommendation(baseInput({
-        marketRegime: { trendState: 'TRENDING_UP', regimeConfidence: 'LOW', regimeTags: [] },
-      }));
-      expect(high.opportunity.expectedR).toBeCloseTo(low.opportunity.expectedR, 10);
+      expect(diagnostics.rawTriggerProbability).toBeCloseTo(opportunity.triggerProbability, 10);
     });
   });
 });

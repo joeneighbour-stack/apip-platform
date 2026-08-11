@@ -1,60 +1,76 @@
 import { describe, it, expect } from 'vitest';
 import { estimateTriggerProbability } from '../services/triggerProbabilityService.js';
-import type { HistoricalTradeForProfiling } from '../services/templateService.js';
-
-function trade(overrides: Partial<HistoricalTradeForProfiling> = {}): HistoricalTradeForProfiling {
-  return { market: 'EURUSD', direction: 'BUY', entryZone: 'ZONE_2', resultR: 1, triggered: true, ...overrides };
-}
 
 describe('estimateTriggerProbability', () => {
-  it('returns the fallback with triggerSample 0 when trades is empty', () => {
+  it('returns the base rate with zero sample and analyst_kpi_fallback when zones are missing', () => {
     const result = estimateTriggerProbability({
-      market: 'EURUSD', direction: 'BUY', zone: 'ZONE_2', trades: [],
-      minTriggerSample: 20, fallbackProbability: 0.5,
+      analystBaseRate: 0.425, currentZone: null, preferredZone: 'ZONE_2',
+      direction: 'SELL', fallbackRate: 0.35,
     });
-    expect(result).toEqual({ triggerProbability: 0.5, triggerSample: 0, triggerSource: 'fallback' });
+    expect(result).toEqual({ triggerProbability: 0.425, triggerSample: 0, triggerSource: 'analyst_kpi_fallback' });
   });
 
-  it('uses exact_history when the exact (market, direction, zone) sample meets the floor', () => {
-    const trades = [
-      ...Array.from({ length: 15 }, () => trade({ triggered: true })),
-      ...Array.from({ length: 5 }, () => trade({ triggered: false })),
-    ]; // 20 total, exactly at the floor
+  it('falls back to fallbackRate when analystBaseRate is not positive', () => {
     const result = estimateTriggerProbability({
-      market: 'EURUSD', direction: 'BUY', zone: 'ZONE_2', trades,
-      minTriggerSample: 20, fallbackProbability: 0.5,
+      analystBaseRate: 0, currentZone: null, preferredZone: null,
+      direction: 'BUY', fallbackRate: 0.35,
     });
-    expect(result.triggerSource).toBe('exact_history');
-    expect(result.triggerSample).toBe(20);
-    expect(result.triggerProbability).toBeCloseTo(0.75, 10);
+    expect(result.triggerProbability).toBe(0.35);
+    expect(result.triggerSource).toBe('analyst_kpi_fallback');
   });
 
-  it('broadens to market_zone_history when exact sample is below the floor but market+zone (any direction) meets it', () => {
-    const trades = [
-      ...Array.from({ length: 5 }, () => trade({ direction: 'BUY', triggered: true })),   // exact tier: only 5, below floor
-      ...Array.from({ length: 20 }, () => trade({ direction: 'SELL', triggered: true })), // same market+zone, different direction
-    ];
+  it('applies the 1.3x multiplier at distance 0 (at entry zone)', () => {
     const result = estimateTriggerProbability({
-      market: 'EURUSD', direction: 'BUY', zone: 'ZONE_2', trades,
-      minTriggerSample: 20, fallbackProbability: 0.5,
+      analystBaseRate: 0.425, currentZone: 'ZONE_2', preferredZone: 'ZONE_2',
+      direction: 'SELL', fallbackRate: 0.35,
     });
-    expect(result.triggerSource).toBe('market_zone_history');
-    expect(result.triggerSample).toBe(25); // 5 + 20, all market+zone regardless of direction
+    expect(result.triggerSource).toBe('analyst_kpi_zone_adjusted');
+    expect(result.triggerProbability).toBeCloseTo(0.425 * 1.3, 10);
   });
 
-  it('falls back to the fixed probability when neither tier meets the floor, but reports the EXACT-tier count, not 0 or the market_zone count', () => {
-    const trades = [
-      ...Array.from({ length: 3 }, () => trade({ direction: 'BUY' })),  // exact tier: 3
-      ...Array.from({ length: 8 }, () => trade({ direction: 'SELL' })), // market_zone tier: 3+8=11, still below 20
-    ];
+  it('applies the 1.0x multiplier at distance 1 (one zone away)', () => {
     const result = estimateTriggerProbability({
-      market: 'EURUSD', direction: 'BUY', zone: 'ZONE_2', trades,
-      minTriggerSample: 20, fallbackProbability: 0.5,
+      analystBaseRate: 0.313, currentZone: 'ZONE_3', preferredZone: 'ZONE_4',
+      direction: 'SELL', fallbackRate: 0.35,
     });
-    expect(result.triggerSource).toBe('fallback');
-    expect(result.triggerProbability).toBe(0.5);
-    // This is the subtle one: notebook reports len(exact) = 3 here, NOT 0
-    // and NOT 11 (the market_zone count) -- replicated exactly.
-    expect(result.triggerSample).toBe(3);
+    expect(result.triggerProbability).toBeCloseTo(0.313 * 1.0, 10);
+  });
+
+  it('applies the 0.7x multiplier at distance 2 (needs a meaningful move)', () => {
+    const result = estimateTriggerProbability({
+      analystBaseRate: 0.313, currentZone: 'ZONE_2', preferredZone: 'ZONE_4',
+      direction: 'SELL', fallbackRate: 0.35,
+    });
+    expect(result.triggerProbability).toBeCloseTo(0.313 * 0.7, 10);
+  });
+
+  it('applies the 0.4x multiplier at distance 3+ (extended)', () => {
+    const result = estimateTriggerProbability({
+      analystBaseRate: 0.319, currentZone: 'TOO_DEEP', preferredZone: 'ZONE_4',
+      direction: 'BUY', fallbackRate: 0.35,
+    });
+    expect(result.triggerProbability).toBeCloseTo(0.319 * 0.4, 10);
+  });
+
+  it('clamps the adjusted probability to the [0.02, 0.95] band', () => {
+    const high = estimateTriggerProbability({
+      analystBaseRate: 0.9, currentZone: 'ZONE_2', preferredZone: 'ZONE_2',
+      direction: 'BUY', fallbackRate: 0.35,
+    });
+    expect(high.triggerProbability).toBe(0.95);
+
+    const low = estimateTriggerProbability({
+      analystBaseRate: 0.01, currentZone: 'TOO_DEEP', preferredZone: 'ZONE_4',
+      direction: 'BUY', fallbackRate: 0.35,
+    });
+    expect(low.triggerProbability).toBe(0.02);
+  });
+
+  it('treats an unrecognised zone value as moderate distance (2)', () => {
+    const result = estimateTriggerProbability({
+      analystBaseRate: 0.5, currentZone: 'NOT_A_ZONE' as never, preferredZone: 'ZONE_2',
+      direction: 'BUY', fallbackRate: 0.35,
+    });
+    expect(result.triggerProbability).toBeCloseTo(0.5 * 0.7, 10);
   });
 });

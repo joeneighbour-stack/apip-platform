@@ -86,6 +86,12 @@ export interface BuildRecommendationInput {
   // the lookup either. Undefined/no match falls back to entryOptimizerService.ts's own
   // DEFAULT_PROFILES, same as today.
   atrProfileMap?: Map<string, AtrProfile>;
+  // Each analyst's most recent triggered_rate KPI (executive_kpis), preloaded once by
+  // the caller (runEngineSession.ts) -- same preload-and-pass pattern as atrProfileMap
+  // above, and for the same reason: which analyst this recommendation belongs to
+  // (profile.assignedAnalyst) isn't known until selectBestAnalyst() resolves it below.
+  // Missing/undefined falls back to fallbackTriggerProbability.
+  analystTriggerRateMap?: Map<string, number>;
 }
 export type OpportunityLifecycleStatus = 'DRAFT' | 'GENERATED' | 'ASSIGNED' | 'SHOWN' | 'ACTIVE' | 'CLOSED' | 'CANCELLED';
 /** Maps to the `opportunities` table. */
@@ -142,10 +148,10 @@ export interface RecommendationDiagnostics {
   profileQuality: 'HIGH' | 'MEDIUM' | 'LOW';
   eligibleAnalysts: string[];
   eventWarning: string;
-  // Trigger probability before the regime-confidence scale-down (see
-  // CONFIDENCE_MULTIPLIER below) -- the same raw figure expectedR's own
-  // calculation uses, distinct from opportunity.triggerProbability (the
-  // scaled, analyst-facing value).
+  // Same figure as opportunity.triggerProbability -- kept as its own
+  // diagnostics field since callers already persist it separately
+  // (runEngineSession.ts's regime_tags jsonb) alongside the rest of
+  // RecommendationDiagnostics.
   rawTriggerProbability: number;
   // True when an analyst-specific ATR profile (analyst_atr_profiles,
   // migrations/046) was found and used for this recommendation's stop/target
@@ -159,25 +165,12 @@ export interface BuildRecommendationOutput {
   hiddenExecutionLevels: HiddenExecutionLevels;
   diagnostics: RecommendationDiagnostics;
 }
-// Confidence-scaled trigger probability (engine review amendment): a LOW-confidence
-// regime read should produce a more conservative (lower) displayed trigger probability
-// than the same raw historical rate under a HIGH-confidence read. Only scales down --
-// never up -- and only applies to the analyst-facing opportunity.triggerProbability,
-// not to expectedR's calculation (which keeps using the raw, unscaled probability;
-// scaling that too was not requested and risks double-discounting the same signal).
-const MAX_TRIGGER_PROBABILITY = 1.0;
-const CONFIDENCE_MULTIPLIER: Record<string, number> = {
-  HIGH: 1.0,
-  MEDIUM: 0.85,
-  LOW: 0.70,
-};
-const DEFAULT_CONFIDENCE_MULTIPLIER = 0.85; // unknown/missing regime confidence
 export function buildRecommendation(input: BuildRecommendationInput): BuildRecommendationOutput {
   const {
     recommendationVersionId, generatedAt, market, session, marketState, marketRegime, eventRisks,
-    trades, activeAnalysts, minimumRr, minTriggerSample, fallbackTriggerProbability,
+    trades, activeAnalysts, minimumRr, fallbackTriggerProbability,
     staleAtrThreshold, forceRecalcAtrThreshold, parameterSnapshot, parameterSnapshotHash,
-    marketDisplayPrecision, preferredDirection, atrProfileMap,
+    marketDisplayPrecision, preferredDirection, atrProfileMap, analystTriggerRateMap,
   } = input;
   const templates: TemplateProfile[] = buildTemplateProfiles(trades);
   // Pass preferredDirection constraint -- derived from regime/zone in caller
@@ -195,18 +188,21 @@ export function buildRecommendation(input: BuildRecommendationInput): BuildRecom
     ? atrProfileMap?.get(atrProfileMapKey(profile.assignedAnalyst, direction, zone))
     : undefined;
   const entryStopTarget = buildEntryOptimizer({ marketState, direction, preferredZone: zone, minimumRr, atrProfile });
+  const analystBaseRate = profile.assignedAnalyst
+    ? analystTriggerRateMap?.get(profile.assignedAnalyst) ?? fallbackTriggerProbability
+    : fallbackTriggerProbability;
   const trigger = estimateTriggerProbability({
-    market, direction, zone, trades, minTriggerSample, fallbackProbability: fallbackTriggerProbability,
+    analystBaseRate,
+    currentZone: marketState.currentZone,
+    preferredZone: zone,
+    direction,
+    fallbackRate: fallbackTriggerProbability,
   });
   const expected = calculateExpectedR({
     template: { templateAvgR: template.templateAvgR, templateTrades: template.templateTrades },
     profile: { profileAvgR: profile.profileAvgR, profileTrades: profile.profileTrades },
     trigger: { triggerProbability: trigger.triggerProbability },
   });
-  const confidenceMultiplier = marketRegime?.regimeConfidence
-    ? CONFIDENCE_MULTIPLIER[marketRegime.regimeConfidence] ?? DEFAULT_CONFIDENCE_MULTIPLIER
-    : DEFAULT_CONFIDENCE_MULTIPLIER;
-  const adjustedTriggerProbability = Math.min(trigger.triggerProbability * confidenceMultiplier, MAX_TRIGGER_PROBABILITY);
   const topEventRisk = eventRisks.length > 0 ? [...eventRisks].sort((a, b) => b.riskScore - a.riskScore)[0]! : null;
   const eventRiskStatus = topEventRisk?.eventRiskStatus ?? 'NONE';
   const eventWarning = topEventRisk?.analystWarning ?? '';
@@ -239,7 +235,7 @@ export function buildRecommendation(input: BuildRecommendationInput): BuildRecom
   const opportunity: OpportunityOutput = {
     opportunityId, market, session, date: dateOnly, direction,
     currentZone: marketState.currentZone, preferredEntryZone: zone, analystAction,
-    expectedR: expected.expectedR, triggerProbability: adjustedTriggerProbability,
+    expectedR: expected.expectedR, triggerProbability: trigger.triggerProbability,
     assignedAnalystId: profile.assignedAnalyst, opportunityLifecycleStatus: 'GENERATED',
   };
   const recommendationVersion: RecommendationVersionOutput = {
