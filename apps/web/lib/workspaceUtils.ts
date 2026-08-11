@@ -316,34 +316,6 @@ function ordinal(n: number): string {
   }
 }
 
-/**
- * Plain-English volatility level from ATR percentile -- shown to the analyst
- * on its own, no percentile number attached (that goes in the tooltip via
- * volatilityTooltip() instead, for anyone who wants the detail).
- */
-export function volatilityLabel(atrPercentile: number | null): string {
-  if (atrPercentile == null) return '—'
-  if (atrPercentile <= 20) return 'Very Low'
-  if (atrPercentile <= 40) return 'Low'
-  if (atrPercentile <= 60) return 'Normal'
-  if (atrPercentile <= 80) return 'Elevated'
-  return 'Very High'
-}
-
-export function volatilityTooltip(atrPercentile: number | null): string | undefined {
-  if (atrPercentile == null) return undefined
-  return `ATR at ${ordinal(atrPercentile)} percentile of recent history`
-}
-
-/** Compares two consecutive market_regime_state.derived_from.atr_percentile
- *  readings (most recent first) to describe volatility expansion/contraction. */
-export function volatilityTrend(latestPct: number | null, priorPct: number | null): 'expanding' | 'contracting' | 'flat' | null {
-  if (latestPct == null || priorPct == null) return null
-  const delta = latestPct - priorPct
-  if (Math.abs(delta) < 3) return 'flat'
-  return delta > 0 ? 'expanding' : 'contracting'
-}
-
 /** Parses a formatGuidanceRange() output ("1.2290–1.2310") into [low, high] numbers. */
 export function parseGuidanceRange(range: string | null | undefined): [number, number] | null {
   if (!range) return null
@@ -430,17 +402,6 @@ function isTrendingRegime(trendState: string | null, adx14: number | null): bool
 
 function isRegimeAligned(direction: 'BUY' | 'SELL' | null, trendState: string | null): boolean {
   return (trendState === 'TRENDING_UP' && direction === 'BUY') || (trendState === 'TRENDING_DOWN' && direction === 'SELL')
-}
-
-/** "comparable conditions" / "zone-matched conditions" / "all conditions" -- names the
- *  historical-edge tier consistently across the Historical Profile pillar and Supporting
- *  Evidence's historical breakdown. */
-export function historicalEdgeConditionsLabel(tier: string): string {
-  switch (tier) {
-    case 'zone': return 'zone-matched conditions'
-    case 'regime_direction': return 'comparable conditions'
-    default: return 'all conditions'
-  }
 }
 
 interface GroupableEvent {
@@ -941,10 +902,8 @@ export function trendLabel(trendState: string | null, adx: number | null): Condi
   return { headline: 'Trend unclear', implication: 'Insufficient data to classify trend conditions.' }
 }
 
-/** Named distinctly from the existing volatilityLabel(atrPercentile) -> string
- *  (still used by SupportingEvidence.tsx's "Detailed regime & volatility"
- *  subsection, out of scope here) -- this one takes volatility_state directly
- *  and returns the headline/implication pair for the Today's Conditions block. */
+/** Takes volatility_state directly and returns the headline/implication pair
+ *  for Evidence Pillars' Today's Conditions block. */
 export function volatilityConditionLabel(volatilityState: string | null, atrPercentile: number | null): ConditionLabel {
   if (!volatilityState) return { headline: 'Volatility unknown', implication: '' }
 

@@ -2,6 +2,7 @@ import { formatR, formatPercent } from '@/lib/format'
 import {
   evidenceTierSubtext, trendLabel, volatilityConditionLabel, priceLocationLabel, setupContext,
 } from '@/lib/workspaceUtils'
+import { SuggestedTradeStructure } from './SuggestedTradeStructure'
 import type { WorkspaceRow } from './types'
 
 interface Props {
@@ -21,7 +22,10 @@ function MetricRow({ label, value, valueClass }: { label: string; value: React.R
 // YOUR HISTORICAL PROFILE = why this setup may suit this analyst specifically.
 // TODAY'S CONDITIONS = why the setup may make sense right now, objectively.
 // A subtle vertical divider (not two separate bordered cards) keeps the pairing
-// obvious without adding card nesting.
+// obvious without adding card nesting. Suggested Trade Structure lives at the
+// bottom of the left column (moved out of MarketDetailCard's own stack) so the
+// card doesn't leave a whitespace gap on the shorter side when the right
+// column's regime content runs longer.
 export function EvidencePillars({ row }: Props) {
   const tier = row.evidenceTier
   const regime = row.regime
@@ -57,6 +61,9 @@ export function EvidencePillars({ row }: Props) {
         {row.personalisation && (
           <p className="text-xs text-muted-foreground pt-1">{row.personalisation}</p>
         )}
+        <div className="pt-2">
+          <SuggestedTradeStructure row={row} />
+        </div>
       </div>
 
       <div>
