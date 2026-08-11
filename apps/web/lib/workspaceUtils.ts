@@ -949,6 +949,15 @@ export function trendLabel(trendState: string | null, adx: number | null): Condi
   return { headline: 'Trend unclear', implication: 'Insufficient data to classify trend conditions.' }
 }
 
+// Inline colour (not a Tailwind class) for the Trend headline in EvidencePillars --
+// keeps this one rendering guaranteed regardless of build-time content scanning.
+export function trendHeadlineColor(trendState: string | null): string {
+  if (trendState === 'TRENDING_UP') return '#15803d'
+  if (trendState === 'TRENDING_DOWN') return '#b91c1c'
+  if (trendState === 'MIXED') return '#b45309'
+  return 'inherit'
+}
+
 /** Takes volatility_state directly and returns the headline/implication pair
  *  for Evidence Pillars' Today's Conditions block. */
 export function volatilityConditionLabel(volatilityState: string | null, atrPercentile: number | null): ConditionLabel {

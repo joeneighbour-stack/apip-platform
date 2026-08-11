@@ -1,6 +1,6 @@
 import { formatR, formatPercent } from '@/lib/format'
 import {
-  evidenceTierSubtext, trendLabel, volatilityConditionLabel, priceLocationLabel, setupContext,
+  evidenceTierSubtext, trendLabel, trendHeadlineColor, volatilityConditionLabel, priceLocationLabel, setupContext,
 } from '@/lib/workspaceUtils'
 import { SuggestedTradeStructure } from './SuggestedTradeStructure'
 import type { WorkspaceRow } from './types'
@@ -21,18 +21,6 @@ function MetricRow({ label, value, valueClass }: { label: string; value: React.R
 // Colour scanning aids only -- none of these change what's shown, just how fast it
 // reads. Near-zero expectancy (|avgR| < 0.01) stays neutral rather than green/red,
 // since a coin-flip edge isn't meaningfully positive or negative.
-//
-// Note on the tier badge / profile title gap and the trend headline colour below:
-// both were already exactly as requested as of the prior commit (flex items-center
-// gap-2 + flex-shrink-0 on the badge; trendColorClass(regime.trendState) already
-// applied directly to the headline <p>, not a wrapper) -- verified by reading this
-// file fresh, not assumed from memory. A third report of the same "not applying"
-// symptom on code that hasn't changed since the second report is much more likely a
-// stale cached render (dev server, browser, or a deployment behind the latest push)
-// than a real regression. The badge got a literal "·" added anyway (an actual
-// rendered character is immune to whatever the real cause turns out to be, unlike
-// another round of equivalent gap/colour classes); the trend colour line is untouched
-// since there's nothing left to change in the code itself.
 function tierBadgeClass(tier: 'MARKET' | 'REGIME' | 'DIRECTION' | 'NONE'): string {
   if (tier === 'MARKET') return 'bg-blue-50 text-blue-700 border-blue-100'
   if (tier === 'REGIME') return 'bg-amber-50 text-amber-700 border-amber-200'
@@ -48,13 +36,6 @@ function winRateColorClass(winRate: number): string {
   if (winRate > 0.55) return 'text-green-700'
   if (winRate < 0.40) return 'text-red-600'
   return 'text-foreground'
-}
-
-function trendColorClass(trendState: string | null): string {
-  if (trendState === 'TRENDING_UP') return 'text-[13px] font-medium text-green-700'
-  if (trendState === 'TRENDING_DOWN') return 'text-[13px] font-medium text-red-600'
-  if (trendState === 'MIXED') return 'text-[13px] font-medium text-amber-700'
-  return 'text-[13px] font-medium'
 }
 
 // Maps priceLocationLabel()'s headline text to a dot colour -- "In range" (the
@@ -127,7 +108,7 @@ export function EvidencePillars({ row }: Props) {
           <div className="space-y-3">
             <div>
               <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Trend</p>
-              <p className={trendColorClass(regime.trendState)}>{trend.headline}</p>
+              <p className="text-[13px] font-medium" style={{ color: trendHeadlineColor(regime.trendState) }}>{trend.headline}</p>
               <p className="text-xs text-muted-foreground mt-0.5">{trend.implication}</p>
             </div>
 
