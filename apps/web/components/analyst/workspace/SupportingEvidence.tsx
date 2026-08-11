@@ -73,7 +73,10 @@ export function SupportingEvidence({ row, recommendationsGeneratedToday, markets
               </p>
               {row.expectedR != null && row.triggerProbability != null && (
                 <p>
-                  Ranked by expected value: <span className="font-medium tabular-nums text-foreground">{formatR(row.expectedR)}</span> at{' '}
+                  Ranked by expected value:{' '}
+                  <span className={`font-medium tabular-nums ${row.expectedR === 0 ? 'text-foreground' : row.expectedR > 0 ? 'text-green-700' : 'text-red-600'}`}>
+                    {formatR(row.expectedR)}
+                  </span> at{' '}
                   <span className="font-medium tabular-nums text-foreground">{formatPercent(row.triggerProbability)}</span> trigger probability
                 </p>
               )}

@@ -97,7 +97,10 @@ export function CoverageStrip({ rows, recommendationsGeneratedToday = 0 }: Props
                         : '—'}
                     </td>
                     <td className="py-2 px-3">{row.triggerProbability != null ? `${Math.round(row.triggerProbability * 100)}%` : '—'}</td>
-                    <td className={`py-2 px-3 font-medium ${(row.expectedR ?? 0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                    <td className={`py-2 px-3 font-medium ${
+                      row.expectedR == null || row.expectedR === 0 ? 'text-foreground'
+                        : row.expectedR > 0 ? 'text-green-700' : 'text-red-600'
+                    }`}>
                       {row.expectedR != null ? `${row.expectedR > 0 ? '+' : ''}${row.expectedR.toFixed(2)}R` : '—'}
                     </td>
                     <td className="py-2 px-3 whitespace-nowrap">

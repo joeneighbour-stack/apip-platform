@@ -36,13 +36,16 @@ export function MajorEventWarning({ eventRiskItems }: Props) {
   const first = groups[0]!
 
   return (
-    <div className="text-xs">
-      <p className="font-semibold text-red-700">
-        ⚠ HIGH EVENT RISK · {eventTimeUk(first.eventTimeUk)} UK — <span className="text-foreground">{groupDescription(first.items)}</span>
-      </p>
-      {groups.length > 1 && (
-        <p className="text-muted-foreground mt-0.5">+{groups.length - 1} more high-impact event{groups.length - 1 === 1 ? '' : 's'} today</p>
-      )}
+    <div className="bg-amber-50 border-l-4 border-amber-400 px-4 py-2 text-amber-800 text-[12px] flex items-center gap-2">
+      <span aria-hidden>⚠</span>
+      <div>
+        <p className="font-semibold">
+          HIGH EVENT RISK · {eventTimeUk(first.eventTimeUk)} UK — <span className="font-normal">{groupDescription(first.items)}</span>
+        </p>
+        {groups.length > 1 && (
+          <p className="font-normal mt-0.5">+{groups.length - 1} more high-impact event{groups.length - 1 === 1 ? '' : 's'} today</p>
+        )}
+      </div>
     </div>
   )
 }

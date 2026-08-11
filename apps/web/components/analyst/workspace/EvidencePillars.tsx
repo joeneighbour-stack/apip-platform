@@ -18,6 +18,43 @@ function MetricRow({ label, value, valueClass }: { label: string; value: React.R
   )
 }
 
+// Colour scanning aids only -- none of these change what's shown, just how fast it
+// reads. Near-zero expectancy (|avgR| < 0.01) stays neutral rather than green/red,
+// since a coin-flip edge isn't meaningfully positive or negative.
+function tierBadgeClass(tier: 'MARKET' | 'REGIME' | 'DIRECTION' | 'NONE'): string {
+  if (tier === 'MARKET') return 'bg-blue-50 text-blue-700 border-blue-100'
+  if (tier === 'REGIME') return 'bg-amber-50 text-amber-700 border-amber-200'
+  return 'bg-gray-100 text-gray-600 border-gray-200'
+}
+
+function expectancyColorClass(avgR: number): string {
+  if (Math.abs(avgR) < 0.01) return 'text-foreground'
+  return avgR > 0 ? 'text-green-700' : 'text-red-600'
+}
+
+function winRateColorClass(winRate: number): string {
+  if (winRate > 0.55) return 'text-green-700'
+  if (winRate < 0.40) return 'text-red-600'
+  return 'text-foreground'
+}
+
+function trendColorClass(trendState: string | null): string {
+  if (trendState === 'TRENDING_UP') return 'text-[13px] font-medium text-green-700'
+  if (trendState === 'TRENDING_DOWN') return 'text-[13px] font-medium text-red-600'
+  if (trendState === 'MIXED') return 'text-[13px] font-medium text-amber-700'
+  return 'text-[13px] font-medium'
+}
+
+// Maps priceLocationLabel()'s headline text to a dot colour -- "In range" (the
+// function's own default/fallback case) reads closest to "near entry, not waiting
+// on anything specific" of the four buckets given, so it takes the amber dot.
+function priceLocationDotClass(headline: string): string {
+  if (headline.startsWith('At entry')) return 'bg-green-500'
+  if (headline.startsWith('Above entry') || headline.startsWith('Below entry')) return 'bg-blue-400'
+  if (headline.startsWith('Extremely')) return 'bg-muted-foreground/30'
+  return 'bg-amber-400'
+}
+
 // Section 5 -- the central justification, as two clearly-distinct columns.
 // YOUR HISTORICAL PROFILE = why this setup may suit this analyst specifically.
 // TODAY'S CONDITIONS = why the setup may make sense right now, objectively.
@@ -39,16 +76,23 @@ export function EvidencePillars({ row }: Props) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
       <div className="sm:pr-6 sm:border-r sm:border-border space-y-2">
-        <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+        <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
           Your Historical Profile
-          {tier.tier !== 'NONE' && <span className="normal-case tracking-normal text-foreground"> · {tier.label}</span>}
+          {tier.tier !== 'NONE' && (
+            <>
+              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border normal-case tracking-normal ${tierBadgeClass(tier.tier)}`}>
+                {tier.tier}
+              </span>
+              <span className="normal-case tracking-normal text-foreground">{tier.label}</span>
+            </>
+          )}
         </p>
         {tier.tier === 'NONE' ? (
           <p className="text-xs text-muted-foreground">No meaningful history available for this setup.</p>
         ) : (
           <div className="space-y-1">
-            <MetricRow label="Win rate" value={formatPercent(tier.winRate)} />
-            <MetricRow label="Expectancy" value={formatR(tier.avgR)} valueClass={tier.avgR >= 0 ? 'text-green-700' : 'text-red-700'} />
+            <MetricRow label="Win rate" value={formatPercent(tier.winRate)} valueClass={winRateColorClass(tier.winRate)} />
+            <MetricRow label="Expectancy" value={formatR(tier.avgR)} valueClass={expectancyColorClass(tier.avgR)} />
             <MetricRow
               label="Sample"
               value={tier.tier === 'REGIME'
@@ -72,7 +116,7 @@ export function EvidencePillars({ row }: Props) {
           <div className="space-y-3">
             <div>
               <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Trend</p>
-              <p className="text-sm font-medium">{trend.headline}</p>
+              <p className={trendColorClass(regime.trendState)}>{trend.headline}</p>
               <p className="text-xs text-muted-foreground mt-0.5">{trend.implication}</p>
             </div>
 
@@ -84,7 +128,10 @@ export function EvidencePillars({ row }: Props) {
 
             <div>
               <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Price Location</p>
-              <p className="text-sm font-medium">{priceLocation.headline}</p>
+              <div className="flex items-start gap-1.5">
+                <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1 ${priceLocationDotClass(priceLocation.headline)}`} />
+                <p className="text-sm font-medium">{priceLocation.headline}</p>
+              </div>
               <p className="text-xs text-muted-foreground mt-0.5">{priceLocation.implication}</p>
             </div>
 
