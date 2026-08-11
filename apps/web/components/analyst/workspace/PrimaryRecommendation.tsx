@@ -12,7 +12,11 @@ interface Props {
 // reviewing"), not an instruction -- the pill is coloured for quick scanning, not
 // styled as a BUY/SELL command button. Direction pill, type label, and counter-trend
 // badge all sit inline with the symbol on one header line -- a previous pass put the
-// pill around the type-label text on its own line below the symbol instead.
+// pill around the type-label text on its own line below the symbol instead. A literal
+// "·" separates the pill from the type label, not just flex gap -- gap-2 was already
+// present here as of the prior commit (verified by reading the file, not assumed), so
+// a report of them still reading concatenated is more likely a stale cached render than
+// a missing gap; an actual rendered character is immune to that class of problem either way.
 export function PrimaryRecommendation({ row }: Props) {
   const precision = row.displayPrecision ?? 4
   const symbolDisplay = formatSymbolForDisplay(row.symbol, row.assetClass)
@@ -33,7 +37,12 @@ export function PrimaryRecommendation({ row }: Props) {
             {row.direction}
           </span>
         )}
-        {typeLabel && <span className="text-sm font-medium text-foreground">{typeLabel}</span>}
+        {typeLabel && (
+          <>
+            <span className="text-muted-foreground text-[11px]" aria-hidden>·</span>
+            <span className="text-sm font-medium text-foreground">{typeLabel}</span>
+          </>
+        )}
         {alignment === 'COUNTER_TREND' && (
           <span className="text-[9px] font-medium px-1 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200 whitespace-nowrap">
             ↙ Counter-trend

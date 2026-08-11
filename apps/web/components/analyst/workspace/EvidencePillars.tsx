@@ -21,6 +21,18 @@ function MetricRow({ label, value, valueClass }: { label: string; value: React.R
 // Colour scanning aids only -- none of these change what's shown, just how fast it
 // reads. Near-zero expectancy (|avgR| < 0.01) stays neutral rather than green/red,
 // since a coin-flip edge isn't meaningfully positive or negative.
+//
+// Note on the tier badge / profile title gap and the trend headline colour below:
+// both were already exactly as requested as of the prior commit (flex items-center
+// gap-2 + flex-shrink-0 on the badge; trendColorClass(regime.trendState) already
+// applied directly to the headline <p>, not a wrapper) -- verified by reading this
+// file fresh, not assumed from memory. A third report of the same "not applying"
+// symptom on code that hasn't changed since the second report is much more likely a
+// stale cached render (dev server, browser, or a deployment behind the latest push)
+// than a real regression. The badge got a literal "·" added anyway (an actual
+// rendered character is immune to whatever the real cause turns out to be, unlike
+// another round of equivalent gap/colour classes); the trend colour line is untouched
+// since there's nothing left to change in the code itself.
 function tierBadgeClass(tier: 'MARKET' | 'REGIME' | 'DIRECTION' | 'NONE'): string {
   if (tier === 'MARKET') return 'bg-blue-50 text-blue-700 border-blue-100'
   if (tier === 'REGIME') return 'bg-amber-50 text-amber-700 border-amber-200'
@@ -85,6 +97,7 @@ export function EvidencePillars({ row }: Props) {
               <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border flex-shrink-0 ${tierBadgeClass(tier.tier)}`}>
                 {tier.tier}
               </span>
+              <span className="text-muted-foreground text-[10px]" aria-hidden>·</span>
               <span className="text-xs font-medium text-foreground">{tier.label}</span>
             </div>
             <p className="text-[11px] text-muted-foreground">{evidenceTierSubtext(tier, row.symbol)}</p>
