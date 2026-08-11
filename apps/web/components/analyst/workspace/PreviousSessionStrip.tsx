@@ -7,6 +7,9 @@ interface Props {
 
 // Section 8 -- compact, low-prominence single strip. Deliberately plain text,
 // no coloured tiles, matching the spec's "low visual prominence" instruction.
+// No "Previous Session" label of its own -- the only caller (SupportingEvidence.tsx)
+// already wraps this in a SubSection titled "Previous session", so a second label
+// here just duplicated it. Starts directly with the date.
 export function PreviousSessionStrip({ row }: Props) {
   const { previousDay, yesterdayTradeOutcome, displayPrecision, assetClass } = row
   if (!previousDay) return null
@@ -17,8 +20,7 @@ export function PreviousSessionStrip({ row }: Props) {
 
   return (
     <div className="text-xs text-muted-foreground">
-      <span className="font-medium text-foreground">Previous Session</span>
-      <span className="ml-2">{weekdayDateLabel(previousDay.date)}</span>
+      <span className="font-medium text-foreground">{weekdayDateLabel(previousDay.date)}</span>
       <div className="mt-0.5 tabular-nums">
         O: {previousDay.open.toFixed(precision)} &nbsp; H: {previousDay.high.toFixed(precision)} &nbsp;
         L: {previousDay.low.toFixed(precision)} &nbsp; C: {previousDay.close.toFixed(precision)} &nbsp;

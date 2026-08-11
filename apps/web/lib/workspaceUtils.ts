@@ -289,19 +289,33 @@ export function chartDateLabel(dateStr: string): string {
 }
 
 /** "20 > 50 > 200" / "20 < 50 < 200" / mixed comparisons, from raw EMA values. */
-export function emaStackString(ema20: number | null, ema50: number | null, ema200: number | null): string {
+// Plain English rather than raw "20 < 50 < 200" notation -- that reads as ambiguous
+// shorthand (does "<" mean price below, or the EMA values themselves compared?) even
+// though it's technically unambiguous once you know the convention. Mixed cases are
+// split into "transitioning" (short-term already crossed the long-term average, the
+// medium-term hasn't caught up -- a stack actively flipping) vs a genuine no-alignment
+// case, rather than collapsing every non-clean stack into one vague "mixed" label.
+export function emaStackLabel(ema20: number | null, ema50: number | null, ema200: number | null): string {
   if (ema20 == null || ema50 == null || ema200 == null) return '—'
-  const cmp = (a: number, b: number) => (a > b ? '>' : a < b ? '<' : '=')
-  return `20 ${cmp(ema20, ema50)} 50 ${cmp(ema50, ema200)} 200`
+  if (ema20 > ema50 && ema50 > ema200) return 'Bullish EMA stack — short-term above long-term'
+  if (ema20 < ema50 && ema50 < ema200) return 'Bearish EMA stack — short-term below long-term'
+  if (ema20 > ema200 && ema50 < ema200) return 'Mixed EMA stack — transitioning'
+  return 'Mixed EMA stack — no clear alignment'
 }
 
 /** Directional persistence is stored as a 0-1 fraction over a fixed 20-bar lookback
- *  (deriveMarketRegime.ts always calls calcDirectionalPersistence(closes, 20)). */
+ *  (deriveMarketRegime.ts always calls calcDirectionalPersistence(closes, 20)) --
+ *  the share of those bars that closed up. Framed as both counts rather than just
+ *  "13/20 up days": a bare up-day count reads as a bullish signal even when it's
+ *  context for a SELL recommendation (a market can chop up 13/20 days and still be
+ *  in a clear downtrend on the days that matter), so showing both sides is neutral
+ *  regardless of which direction was recommended. */
 export function directionalPersistenceLabel(persistence: number | null): string {
   if (persistence == null) return '—'
   const lookback = 20
   const upDays = Math.round(persistence * lookback)
-  return `${upDays}/${lookback} up days`
+  const downDays = lookback - upDays
+  return `${upDays} up / ${downDays} down in last ${lookback} days`
 }
 
 function ordinal(n: number): string {

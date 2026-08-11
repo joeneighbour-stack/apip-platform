@@ -1,7 +1,7 @@
 'use client'
 import { useState } from 'react'
 import { formatR, formatPercent } from '@/lib/format'
-import { emaStackString, directionalPersistenceLabel } from '@/lib/workspaceUtils'
+import { emaStackLabel, directionalPersistenceLabel } from '@/lib/workspaceUtils'
 import { PreviousSessionStrip } from './PreviousSessionStrip'
 import { DetailedEvents } from './DetailedEvents'
 import type { WorkspaceRow } from './types'
@@ -49,11 +49,10 @@ export function SupportingEvidence({ row, recommendationsGeneratedToday, markets
         <div className="mt-3 space-y-3">
           {regime && (
             <SubSection title="Technical context">
-              <p className="text-xs tabular-nums">
-                <span className="text-muted-foreground">EMA </span>
-                <span className="text-foreground">{emaStackString(regime.ema20, regime.ema50, regime.ema200)}</span>
+              <p className="text-xs tabular-nums text-foreground">
+                {emaStackLabel(regime.ema20, regime.ema50, regime.ema200)}
                 <span className="text-muted-foreground">{'  ·  '}</span>
-                <span className="text-foreground">{directionalPersistenceLabel(regime.directionalPersistence)}</span>
+                {directionalPersistenceLabel(regime.directionalPersistence)}
               </p>
             </SubSection>
           )}
