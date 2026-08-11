@@ -16,6 +16,8 @@ import { allocateCoverage, type OpportunityForAllocation } from '../services/all
 import { createShadowTrade } from '../services/shadowTradeService.js'
 import type { ActiveAnalyst } from '../services/analystProfileService.js'
 import { scoreAnalystForMarket, type AnalystScore, type AnalystProfileRow } from '../services/analystScoringService.js'
+import type { AtrProfile } from '../services/entryOptimizerService.js'
+import { atrProfileMapKey } from '../services/analystAtrProfileService.js'
 import type { SessionType } from '../types/domain.js'
 
 const SYSTEM_ENGINE_ID = 'ab9359b6-0e78-49fc-8a0a-1cf589552280'
@@ -372,6 +374,25 @@ async function main() {
       profilesByAnalyst.get(p.analyst_id)!.push({ ...p, asset_class: assetClass } as unknown as AnalystProfileRow)
     }
 
+    // Load all analyst ATR profiles once (analyst_atr_profiles, migrations/046) so
+    // buildRecommendation()'s per-market entryOptimizerService.ts call can look up an
+    // analyst-specific stop/target distribution instead of the team-wide DEFAULT_PROFILES,
+    // without a DB round trip per market. Keyed the same way analystAtrProfileService.ts's
+    // getAnalystAtrProfile() would look one up individually, via atrProfileMapKey().
+    const { data: atrProfileRows } = await db.from('analyst_atr_profiles').select('*')
+    const atrProfileMap = new Map<string, AtrProfile>()
+    for (const row of (atrProfileRows ?? [])) {
+      atrProfileMap.set(atrProfileMapKey(row.analyst_id, row.direction, row.zone), {
+        stopAtrQ25: Number(row.stop_atr_q25),
+        stopAtrMedian: Number(row.stop_atr_median),
+        stopAtrQ75: Number(row.stop_atr_q75),
+        targetAtrQ25: Number(row.target_atr_q25),
+        targetAtrMedian: Number(row.target_atr_median),
+        targetAtrQ75: Number(row.target_atr_q75),
+      })
+    }
+    console.log(`  Analyst ATR profiles loaded: ${atrProfileMap.size}`)
+
     const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
     const { data: regimeRows } = await db
       .from('market_regime_state')
@@ -641,6 +662,7 @@ async function main() {
           parameterSnapshotHash,
           marketDisplayPrecision: market.display_precision ?? null,
           preferredDirection,
+          atrProfileMap,
         })
 
         const { opportunity: opp, recommendationVersion: rv, hiddenExecutionLevels: hidden, diagnostics } = result

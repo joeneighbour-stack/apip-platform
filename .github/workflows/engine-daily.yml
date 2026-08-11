@@ -19,6 +19,7 @@ on:
     - cron: '0 5 * * 1'
     - cron: '15 5 * * 1'
     - cron: '30 5 * * 1'
+    - cron: '45 5 * * 1'
     - cron: '0 22 * * 1-5'
     - cron: '30 22 * * 1-5'
   workflow_dispatch:
@@ -37,6 +38,7 @@ on:
           - snapshot-apac
           - engine-apac
           - generate-profiles
+          - generate-atr-profiles
           - calculate-kpis
           - calculate-shadow-kpis
           - shadow-lifecycle
@@ -272,6 +274,29 @@ jobs:
           cache-dependency-path: intelligence-engine/package-lock.json
       - run: npm ci
       - run: npx tsx src/scripts/generateAnalystProfiles.ts
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+  generate-atr-profiles:
+    name: Generate Analyst ATR Profiles
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'generate-atr-profiles' ||
+      github.event_name == 'schedule' && github.event.schedule == '45 5 * * 1'
+    defaults:
+      run:
+        working-directory: intelligence-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: intelligence-engine/package-lock.json
+      - run: npm ci
+      - name: Generate analyst ATR profiles
+        run: npx tsx src/scripts/generateAtrProfiles.ts
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

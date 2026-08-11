@@ -45,7 +45,8 @@ import type { MarketStateOutput } from './marketStateService.js';
 import type { MarketEventRiskOutput } from './economicCalendarService.js';
 import { buildTemplateProfiles, selectBestTemplate, type TemplateProfile, type HistoricalTradeForProfiling } from './templateService.js';
 import { buildAnalystProfiles, selectBestAnalyst, type AnalystProfile, type ActiveAnalyst, type AnalystHistoricalTrade } from './analystProfileService.js';
-import { buildEntryOptimizer } from './entryOptimizerService.js';
+import { buildEntryOptimizer, type AtrProfile } from './entryOptimizerService.js';
+import { atrProfileMapKey } from './analystAtrProfileService.js';
 import { estimateTriggerProbability } from './triggerProbabilityService.js';
 import { calculateExpectedR } from './expectedRService.js';
 import { assessCondition } from './recommendationLifecycleService.js';
@@ -75,6 +76,13 @@ export interface BuildRecommendationInput {
   parameterSnapshotHash: string;
   marketDisplayPrecision: number | null;
   preferredDirection?: Direction | null; // derived from regime/zone in runEngineSession
+  // Every analyst's ATR profile, preloaded once by the caller (runEngineSession.ts) and
+  // keyed by atrProfileMapKey(analystId, direction, zone) -- this function is pure/no-I/O,
+  // so it can't fetch a single profile itself, and direction/zone aren't known to the
+  // caller until selectBestTemplate() resolves them below, so the caller can't pre-narrow
+  // the lookup either. Undefined/no match falls back to entryOptimizerService.ts's own
+  // DEFAULT_PROFILES, same as today.
+  atrProfileMap?: Map<string, AtrProfile>;
 }
 export type OpportunityLifecycleStatus = 'DRAFT' | 'GENERATED' | 'ASSIGNED' | 'SHOWN' | 'ACTIVE' | 'CLOSED' | 'CANCELLED';
 /** Maps to the `opportunities` table. */
@@ -156,7 +164,7 @@ export function buildRecommendation(input: BuildRecommendationInput): BuildRecom
     recommendationVersionId, generatedAt, market, session, marketState, marketRegime, eventRisks,
     trades, activeAnalysts, minimumRr, minTriggerSample, fallbackTriggerProbability,
     staleAtrThreshold, forceRecalcAtrThreshold, parameterSnapshot, parameterSnapshotHash,
-    marketDisplayPrecision, preferredDirection,
+    marketDisplayPrecision, preferredDirection, atrProfileMap,
   } = input;
   const templates: TemplateProfile[] = buildTemplateProfiles(trades);
   // Pass preferredDirection constraint -- derived from regime/zone in caller
@@ -165,7 +173,15 @@ export function buildRecommendation(input: BuildRecommendationInput): BuildRecom
   const zone = template.preferredEntryZone;
   const analystProfiles: AnalystProfile[] = buildAnalystProfiles(trades);
   const profile = selectBestAnalyst(market, direction, zone, analystProfiles, activeAnalysts, session);
-  const entryStopTarget = buildEntryOptimizer({ marketState, direction, preferredZone: zone, minimumRr });
+  // Analyst-specific ATR profile, if the caller preloaded one and this exact
+  // analyst+direction+zone combination has one -- direction/zone are only known
+  // now (post template/analyst selection), which is why this lookup happens here
+  // rather than being passed in pre-resolved. undefined (no match, or no map at
+  // all) falls through to buildEntryOptimizer()'s own DEFAULT_PROFILES.
+  const atrProfile = profile.assignedAnalyst
+    ? atrProfileMap?.get(atrProfileMapKey(profile.assignedAnalyst, direction, zone))
+    : undefined;
+  const entryStopTarget = buildEntryOptimizer({ marketState, direction, preferredZone: zone, minimumRr, atrProfile });
   const trigger = estimateTriggerProbability({
     market, direction, zone, trades, minTriggerSample, fallbackProbability: fallbackTriggerProbability,
   });
