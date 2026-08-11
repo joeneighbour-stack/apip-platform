@@ -545,8 +545,21 @@ async function main() {
         })
 
         // Filter out capped (or NONE-tier) analysts and pick the highest adjusted score.
+        // NONE-tier candidates all score exactly 0 (analystScoringService.ts scores them
+        // 0, not an overall-avgR figure, specifically so this workload tiebreak -- not raw
+        // historical edge -- decides between them): 0 * (1 - penalty) is still 0 regardless
+        // of workload, so without an explicit tiebreak here, Array.sort's stability would
+        // just resolve every NONE-tier market to whichever analyst happened to load first
+        // from the DB, not the one with the lowest current workload. Ties elsewhere (a real
+        // score, not just NONE-tier) also fall back to this, which is a reasonable fairness
+        // rule in general, not just a NONE-tier special case.
         const eligible = scored.filter(s => s.adjustedValue >= 0)
-        const selected = eligible.sort((a, b) => b.adjustedValue - a.adjustedValue)[0]
+        const selected = eligible.sort((a, b) => {
+          if (b.adjustedValue !== a.adjustedValue) return b.adjustedValue - a.adjustedValue
+          const workloadA = analystWorkload.get(a.score.analystId) ?? 0
+          const workloadB = analystWorkload.get(b.score.analystId) ?? 0
+          return workloadA - workloadB
+        })[0]
 
         if (selected) {
           bestScore = selected.score

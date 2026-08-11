@@ -256,6 +256,14 @@ export function scoreAnalystForMarket(
   )
   if (directionPick) return buildScore(analystId, marketId, 'DIRECTION', directionPick, trendState)
 
+  // NONE tier -- no tier found a usable signal for this analyst+market. avgR/confidence
+  // are 0, not the analyst's overall/team-wide avgR: using an overall figure here would
+  // let the single best all-round analyst win every NONE-tier market on raw historical
+  // edge regardless of whether they have any actual data for THIS market, which is
+  // exactly backwards for a tier that by definition means "no real signal for this
+  // market." Scoring 0 lets the caller's workload balancing (runEngineSession.ts) decide
+  // instead -- see that file's tiebreak-by-workload comment for why this genuinely
+  // achieves "distributed by workload" rather than just deferring to array order.
   return {
     analystId, marketId, preferredDirection: null, avgR: 0, profileTier: 'NONE', profileQuality: null, confidence: 0,
     directionAlignment: 'NONE', alignmentMultiplier: 0.85,
