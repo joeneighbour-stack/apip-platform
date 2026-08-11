@@ -2,9 +2,9 @@ name: Warm Analytics Cache
 
 on:
   schedule:
-    # 06:00 UTC weekdays -- after the morning import/engine runs, so the cache reflects
-    # the day's fresh data rather than warming with yesterday's numbers.
-    - cron: '0 6 * * 1-5'
+    # Every 2 hours during market hours 06:00-20:00 UK (05:00-19:00 UTC) -- keeps the
+    # cache at most 2 hours stale rather than riding out the full day on the 15-minute TTL.
+    - cron: '0 5,7,9,11,13,15,17,19 * * 1-5'
   workflow_dispatch:  # Allow manual trigger
 
 jobs:

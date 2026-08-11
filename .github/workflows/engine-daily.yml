@@ -6,22 +6,23 @@ name: APIP Engine
 on:
   schedule:
     - cron: '*/5 5-21 * * 1-5'
-    - cron: '30 7 * * 1-5'
-    - cron: '30 8 * * 1-5'
     - cron: '30 4 * * 1-5'
     - cron: '35 4 * * 1-5'
     - cron: '45 4 * * 1-5'
     - cron: '50 4 * * 1-5'
-    - cron: '45 10 * * 1-5'
-    - cron: '50 10 * * 1-5'
-    - cron: '45 14 * * 1-5'
-    - cron: '50 14 * * 1-5'
+    - cron: '45 8 * * 1-5'
+    - cron: '50 8 * * 1-5'
+    - cron: '25 12 * * 1-4'
+    - cron: '30 12 * * 1-4'
     - cron: '0 5 * * 1'
     - cron: '15 5 * * 1'
     - cron: '30 5 * * 1'
     - cron: '45 5 * * 1'
-    - cron: '0 22 * * 1-5'
     - cron: '30 22 * * 1-5'
+    # Import actual trades -- every 15 minutes 04:00-20:00 UTC (05:00-21:00 UK)
+    - cron: '*/15 4-20 * * 1-5'
+    # Import actual trades -- every 4 hours outside market hours
+    - cron: '0 0,21,23 * * 1-5'
   workflow_dispatch:
     inputs:
       job:
@@ -155,7 +156,7 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'snapshot-us' ||
-      github.event_name == 'schedule' && github.event.schedule == '45 10 * * 1-5'
+      github.event_name == 'schedule' && github.event.schedule == '45 8 * * 1-5'
     defaults:
       run:
         working-directory: intelligence-engine
@@ -179,7 +180,7 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'engine-us' ||
-      github.event_name == 'schedule' && github.event.schedule == '50 10 * * 1-5'
+      github.event_name == 'schedule' && github.event.schedule == '50 8 * * 1-5'
     defaults:
       run:
         working-directory: intelligence-engine
@@ -208,7 +209,7 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'snapshot-apac' ||
-      github.event_name == 'schedule' && github.event.schedule == '45 14 * * 1-5'
+      github.event_name == 'schedule' && github.event.schedule == '25 12 * * 1-4'
     defaults:
       run:
         working-directory: intelligence-engine
@@ -232,7 +233,7 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'engine-apac' ||
-      github.event_name == 'schedule' && github.event.schedule == '50 14 * * 1-5'
+      github.event_name == 'schedule' && github.event.schedule == '30 12 * * 1-4'
     defaults:
       run:
         working-directory: intelligence-engine
@@ -244,13 +245,29 @@ jobs:
           cache: 'npm'
           cache-dependency-path: intelligence-engine/package-lock.json
       - run: npm ci
+      # Belt-and-suspenders guard for manual workflow_dispatch triggers on a Friday --
+      # the schedule itself is already Mon-Thu only (1-4), so this only ever bites a
+      # manual run. A bare `exit 0` inside a run: step only ends that step
+      # successfully, it doesn't skip the rest of the job -- so the check is exposed
+      # as a step output and the two real-work steps below are gated on it instead.
+      - name: Skip if Friday
+        id: friday-check
+        run: |
+          if [ "$(date +%u)" = "5" ]; then
+            echo "Friday — APAC engine skipped"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
       # See engine-european's identical step -- needs: can't bridge separately
       # cron-triggered jobs, so regime freshness is enforced within this job.
       - run: npx tsx src/scripts/deriveMarketRegime.ts
+        if: steps.friday-check.outputs.skip != 'true'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       - run: npx tsx src/scripts/runEngineSession.ts --session=APAC
+        if: steps.friday-check.outputs.skip != 'true'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -396,7 +413,7 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'import-actual-trades' ||
-      github.event_name == 'schedule' && (github.event.schedule == '0 22 * * 1-5' || github.event.schedule == '30 7 * * 1-5' || github.event.schedule == '30 8 * * 1-5')
+      github.event_name == 'schedule' && (github.event.schedule == '*/15 4-20 * * 1-5' || github.event.schedule == '0 0,21,23 * * 1-5')
     defaults:
       run:
         working-directory: intelligence-engine

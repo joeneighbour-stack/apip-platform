@@ -145,13 +145,14 @@ async function computeDefaultAnalyticsView() {
 
 export type DefaultAnalyticsView = Awaited<ReturnType<typeof computeDefaultAnalyticsView>>
 
-// 15-minute TTL -- matches the task's stated cadence for this specific view. Tagged so a
-// manual refresh (see /api/analytics/summary?force=true) can invalidate it on demand
-// without waiting out the TTL, without touching any other cached entry.
+// 2-hour TTL -- matches the analytics-cache-warm.yml schedule that keeps this view warm
+// every 2 hours during market hours. Tagged so a manual refresh (see
+// /api/analytics/summary?force=true) can invalidate it on demand without waiting out
+// the TTL, without touching any other cached entry.
 const getCachedDefaultAnalyticsView = unstable_cache(
   computeDefaultAnalyticsView,
   [CACHE_TAG],
-  { revalidate: 900, tags: [CACHE_TAG] }
+  { revalidate: 7200, tags: [CACHE_TAG] }
 )
 
 export { getCachedDefaultAnalyticsView, computeDefaultAnalyticsView, CACHE_TAG }
