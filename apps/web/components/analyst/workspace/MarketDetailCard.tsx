@@ -5,7 +5,6 @@ import { RecommendationSynthesis } from './RecommendationSynthesis'
 import { EvidencePillars } from './EvidencePillars'
 import { SuggestedTradeStructure } from './SuggestedTradeStructure'
 import { SupportingEvidence } from './SupportingEvidence'
-import { FeedbackButtons } from './FeedbackButtons'
 import type { WorkspaceRow } from './types'
 
 interface Props {
@@ -36,9 +35,6 @@ export function MarketDetailCard({ row, newsHeadline, recommendationsGeneratedTo
         recommendationsGeneratedToday={recommendationsGeneratedToday}
         marketsAllocatedToday={marketsAllocatedToday}
       />
-      <div className="pt-1 border-t border-border/60">
-        <FeedbackButtons opportunityId={row.opportunityId} />
-      </div>
     </div>
   )
 }
