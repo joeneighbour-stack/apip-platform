@@ -20,11 +20,14 @@
 //      job entirely (Step 8) -- this service does not touch it.
 //
 // Template/profile diagnostic fields (template_quality, profile_quality,
-// etc.) are deliberately NOT included in either persisted output -- per
-// product clarification, they are not duplicated onto recommendation_versions
-// in V1; a reader joins back to template_profiles/analyst_profiles instead.
-// They remain available in the `diagnostics` return value for debugging/
-// testing ONLY -- diagnostics is explicitly not a persisted shape.
+// etc.) are NOT included in RecommendationVersionOutput -- per product
+// clarification, they are not duplicated onto recommendation_versions'
+// analyst-facing columns in V1; a reader joins back to
+// template_profiles/analyst_profiles instead. `diagnostics` itself, however,
+// IS persisted -- runEngineSession.ts merges it into recommendation_versions'
+// regime_tags jsonb column alongside the analyst-first scoring verdict, so
+// "why did this recommendation look the way it did" is auditable from the
+// database alone rather than only existing in this run's process memory.
 //
 // DIRECTION CONSTRAINT (V1.4 amendment):
 //   Caller may pass preferredDirection derived from market regime and/or
@@ -139,6 +142,16 @@ export interface RecommendationDiagnostics {
   profileQuality: 'HIGH' | 'MEDIUM' | 'LOW';
   eligibleAnalysts: string[];
   eventWarning: string;
+  // Trigger probability before the regime-confidence scale-down (see
+  // CONFIDENCE_MULTIPLIER below) -- the same raw figure expectedR's own
+  // calculation uses, distinct from opportunity.triggerProbability (the
+  // scaled, analyst-facing value).
+  rawTriggerProbability: number;
+  // True when an analyst-specific ATR profile (analyst_atr_profiles,
+  // migrations/046) was found and used for this recommendation's stop/target
+  // geometry; false when it fell back to entryOptimizerService.ts's team-wide
+  // DEFAULT_PROFILES. Tracks adoption of the analyst-specific geometry.
+  analystAtrProfileUsed: boolean;
 }
 export interface BuildRecommendationOutput {
   opportunity: OpportunityOutput;
@@ -249,6 +262,8 @@ export function buildRecommendation(input: BuildRecommendationInput): BuildRecom
     profileTrades: profile.profileTrades, profileQuality: profile.profileQuality,
     eligibleAnalysts: profile.eligibleAnalysts,
     eventWarning,
+    rawTriggerProbability: trigger.triggerProbability,
+    analystAtrProfileUsed: atrProfile !== undefined,
   };
   return { opportunity, recommendationVersion, hiddenExecutionLevels, diagnostics };
 }

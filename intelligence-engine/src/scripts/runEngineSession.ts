@@ -813,21 +813,34 @@ async function main() {
           risk_range: rv.riskRange, target_range: rv.targetRange,
           volatility_warning: rv.volatilityWarning ?? '',
           atr_move_since_generation: rv.atrMoveSinceGeneration,
-          // recommendation_versions.regime_tags is otherwise unwritten today --
-          // used here to carry the engine's own direction-alignment verdict
-          // through to the workspace, so its "Why This Is Being Recommended"
-          // commentary can state when a counter-trend analyst was chosen
-          // using the same value that drove the allocation, rather than
-          // re-deriving alignment from trend+direction client-side. Null when
-          // the fallback (non-analyst-first) path was used -- no AnalystScore
-          // exists to grade alignment on in that case.
+          // recommendation_versions.regime_tags carries two things through to the
+          // database, both otherwise lost when the process exits: the engine's
+          // direction-alignment verdict (workspace's "Why This Is Being Recommended"
+          // commentary reads this rather than re-deriving alignment from
+          // trend+direction client-side) and RecommendationDiagnostics -- template/
+          // profile avgR and quality, raw (pre-confidence-scaling) trigger
+          // probability, and whether an analyst-specific ATR profile was used --
+          // without this, there's no way to audit why a recommendation looked the
+          // way it did from the database alone. directionAlignment/
+          // alignmentMultiplier/profileTier are only present when the analyst-first
+          // path was used (no AnalystScore exists for the fallback path); the
+          // diagnostics fields are always present, since buildRecommendation()
+          // always returns diagnostics regardless of which path assigned the analyst.
           // Was writing direction_alignment (snake_case) while every reader queries
           // regime_tags->>'directionAlignment' (camelCase) -- silently always null.
-          regime_tags: item.analystScore ? {
-            directionAlignment: (item.analystScore as AnalystScore).directionAlignment,
-            alignmentMultiplier: (item.analystScore as AnalystScore).alignmentMultiplier,
-            profileTier: (item.analystScore as AnalystScore).profileTier,
-          } : null,
+          regime_tags: {
+            ...(item.analystScore ? {
+              directionAlignment: (item.analystScore as AnalystScore).directionAlignment,
+              alignmentMultiplier: (item.analystScore as AnalystScore).alignmentMultiplier,
+              profileTier: (item.analystScore as AnalystScore).profileTier,
+            } : {}),
+            templateAvgR: diagnostics.templateAvgR,
+            profileAvgR: diagnostics.profileAvgR,
+            templateQuality: diagnostics.templateQuality,
+            profileSource: diagnostics.profileSource,
+            rawTriggerProbability: diagnostics.rawTriggerProbability,
+            analystAtrProfileUsed: diagnostics.analystAtrProfileUsed ?? false,
+          },
         }, { onConflict: 'recommendation_version_id' }).select('recommendation_version_id').single()
 
         if (rvErr || !rvRow) { console.error(`  ${market.symbol} rv error: ${rvErr?.message}`); continue }
