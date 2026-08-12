@@ -491,6 +491,30 @@ async function main() {
       analystWorkload.set(a.analyst, 0)
     }
 
+    // Seed with today's assignments from sessions that have already run (e.g. EUROPEAN
+    // at 04:50 before US runs at 09:50) -- without this, analystWorkload resets to 0
+    // every session, so MAX_MARKETS_PER_ANALYST only ever capped a single session's
+    // worth of assignments rather than the intended full-day total: confirmed live,
+    // Ian getting 10 EUROPEAN markets then another 8 on US, 18 total against an
+    // intended cap of 11. Excludes this session's own rows so a resumed (retried) run
+    // of the SAME session doesn't self-penalise against its own prior, about-to-be-
+    // overwritten partial attempt -- the markets loop below re-decides every market in
+    // sessionMarkets from scratch on every run, resume or not.
+    const { data: todayAllocations } = await db
+      .from('opportunities')
+      .select('assigned_analyst_id')
+      .eq('date', today)
+      .neq('session', session)
+      .not('assigned_analyst_id', 'is', null)
+
+    for (const row of todayAllocations ?? []) {
+      if (row.assigned_analyst_id) {
+        const current = analystWorkload.get(row.assigned_analyst_id) ?? 0
+        analystWorkload.set(row.assigned_analyst_id, current + 1)
+      }
+    }
+    console.log(`  Cross-session workload seeded: ${(todayAllocations ?? []).length} existing assignment(s) today from other sessions`)
+
     for (const symbol of sessionMarkets) {
       const market = marketBySymbol.get(symbol)
       if (!market) { console.log(`  ${symbol}: not in markets table`); continue }
