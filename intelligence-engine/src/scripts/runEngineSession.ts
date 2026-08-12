@@ -301,25 +301,41 @@ async function main() {
 
     const eligibleAnalysts = activeAnalysts.filter(a => !unavailableIds.has(a.analyst))
 
-    // Each analyst's most recent triggered_rate KPI (executive_kpis), used as the trigger
-    // probability model's baseline (see triggerProbabilityService.ts) -- actual_trades.triggered
-    // itself is unusable for this: MANUAL_BACKFILL only ever contains trades that DID trigger,
-    // so a historical triggered/total calculation off that data is always ~100%, not a real rate.
+    // Each analyst's 12-month rolling triggered/total_setups aggregate (executive_kpis),
+    // used as the trigger probability model's baseline (see triggerProbabilityService.ts).
+    // Was previously just the single most recent monthly row -- volatile and misleading
+    // early in a new month, since a partial month's setups haven't had time to trigger yet
+    // (confirmed live: Ian's August row was 13/53 = 24.5% ten days into the month, vs a
+    // stable 42.5% July and ~38% 12-month aggregate). Summing triggered/total_setups across
+    // months (not averaging each month's rate) weights every setup equally regardless of
+    // which month it fell in, rather than letting a slow 30-setup month count as much as a
+    // busy 200-setup one. actual_trades.triggered itself is unusable for this:
+    // MANUAL_BACKFILL only ever contains trades that DID trigger, so a historical
+    // triggered/total calculation off that data is always ~100%, not a real rate.
+    const twelveMonthsAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
     const { data: triggerKpis } = await db
       .from('executive_kpis')
       .select('analyst_id, kpi_value, period_start')
       .eq('kpi_name', 'triggered_rate')
+      .gte('period_start', twelveMonthsAgo)
       .order('period_start', { ascending: false })
 
-    const analystTriggerRates = new Map<string, number>()
-    const seenTriggerKpiAnalyst = new Set<string>()
+    const triggerAggregates = new Map<string, { triggered: number; total: number }>()
     for (const row of (triggerKpis ?? [])) {
-      if (!row.analyst_id || seenTriggerKpiAnalyst.has(row.analyst_id)) continue
-      seenTriggerKpiAnalyst.add(row.analyst_id)
-      const rate = (row.kpi_value as any)?.value ?? FALLBACK_TRIGGER_PROBABILITY
-      analystTriggerRates.set(row.analyst_id, rate)
+      if (!row.analyst_id) continue
+      const val = row.kpi_value as any
+      const triggered = val?.triggered ?? 0
+      const total = val?.total_setups ?? 0
+      if (total === 0) continue
+      const existing = triggerAggregates.get(row.analyst_id) ?? { triggered: 0, total: 0 }
+      triggerAggregates.set(row.analyst_id, { triggered: existing.triggered + triggered, total: existing.total + total })
     }
-    console.log(`  Analyst trigger-rate KPIs loaded: ${analystTriggerRates.size}`)
+
+    const analystTriggerRates = new Map<string, number>()
+    for (const [analystId, agg] of triggerAggregates) {
+      analystTriggerRates.set(analystId, agg.total > 0 ? agg.triggered / agg.total : FALLBACK_TRIGGER_PROBABILITY)
+    }
+    console.log(`  Analyst trigger-rate KPIs loaded: ${analystTriggerRates.size} (12-month rolling aggregate)`)
 
     const twoYearsAgo = new Date(Date.now() - 2 * 365 * 24 * 60 * 60 * 1000).toISOString()
     const PAGE_SIZE = 1000
