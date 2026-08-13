@@ -6,8 +6,11 @@ interface Review {
   session: string
   direction_alignment: string
   entry_alignment: string
+  stop_alignment: string
+  target_alignment: string
   alignment_score: number
   review_status: string
+  analyst_facing_review: string
   created_at: string
 }
 
@@ -22,7 +25,7 @@ export function CompliancePanel({ reviews }: CompliancePanelProps) {
   const total = reviews.length
   const directionAligned = reviews.filter(r => r.direction_alignment === 'Aligned').length
   const entryAligned = reviews.filter(r => r.entry_alignment === 'High').length
-  const fullAlignment = reviews.filter(r => r.alignment_score === 2).length
+  const fullAlignment = reviews.filter(r => r.alignment_score === 4).length
 
   return (
     <section className="space-y-3">
@@ -63,7 +66,7 @@ export function CompliancePanel({ reviews }: CompliancePanelProps) {
                 {Math.round((fullAlignment / total) * 100)}%
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                {fullAlignment}/{total} trades matched both direction and entry
+                {fullAlignment}/{total} trades matched direction, entry, stop and target
               </p>
             </div>
           </div>
@@ -104,7 +107,7 @@ export function CompliancePanel({ reviews }: CompliancePanelProps) {
                         {review.entry_alignment}
                       </span>
                     </td>
-                    <td className="px-4 py-2.5 font-medium">{review.alignment_score}/2</td>
+                    <td className="px-4 py-2.5 font-medium">{review.alignment_score}/4</td>
                     <td className="px-4 py-2.5 text-xs text-muted-foreground">{review.review_status}</td>
                   </tr>
                 ))}
