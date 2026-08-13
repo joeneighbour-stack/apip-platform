@@ -44,11 +44,10 @@ export default async function ManagementWorkspacePage() {
     .from('trade_disputes')
     .select(`
       dispute_id, dispute_type, analyst_note, status,
-      original_values, created_at,
+      created_at, raised_by_analyst_id,
       trade:trade_id (
-        direction, entry, result_r, triggered,
-        market:market_id ( symbol ),
-        analyst:analyst_id ( display_name )
+        direction, entry, result_r, triggered, published_at, market_id,
+        market:market_id ( symbol )
       ),
       analyst:raised_by_analyst_id ( display_name )
     `)
@@ -151,7 +150,7 @@ export default async function ManagementWorkspacePage() {
 
       {/* Disputes */}
       <div id="disputes">
-        <DisputeQueue disputes={disputes ?? []} isAdmin={user.role === 'ADMIN'} />
+        <DisputeQueue disputes={(disputes ?? []) as any} />
       </div>
     </div>
   )

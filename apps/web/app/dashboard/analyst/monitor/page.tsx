@@ -138,6 +138,8 @@ export default async function AnalystMonitorPage() {
           trades={tradesWithDetails}
           analystId={user.analystId!}
           disputesByTradeId={disputesByTradeId}
+          currentUserRole={user.role as 'ANALYST' | 'MANAGER' | 'ADMIN'}
+          currentUserDisplayName={user.displayName}
         />
       </section>
     </div>

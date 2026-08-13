@@ -6,13 +6,40 @@ import { UserManagementPanel } from '@/components/admin/UserManagementPanel'
 import { MarketManagementPanel } from '@/components/admin/MarketManagementPanel'
 import { AnalystManagementPanel } from '@/components/admin/AnalystManagementPanel'
 import { ThresholdsPanel } from '@/components/admin/ThresholdsPanel'
-import { DisputeResolutionPanel } from '@/components/admin/DisputeResolutionPanel'
 import { ManualTradeEntryPanel } from '@/components/admin/ManualTradeEntryPanel'
 import { NotificationsPanel } from '@/components/management/NotificationsPanel'
 
-export default async function AdminCentrePage() {
+interface PageProps {
+  // Populated by DisputeQueue's "Add manual trade entry" link on a MISSED_TRIGGER
+  // dispute -- a JSON-encoded {analystId, marketId, direction, date}, used to pre-fill
+  // ManualTradeEntryPanel's form instead of the manager re-typing what the dispute
+  // already establishes.
+  searchParams: Promise<{ prefill?: string }>
+}
+
+interface ManualEntryPrefill {
+  analystId?: string
+  marketId?: string
+  direction?: 'BUY' | 'SELL'
+  date?: string
+}
+
+function parsePrefill(raw: string | undefined): ManualEntryPrefill | undefined {
+  if (!raw) return undefined
+  try {
+    const parsed = JSON.parse(raw)
+    return typeof parsed === 'object' && parsed !== null ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export default async function AdminCentrePage({ searchParams }: PageProps) {
   const user = await getCurrentUser()
   if (!['ADMIN', 'MANAGER'].includes(user.role)) redirect('/login')
+
+  const { prefill } = await searchParams
+  const manualEntryPrefill = parsePrefill(prefill)
 
   const supabase = await createClient()
 
@@ -41,22 +68,6 @@ export default async function AdminCentrePage() {
     .select('analyst_id, display_name, active, sessions')
     .order('display_name')
 
-  // Trade disputes
-  const { data: disputes } = await supabase
-    .from('trade_disputes')
-    .select(`
-      dispute_id, status, dispute_type, analyst_note, admin_note,
-      original_values, override_values, created_at,
-      trade:trade_id (
-        trade_id, entry, stop, target, triggered, result_r,
-        published_at, direction,
-        market:market_id ( symbol )
-      ),
-      analyst:raised_by_analyst_id ( display_name )
-    `)
-    .order('created_at', { ascending: false })
-    .limit(50)
-
   // All notifications for admin (all severities)
   const { data: notifications } = await supabase
     .from('notifications')
@@ -76,8 +87,7 @@ export default async function AdminCentrePage() {
 
       <NotificationsPanel notifications={notifications ?? []} showAll={true} />
       <EngineRunsPanel runs={engineRuns ?? []} />
-      <DisputeResolutionPanel disputes={disputes ?? []} />
-      <ManualTradeEntryPanel analysts={(analysts as any[]) ?? []} markets={(markets as any[]) ?? []} />
+      <ManualTradeEntryPanel analysts={(analysts as any[]) ?? []} markets={(markets as any[]) ?? []} initialValues={manualEntryPrefill} />
       <UserManagementPanel users={appUsers ?? []} analysts={analysts ?? []} isAdmin={user.role === 'ADMIN'} />
       <AnalystManagementPanel analysts={analysts ?? []} />
       <MarketManagementPanel markets={markets ?? []} />

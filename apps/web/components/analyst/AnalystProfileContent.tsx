@@ -1,4 +1,5 @@
 import { notFound } from 'next/navigation'
+import { getCurrentUser } from '@/lib/auth'
 import { getAnalystProfileData } from '@/lib/analystProfile'
 import { KpiSummary } from './KpiSummary'
 import { PerformanceBreakdown } from './PerformanceBreakdown'
@@ -44,6 +45,13 @@ function stripBoilerplate(note: string | null): string {
 export async function AnalystProfileContent({ analystId, subtitle, backHref, backLabel = 'Back', mode = 'full' }: Props) {
   const data = await getAnalystProfileData(analystId, mode)
   if (!data.analyst) notFound()
+
+  // Only needed by the Trade Log's Flag button (mode='full') -- fetched unconditionally
+  // anyway since every page in this app that needs the viewer's identity calls
+  // getCurrentUser() itself rather than threading it down as a prop, and the caller
+  // pages here (analyst/performance, management/analyst/[id]/full) already call it once
+  // for their own role gate.
+  const currentUser = await getCurrentUser()
 
   const {
     analyst, recommendations, eventsByMarket, kpis, kpiTrend,
@@ -243,6 +251,8 @@ export async function AnalystProfileContent({ analystId, subtitle, backHref, bac
           trades={recentTradesWithDetails}
           analystId={analystId}
           disputesByTradeId={disputesByTradeId}
+          currentUserRole={currentUser.role as 'ANALYST' | 'MANAGER' | 'ADMIN'}
+          currentUserDisplayName={currentUser.displayName}
         />
       </section>
     </div>

@@ -15,9 +15,20 @@ interface Market {
   active: boolean
 }
 
+interface ManualEntryInitialValues {
+  analystId?: string
+  marketId?: string
+  direction?: 'BUY' | 'SELL'
+  date?: string
+}
+
 interface Props {
   analysts: Analyst[]
   markets: Market[]
+  // Pre-fills analyst/market/direction/date from a MISSED_TRIGGER dispute's "Add manual
+  // trade entry" link (see DisputeQueue.tsx) -- price fields are deliberately never
+  // pre-filled, those still have to be entered/verified by whoever's completing this.
+  initialValues?: ManualEntryInitialValues
 }
 
 type Direction = 'BUY' | 'SELL'
@@ -35,10 +46,16 @@ function calcResultR(direction: Direction, entry: number, stop: number, exit: nu
 
 interface DuplicateRow { trade_id: string; published_at: string; result_r: number | null; triggered: boolean; source_system: string }
 
-export function ManualTradeEntryPanel({ analysts, markets }: Props) {
+export function ManualTradeEntryPanel({ analysts, markets, initialValues }: Props) {
   const router = useRouter()
-  const [open, setOpen] = useState(false)
-  const [form, setForm] = useState({ ...EMPTY_FORM, date: todayIso() })
+  const [open, setOpen] = useState(!!initialValues)
+  const [form, setForm] = useState({
+    ...EMPTY_FORM,
+    date: initialValues?.date || todayIso(),
+    analystId: initialValues?.analystId ?? '',
+    marketId: initialValues?.marketId ?? '',
+    direction: initialValues?.direction ?? 'BUY',
+  })
   const [marketSearch, setMarketSearch] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)

@@ -24,15 +24,25 @@ interface Dispute {
 interface TradeHistoryTableProps {
   trades: Trade[]
   disputesByTradeId: Map<string, Dispute>
+  // The analyst whose trade history this is -- always the analyst themselves when
+  // currentUserRole is ANALYST, or the analyst being viewed when a manager/admin is
+  // looking at someone else's profile.
   analystId: string
+  currentUserRole: 'ANALYST' | 'MANAGER' | 'ADMIN'
+  currentUserDisplayName: string
 }
 
-export function TradeHistoryTable({ trades, disputesByTradeId, analystId }: TradeHistoryTableProps) {
+export function TradeHistoryTable({
+  trades, disputesByTradeId, analystId, currentUserRole, currentUserDisplayName,
+}: TradeHistoryTableProps) {
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null)
   const [filterMarket, setFilterMarket] = useState('')
   const [filterDirection, setFilterDirection] = useState('')
 
   const markets = [...new Set(trades.map(t => t.market?.symbol).filter(Boolean))]
+  // Analysts can flag their own trades; managers/admins can flag on behalf of the
+  // analyst whose profile they're viewing (see DisputeModal's raiseDispute() call).
+  const canFlag = (['ANALYST', 'MANAGER', 'ADMIN'] as const).includes(currentUserRole)
 
   const filtered = trades.filter(t => {
     if (filterMarket && t.market?.symbol !== filterMarket) return false
@@ -135,14 +145,14 @@ export function TradeHistoryTable({ trades, disputesByTradeId, analystId }: Trad
                         }`}>
                           {dispute.status}
                         </span>
-                      ) : (
+                      ) : canFlag ? (
                         <button
                           onClick={() => setSelectedTrade(trade)}
                           className="text-xs px-2 py-1 rounded-md border border-border hover:bg-muted transition-colors text-muted-foreground"
                         >
                           Flag
                         </button>
-                      )}
+                      ) : null}
                     </td>
                   </tr>
                 )
@@ -156,6 +166,8 @@ export function TradeHistoryTable({ trades, disputesByTradeId, analystId }: Trad
         <DisputeModal
           trade={selectedTrade}
           analystId={analystId}
+          currentUserRole={currentUserRole}
+          currentUserDisplayName={currentUserDisplayName}
           onClose={() => setSelectedTrade(null)}
         />
       )}

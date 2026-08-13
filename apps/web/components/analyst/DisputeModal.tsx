@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { raiseDispute } from '@/app/actions/disputes'
 
 interface Trade {
   trade_id: string
@@ -15,7 +15,10 @@ interface Trade {
 
 interface DisputeModalProps {
   trade: Trade
+  // The analyst whose trade this is -- see TradeHistoryTable's analystId prop.
   analystId: string
+  currentUserRole: 'ANALYST' | 'MANAGER' | 'ADMIN'
+  currentUserDisplayName: string
   onClose: () => void
 }
 
@@ -26,14 +29,14 @@ const DISPUTE_TYPES = [
   { value: 'OTHER', label: 'Other — describe in the note below' },
 ]
 
-export function DisputeModal({ trade, analystId, onClose }: DisputeModalProps) {
+export function DisputeModal({ trade, analystId, currentUserRole, currentUserDisplayName, onClose }: DisputeModalProps) {
   const [disputeType, setDisputeType] = useState('')
   const [note, setNote] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [submitted, setSubmitted] = useState(false)
 
-  const supabase = createClient()
+  const isOnBehalf = currentUserRole !== 'ANALYST'
 
   async function handleSubmit() {
     if (!disputeType) { setError('Please select a dispute type.'); return }
@@ -49,18 +52,13 @@ export function DisputeModal({ trade, analystId, onClose }: DisputeModalProps) {
       published_at: trade.published_at,
     }
 
-    const { error: insertError } = await (supabase.from('trade_disputes') as any)
-      .insert({
-        trade_id: trade.trade_id,
-        raised_by_analyst_id: analystId,
-        dispute_type: disputeType,
-        analyst_note: note.trim() || null,
-        original_values: originalValues,
-        status: 'OPEN',
-      })
+    // Server-side: resolves who's actually raising this (getCurrentUser()) rather than
+    // trusting these client props for the attribution written to the DB -- see
+    // raiseDispute()'s comment in app/actions/disputes.ts.
+    const result = await raiseDispute(analystId, trade.trade_id, disputeType, note, originalValues)
 
-    if (insertError) {
-      setError(insertError.message)
+    if (!result.success) {
+      setError(result.error ?? 'Failed to raise dispute.')
       setSubmitting(false)
       return
     }
@@ -80,7 +78,9 @@ export function DisputeModal({ trade, analystId, onClose }: DisputeModalProps) {
         {submitted ? (
           <div className="text-center py-4 space-y-2">
             <p className="font-medium text-green-700">Dispute raised successfully</p>
-            <p className="text-sm text-muted-foreground">Your manager will review and respond.</p>
+            <p className="text-sm text-muted-foreground">
+              {isOnBehalf ? 'Recorded as raised on the analyst\'s behalf.' : 'Your manager will review and respond.'}
+            </p>
           </div>
         ) : (
           <>
@@ -95,6 +95,12 @@ export function DisputeModal({ trade, analystId, onClose }: DisputeModalProps) {
                 ✕
               </button>
             </div>
+
+            {isOnBehalf && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-md px-3 py-2">
+                You're flagging this on the analyst's behalf, as {currentUserDisplayName}. That's recorded on the dispute.
+              </p>
+            )}
 
             <div className="rounded-md bg-muted/50 p-3 text-xs space-y-1">
               <p>Entry: <span className="font-medium tabular-nums">{Number(trade.entry).toFixed(4)}</span></p>
