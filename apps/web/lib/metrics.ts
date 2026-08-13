@@ -420,20 +420,32 @@ export interface TradeStatisticsSummary {
   avgDurationHours: number | null
 }
 
-// "Generated" and "Expired" are counted from `pubs` (already ACUITY_PERFORMANCE_API
-// only, per the /api/analytics/publications route), not from `trades` -- actual_trades
-// mixes in MANUAL_BACKFILL rows, which either duplicate recent API-sourced trades or
-// (for genuinely historical dates) were never published through the webhook feed at
-// all, so counting "generated"/"expired" off `trades` inflates or deflates these
-// operational figures depending on the window. `analyst_publications` is the record
-// of every setup actually published, so it's the correct source for both.
+// "Generated", "Triggered", "Expired" and "Trigger Rate" here all derive from the SAME
+// array (`pubs`), the record of every setup actually published, so the four reconcile
+// by construction (generated = triggered + expired, trigger rate = triggered/generated)
+// -- not from `trades` (actual_trades): that table mixes in MANUAL_BACKFILL rows, which
+// either duplicate recent API-sourced trades or (for genuinely historical dates) were
+// never published through the webhook feed at all, so counting any of these four off
+// `trades` inflates or deflates them relative to the others depending on the window.
+// `triggered` here used to come from triggeredTrades(trades).length -- a different
+// dataset than generated/expired's `pubs`, so the three never summed correctly and this
+// table's own displayed Trigger Rate (via triggerRate()'s calculateKpis.ts-matching
+// monthly-averaged formula, see that function's own comment) didn't equal
+// triggered/generated either, since it isn't a plain ratio by design. That formula is
+// still correct and still used by computeSummary() above for parity with
+// calculateKpis.ts's actual KPI figure -- it's just not what this table's four adjacent
+// fields need to visibly reconcile with each other.
 export function computeTradeStatistics(trades: MetricsTrade[], pubs: MetricsPublication[]): TradeStatisticsSummary {
   const triggered = triggeredTrades(trades)
   const wins = triggered.filter(t => (t.result_r ?? 0) > 0)
   const losses = triggered.filter(t => (t.result_r ?? 0) < 0)
   const avgWinner = wins.length > 0 ? wins.reduce((s, t) => s + (t.result_r ?? 0), 0) / wins.length : null
   const avgLoser = losses.length > 0 ? losses.reduce((s, t) => s + (t.result_r ?? 0), 0) / losses.length : null
-  const expired = pubs.filter(p => p.reconciliation_status !== 'WEBHOOK_TRUE').length
+
+  const generated = pubs.length
+  const triggeredCount = pubs.filter(p => p.reconciliation_status === 'WEBHOOK_TRUE').length
+  const expired = generated - triggeredCount
+
   const durations = trades
     .filter(t => t.triggered && t.closed_at)
     .map(t => (new Date(t.closed_at as string).getTime() - new Date(t.published_at).getTime()) / (60 * 60 * 1000))
@@ -450,9 +462,9 @@ export function computeTradeStatistics(trades: MetricsTrade[], pubs: MetricsPubl
     avgLoser: avgLoser !== null ? round2(avgLoser) : null,
     avgR: avg !== null ? round2(avg) : null,
     profitFactor: pf !== null ? round2(pf) : null,
-    triggerRate: triggerRate(pubs),
-    generated: pubs.length,
-    triggered: triggered.length,
+    triggerRate: generated > 0 ? triggeredCount / generated : null,
+    generated,
+    triggered: triggeredCount,
     expired,
     avgDurationHours: avgDurationHours !== null ? Math.round(avgDurationHours * 10) / 10 : null,
   }

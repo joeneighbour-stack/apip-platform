@@ -8,6 +8,24 @@ interface Props {
   distribution: DistributionBucket[]
 }
 
+// Explicit, deterministic y-axis ticks rather than Recharts' auto-generated ones --
+// guarantees round numbers (multiples of a nice interval) ascending from 0, verified by
+// the regression guard below rather than trusted implicitly.
+function computeDistributionTicks(bins: DistributionBucket[]): number[] {
+  const maxCount = bins.reduce((m, b) => Math.max(m, b.count), 0)
+  const tickInterval = Math.max(1, Math.ceil(maxCount / 5 / 1000) * 1000)
+  const ticks = Array.from(
+    { length: Math.ceil(maxCount / tickInterval) + 1 },
+    (_, i) => i * tickInterval
+  )
+
+  // Regression check -- ticks must be strictly ascending.
+  const isAscending = ticks.every((t, i) => i === 0 || t > ticks[i - 1]!)
+  if (!isAscending) throw new Error('Chart y-axis ticks are not ascending')
+
+  return ticks
+}
+
 const ROWS: { key: keyof TradeStatisticsSummary; label: string; fmt: (v: any) => string }[] = [
   { key: 'winRate', label: 'Win Rate', fmt: formatPercent },
   { key: 'lossRate', label: 'Loss Rate', fmt: formatPercent },
@@ -26,6 +44,7 @@ const ROWS: { key: keyof TradeStatisticsSummary; label: string; fmt: (v: any) =>
 // performance is consistent, dependent on outsized winners, or a high-frequency-small-
 // wins pattern, not a stylistic flourish.
 export function TradeStatistics({ stats, distribution }: Props) {
+  const distributionTicks = distribution.length > 0 ? computeDistributionTicks(distribution) : []
   return (
     <div className="space-y-4">
       <div className="space-y-2">
@@ -51,7 +70,8 @@ export function TradeStatistics({ stats, distribution }: Props) {
               <BarChart data={distribution} margin={{ top: 4, right: 8, left: 0, bottom: 20 }}>
                 <XAxis dataKey="label" tick={{ fontSize: 9 }} axisLine={false} tickLine={false}
                   interval={0} angle={-40} textAnchor="end" height={40} />
-                <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} width={28} />
+                <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} width={28}
+                  ticks={distributionTicks} domain={[0, distributionTicks[distributionTicks.length - 1]]} />
                 <Tooltip formatter={(v: any) => [v, 'Trades']} contentStyle={{ fontSize: 11 }} />
                 <Bar dataKey="count" radius={[2, 2, 0, 0]} isAnimationActive={false}>
                   {distribution.map((b, i) => <Cell key={i} fill={b.rangeStart >= 0 ? '#22c55e' : '#ef4444'} />)}

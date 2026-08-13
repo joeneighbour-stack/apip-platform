@@ -5,14 +5,19 @@ interface Props {
   universe: ReportSafeUniverse
 }
 
-// Text wordmark placeholder -- no logo asset exists anywhere in the repo (verified: no
-// /public dir, no SVG/PNG anywhere). Swapping in a real logo file later only means
-// replacing the contents of ReportLogo, not touching layout elsewhere.
+// Vector logo (public/acuity-logo-black.svg) -- extracted from the black wordmark PDF
+// supplied directly for this report (no rasterisation: PyMuPDF's SVG export reproduces
+// the PDF's own vector paths, so it stays crisp at any print size). Plain <img>, not
+// next/image -- this component sits off-screen at all times via PerformanceReport.tsx's
+// `absolute -left-[9999px]` (only flips into flow under @media print), and next/image's
+// lazy-loading is keyed off viewport intersection, which off-screen content never
+// triggers -- the same reasoning that component's own comment gives for why its charts
+// render off-screen rather than only-on-print.
 function ReportLogo() {
   return (
     <div>
-      <p className="text-[15pt] font-bold tracking-tight">{COMPANY_NAME}</p>
-      <p className="text-[8pt] uppercase tracking-widest text-black/60">Performance Research</p>
+      <img src="/acuity-logo-black.svg" alt={COMPANY_NAME} className="h-[20pt] w-auto" />
+      <p className="text-[7pt] uppercase tracking-widest text-black/60 mt-1">{COMPANY_NAME} &middot; Performance Research</p>
     </div>
   )
 }
