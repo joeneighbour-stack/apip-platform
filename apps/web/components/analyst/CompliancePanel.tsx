@@ -89,11 +89,24 @@ export function CompliancePanel({ reviews }: CompliancePanelProps) {
             </div>
           </div>
 
+          {directionAligned === total && total > 0 && (
+            <p className="text-xs text-amber-700 bg-amber-50 px-2 py-1.5 rounded mt-2">
+              These reviews only include trades that matched the coaching direction.
+              Counter-direction trades will appear as the platform captures more live data.
+            </p>
+          )}
+
           {/* Performance vs alignment */}
           {closedReviews.length > 0 && (
             <div className="mt-4 rounded-lg border border-border p-4">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-3">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">
                 Performance vs alignment
+              </p>
+              <p className="text-xs text-muted-foreground mb-3">
+                Based on {closedReviews.length} closed trade{closedReviews.length !== 1 ? 's' : ''}
+                {closedReviews.length < reviews.length && (
+                  <> &middot; {reviews.length - closedReviews.length} still open</>
+                )}
               </p>
               <div className="grid grid-cols-2 gap-4">
                 <div>
