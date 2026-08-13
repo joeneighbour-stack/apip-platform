@@ -110,4 +110,59 @@ describe('allocateCoverage', () => {
     expect(result.find(r => r.opportunityId === 'opp-A')!.recommendationVersionId).toBe('rv-A');
     expect(result.find(r => r.opportunityId === 'opp-B')!.recommendationVersionId).toBe('rv-B');
   });
+
+  describe('initialWorkload seeding', () => {
+    it('starts an analyst\'s workload from the seed instead of 0', () => {
+      // TIV seeded at 5: TIV score = 1.0 + 0.2 - 5*0.1 = 0.7, IAN/MOH = 1.0 + 0 - 0 = 1.0
+      const result = allocateCoverage({
+        opportunities: [opp({ expectedR: 1.0, assignedAnalystId: 'TIV' })],
+        activeAnalysts: analysts, generateId,
+        initialWorkload: new Map([['TIV', 5]]),
+      });
+      expect(result[0]!.assignedAnalystId).not.toBe('TIV');
+    });
+
+    it('defaults an analyst missing from the seed map to 0, same as when initialWorkload is omitted entirely', () => {
+      const withPartialSeed = allocateCoverage({
+        opportunities: [opp({ expectedR: 1.0, assignedAnalystId: 'TIV' })],
+        activeAnalysts: analysts, generateId,
+        initialWorkload: new Map([['IAN', 5]]), // TIV absent -- should still default to 0
+      });
+      expect(withPartialSeed[0]!.assignedAnalystId).toBe('TIV');
+      expect(withPartialSeed[0]!.allocationScore).toBeCloseTo(1.2, 10);
+    });
+  });
+
+  describe('hard cap at MAX_MARKETS (11)', () => {
+    it('excludes an analyst already at 11 workload, even though they are the preferred/highest-scoring pick', () => {
+      const result = allocateCoverage({
+        opportunities: [opp({ expectedR: 5.0, assignedAnalystId: 'TIV', eligibleAnalysts: ['TIV', 'IAN'] })],
+        activeAnalysts: analysts, generateId,
+        initialWorkload: new Map([['TIV', 11]]),
+      });
+      expect(result[0]!.assignedAnalystId).toBe('IAN');
+    });
+
+    it('falls back to the least-loaded analyst (still assigns) when every eligible analyst is at the cap', () => {
+      const result = allocateCoverage({
+        opportunities: [opp({ expectedR: 1.0, assignedAnalystId: 'TIV', eligibleAnalysts: ['TIV', 'IAN'] })],
+        activeAnalysts: analysts, generateId,
+        initialWorkload: new Map([['TIV', 11], ['IAN', 12]]),
+      });
+      expect(result).toHaveLength(1);
+      expect(result[0]!.assignedAnalystId).toBe('TIV'); // 11 < 12, least loaded of the two
+    });
+
+    it('never increments a capped analyst past their seeded workload across multiple opportunities', () => {
+      const opps = [
+        opp({ opportunityId: 'opp-1', expectedR: 2.0, assignedAnalystId: 'TIV', eligibleAnalysts: ['TIV', 'IAN'] }),
+        opp({ opportunityId: 'opp-2', expectedR: 1.9, assignedAnalystId: 'TIV', eligibleAnalysts: ['TIV', 'IAN'] }),
+      ];
+      const result = allocateCoverage({
+        opportunities: opps, activeAnalysts: analysts, generateId,
+        initialWorkload: new Map([['TIV', 11]]),
+      });
+      expect(result.every(r => r.assignedAnalystId === 'IAN')).toBe(true);
+    });
+  });
 });

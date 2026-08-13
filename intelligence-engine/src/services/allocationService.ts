@@ -20,6 +20,15 @@
 // outcome -- an analyst assigned to one opportunity has higher workload
 // when the next one is scored. Do not parallelize or reorder this loop.
 //
+// HARD CAP (engine review amendment): the soft 0.1-per-market penalty above
+// discourages piling onto a busy analyst but never actually excludes one --
+// analysts already loaded up via a separate analyst-first pass (see
+// initialWorkload below) could still be assigned further fallback markets by
+// a high-enough expectedR run. MAX_MARKETS below excludes an analyst once
+// their workload (seeded + assigned-so-far) reaches it; if every eligible
+// analyst is at the cap, the least-loaded one is used anyway -- an
+// opportunity is never silently dropped for lack of room.
+//
 // ANALYST AVAILABILITY: opt-out model (confirmed against live schema and
 // product clarification). No row in analyst_availability for a given
 // analyst/date/session = available by default. Only an explicit
@@ -50,23 +59,34 @@ export interface AllocateCoverageInput {
   opportunities: OpportunityForAllocation[];
   activeAnalysts: string[];        // list of ALL active analysts, used as the fallback when eligibleAnalysts is empty
   generateId: () => string;        // caller-supplied ID generator -- keeps this a pure, testable function
+  // Seeds the workload tracker below with assignments already made elsewhere this
+  // session/day (analyst-first Step 3/5 picks, cross-session same-day assignments) --
+  // without this, allocateCoverage() has no visibility into an analyst's real total
+  // load and will happily hand fallback markets to someone already near their daily
+  // cap. Analysts absent from the map (or when this is omitted entirely) start at 0,
+  // same as before this parameter existed.
+  initialWorkload?: Map<string, number>;
 }
+
+// Matches MAX_MARKETS_PER_ANALYST in runEngineSession.ts -- keep the two in sync.
+const MAX_MARKETS = 11;
 
 // Fixed string from the notebook -- not computed, not parameterised.
 // See Architecture Section 3.12.
 const REASON_SUMMARY = 'Assigned using expected R, profile fit and workload balancing.';
 
 export function allocateCoverage(input: AllocateCoverageInput): AllocationOutput[] {
-  const { opportunities, activeAnalysts, generateId } = input;
+  const { opportunities, activeAnalysts, generateId, initialWorkload } = input;
 
   if (opportunities.length === 0) return [];
 
   // Workload tracker -- keyed by analyst, incremented after each assignment.
-  // Starts at 0 for every active analyst, not just those who appear in
-  // eligible lists -- matching the notebook's `{a:0 for a in active_analysts}`.
+  // Starts every active analyst at their initialWorkload seed (0 when unseeded or
+  // the analyst isn't in the map), not just those who appear in eligible lists --
+  // matching the notebook's `{a:0 for a in active_analysts}` when no seed is given.
   const workload: Record<string, number> = {};
   for (const analyst of activeAnalysts) {
-    workload[analyst] = 0;
+    workload[analyst] = initialWorkload?.get(analyst) ?? 0;
   }
 
   // Sort by expected_r descending -- this ordering is part of the algorithm,
@@ -92,13 +112,23 @@ export function allocateCoverage(input: AllocateCoverageInput): AllocationOutput
       continue;
     }
 
-    const scores: { analyst: string; score: number }[] = eligible.map((analyst) => ({
-      analyst,
-      score:
-        opp.expectedR +
-        (analyst === opp.assignedAnalystId ? 0.2 : 0) -
-        (workload[analyst] ?? 0) * 0.1,
-    }));
+    const scoreFor = (analyst: string): number =>
+      opp.expectedR +
+      (analyst === opp.assignedAnalystId ? 0.2 : 0) -
+      (workload[analyst] ?? 0) * 0.1;
+
+    // Hard cap: exclude anyone already at MAX_MARKETS before scoring.
+    let scores: { analyst: string; score: number }[] = eligible
+      .filter((analyst) => (workload[analyst] ?? 0) < MAX_MARKETS)
+      .map((analyst) => ({ analyst, score: scoreFor(analyst) }));
+
+    // Every eligible analyst is already at the cap -- an opportunity must still be
+    // assigned to someone, so fall back to whoever is least loaded rather than
+    // dropping it.
+    if (scores.length === 0) {
+      const leastLoaded = [...eligible].sort((a, b) => (workload[a] ?? 0) - (workload[b] ?? 0))[0]!;
+      scores = [{ analyst: leastLoaded, score: scoreFor(leastLoaded) }];
+    }
 
     // Sort descending by score, take the first -- matching the notebook's
     // `sorted(scores, key=lambda x:x[1], reverse=True)[0][0]`

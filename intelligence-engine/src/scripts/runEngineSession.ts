@@ -500,8 +500,10 @@ async function main() {
 
     // Tracks analyst-first assignments across this whole markets loop (not per-market) so
     // workloadAdjustedScore() can see how loaded an analyst already is before handing them
-    // another market. Fallback (non-analyst-first) assignments in Step 4 go through the
-    // separate, already workload-balanced allocateCoverage() and aren't counted here.
+    // another market. Also seeded into allocateCoverage() in Step 4 below (as
+    // initialWorkload) so fallback assignments see this same running total instead of
+    // starting fresh from 0 -- without that, an analyst already at 10 analyst-first
+    // markets could still be freely handed fallback markets on top.
     const analystWorkload = new Map<string, number>()
     for (const a of eligibleAnalysts) {
       analystWorkload.set(a.analyst, 0)
@@ -760,7 +762,9 @@ async function main() {
       // Step 3's scoring pass -- the highest-scoring analyst per market IS the
       // allocation, no separate scoring/workload pass needed for these.
       // Fallback items (no analyst had a profile match) still go through the
-      // pre-Step-5 workload-balanced allocateCoverage() pass, unchanged.
+      // pre-Step-5 workload-balanced allocateCoverage() pass, seeded with
+      // analystWorkload (see initialWorkload below) so it knows about analyst-first
+      // and cross-session load already on the books rather than starting from 0.
       type ResolvedAllocation = {
         allocationId: string; assignedAnalystId: string; eligibleAnalysts: string[]
         allocationScore: number; reasonSummary: string
@@ -804,6 +808,7 @@ async function main() {
           opportunities: allocationInput,
           activeAnalysts: eligibleAnalysts.map(a => a.analyst),
           generateId: randomUUID,
+          initialWorkload: analystWorkload,
         })
 
         for (const a of allocations) {
