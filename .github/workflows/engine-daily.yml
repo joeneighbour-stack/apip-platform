@@ -298,6 +298,15 @@ jobs:
   generate-atr-profiles:
     name: Generate Analyst ATR Profiles
     runs-on: ubuntu-latest
+    # Must run after generate-profiles (0 5 * * 1) -- ATR profiles are derived from
+    # analyst profiles, so reading them before generate-profiles has written this
+    # week's data would produce stale results. GitHub Actions' `needs:` can't bridge
+    # jobs triggered by separate cron schedules (same limitation documented on
+    # engine-european/engine-us/engine-apac above), so there's no way to make that
+    # dependency explicit -- the 45-minute gap between 0 5 * * 1 and 45 5 * * 1 is the
+    # buffer this relies on instead. generate-profiles has consistently finished well
+    # within that window; if it's ever changed to do meaningfully more work, re-check
+    # this gap is still enough.
     if: |
       github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'generate-atr-profiles' ||
       github.event_name == 'schedule' && github.event.schedule == '45 5 * * 1'
