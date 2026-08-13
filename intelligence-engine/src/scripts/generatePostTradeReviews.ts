@@ -87,18 +87,19 @@ function generateReviewText(
   tradeEntry: number,
   entryRangeLow: number,
   entryRangeHigh: number,
-  alignmentScore: number,
   triggered: boolean,
   resultR: number | null,
 ): string {
   const lines: string[] = []
 
+  // Direction alignment
   if (dirAlignment === 'Aligned') {
     lines.push(`Direction aligned with coaching: ${symbol} ${tradeDir} matches the suggested ${coachingDir} setup.`)
   } else {
     lines.push(`Direction diverged from coaching: ${symbol} ${tradeDir} taken; coaching suggested ${coachingDir}.`)
   }
 
+  // Entry alignment
   const entryFmt = tradeEntry.toFixed(4)
   const rangeFmt = `${entryRangeLow.toFixed(4)}\u2013${entryRangeHigh.toFixed(4)}`
   if (entryAlignment === 'High') {
@@ -107,22 +108,30 @@ function generateReviewText(
     lines.push(`Entry ${entryFmt} was outside the suggested range (${rangeFmt}).`)
   }
 
+  // Stop placement
   if (stopAlignment !== 'Unknown') {
     lines.push(`Stop placement: ${stopAlignment === 'High' ? 'within' : 'outside'} the suggested risk range.`)
   }
+
+  // Target placement
   if (targetAlignment !== 'Unknown') {
     lines.push(`Target placement: ${targetAlignment === 'High' ? 'within' : 'outside'} the suggested target range.`)
   }
 
+  // Outcome -- omitted entirely when triggered but still open (resultR null): nothing
+  // useful to say yet, and a "pending" filler line isn't worth the clutter.
   if (!triggered) {
-    lines.push('Trade did not trigger.')
+    lines.push('The setup was not triggered \u2014 the market did not reach the entry range.')
   } else if (resultR !== null) {
-    lines.push(`Trade closed at ${resultR > 0 ? '+' : ''}${resultR.toFixed(2)}R.`)
-  } else {
-    lines.push('Trade triggered \u2014 outcome pending.')
+    if (resultR > 0) {
+      lines.push(`Outcome: +${resultR.toFixed(2)}R \u2014 profitable trade.`)
+    } else if (resultR < 0) {
+      lines.push(`Outcome: ${resultR.toFixed(2)}R \u2014 trade stopped out.`)
+    } else {
+      lines.push('Outcome: breakeven.')
+    }
   }
 
-  lines.push(`Process alignment score: ${alignmentScore}/4 (direction, entry, stop, target adherence).`)
   return lines.join(' ')
 }
 
@@ -233,7 +242,6 @@ async function main() {
       trade.direction, coachingDir,
       dirAlignment, entryAlignment, stopAlignment, targetAlignment,
       Number(trade.entry), Number(rv.entry_range_low), Number(rv.entry_range_high),
-      alignmentScore,
       trade.triggered,
       trade.result_r !== null ? Number(trade.result_r) : null,
     )
