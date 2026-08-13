@@ -7,6 +7,7 @@ import { resolveDispute, rejectDispute } from '@/app/actions/disputes'
 interface Trade {
   direction: string
   entry: number | null
+  stop: number | null
   result_r: number | null
   triggered: boolean
   published_at: string
@@ -36,11 +37,32 @@ const TYPE_LABELS: Record<string, string> = {
   OTHER: 'Other',
 }
 
+function calculateR(
+  exitPrice: number,
+  entry: number,
+  stop: number,
+  direction: string
+): number {
+  const riskDistance = Math.abs(entry - stop)
+  if (riskDistance === 0) return 0
+
+  if (direction === 'BUY') {
+    return (exitPrice - entry) / riskDistance
+  } else {
+    return (entry - exitPrice) / riskDistance
+  }
+}
+
 function DisputeRow({ dispute, onResolved }: { dispute: Dispute; onResolved: (disputeId: string) => void }) {
   const router = useRouter()
   const [expanded, setExpanded] = useState(false)
-  const [resultR, setResultR] = useState(dispute.trade?.result_r?.toString() ?? '')
-  const [triggered, setTriggered] = useState(dispute.trade?.triggered ?? false)
+  const [exitPrice, setExitPrice] = useState('')
+  // MISSED_TRIGGER means the trade should have triggered but wasn't captured as such --
+  // default the toggle to true for that type (the analyst still has to supply the exit
+  // price to compute a result), and to the trade's current value otherwise.
+  const [triggered, setTriggered] = useState(
+    dispute.dispute_type === 'MISSED_TRIGGER' ? true : (dispute.trade?.triggered ?? false)
+  )
   const [adminNote, setAdminNote] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -49,12 +71,52 @@ function DisputeRow({ dispute, onResolved }: { dispute: Dispute; onResolved: (di
   const date = new Date(dispute.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
   const tradeDate = trade ? new Date(trade.published_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : null
 
+  const originalTriggered = trade?.triggered ?? false
+  const parsedExitPrice = exitPrice.trim() !== '' && Number.isFinite(Number(exitPrice)) ? Number(exitPrice) : null
+  const calculatedR = parsedExitPrice != null && trade?.entry != null && trade?.stop != null
+    ? calculateR(parsedExitPrice, trade.entry, trade.stop, trade.direction)
+    : null
+  const rIsImplausible = calculatedR != null && Math.abs(calculatedR) > 10
+
   async function handleResolve() {
     if (!adminNote.trim()) { setError('Admin note is required for resolution'); return }
+
+    const hasExitPrice = exitPrice.trim() !== ''
+    let validatedExitPrice: number | undefined
+    if (hasExitPrice) {
+      const parsed = Number(exitPrice)
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        setError('Exit price must be a valid positive number')
+        return
+      }
+      validatedExitPrice = parsed
+    }
+
+    // "Applying an override" = the manager typed an exit price, or moved the triggered
+    // toggle away from the trade's actual current value (MISSED_TRIGGER's true default
+    // counts, since the trade's actual value is false by definition). Neither happening
+    // means resolve with just the admin note -- a legitimate "reviewed, no change needed"
+    // outcome -- and skip the actual_trades update entirely.
+    const triggeredChanged = triggered !== originalTriggered
+    const applyingOverride = hasExitPrice || triggeredChanged
+
+    // Marking triggered=true needs a result to go with it -- there's nothing to persist
+    // otherwise. Marking triggered=false needs no exit price: an untriggered trade has no
+    // result by definition (resolveDispute() clears result_r for that case server-side).
+    if (applyingOverride && triggered && !hasExitPrice) {
+      setError('Exit price is required to mark this trade as triggered.')
+      return
+    }
+
     setSubmitting(true)
     setError(null)
-    const overrides: { result_r?: number; triggered?: boolean } = { triggered }
-    if (resultR.trim() !== '') overrides.result_r = Number(resultR)
+
+    const overrides: { exit_price?: number; triggered?: boolean } = {}
+    if (applyingOverride) {
+      overrides.triggered = triggered
+      if (hasExitPrice) overrides.exit_price = validatedExitPrice
+    }
+
     const result = await resolveDispute(dispute.dispute_id, adminNote, overrides)
     if (!result.success) { setError(result.error ?? 'Failed to resolve'); setSubmitting(false); return }
     onResolved(dispute.dispute_id)
@@ -122,15 +184,28 @@ function DisputeRow({ dispute, onResolved }: { dispute: Dispute; onResolved: (di
 
           <div className="space-y-2 pt-1 border-t border-border">
             <p className="text-xs font-medium">Apply override (optional) &amp; resolve</p>
+
+            {dispute.dispute_type === 'MISSED_TRIGGER' && (
+              <p className="text-xs text-amber-700 bg-amber-50 px-2 py-1 rounded">
+                Missed trigger — enter the exit price to calculate the result. Trade will be marked as triggered.
+              </p>
+            )}
+
+            {trade && (
+              <div className="text-xs text-muted-foreground">
+                Entry: {trade.entry != null ? Number(trade.entry).toFixed(4) : '—'} · Stop: {trade.stop != null ? Number(trade.stop).toFixed(4) : '—'} · Direction: {trade.direction}
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
               <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">Corrected result R</label>
+                <label className="text-xs text-muted-foreground">Exit price</label>
                 <input
                   type="number"
-                  step="0.001"
-                  value={resultR}
-                  onChange={e => setResultR(e.target.value)}
-                  placeholder="e.g. 1.063"
+                  step="any"
+                  value={exitPrice}
+                  onChange={e => setExitPrice(e.target.value)}
+                  placeholder="Enter exit price"
                   className="w-full text-xs px-2 py-1.5 rounded border border-border bg-background"
                 />
               </div>
@@ -149,6 +224,14 @@ function DisputeRow({ dispute, onResolved }: { dispute: Dispute; onResolved: (di
                 </button>
               </div>
             </div>
+
+            {calculatedR != null && (
+              <div className={`text-xs mt-1 ${rIsImplausible ? 'text-amber-700' : 'text-muted-foreground'}`}>
+                Calculated R: {calculatedR.toFixed(3)}R
+                {rIsImplausible && ' — more than 10R from entry, double-check the exit price.'}
+              </div>
+            )}
+
             <textarea
               value={adminNote}
               onChange={e => setAdminNote(e.target.value)}

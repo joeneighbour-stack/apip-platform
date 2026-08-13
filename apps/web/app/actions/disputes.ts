@@ -22,9 +22,9 @@ function createServiceClient() {
 }
 
 export interface DisputeOverrides {
-  result_r?: number | null
+  exit_price?: number | null
   triggered?: boolean
-  entry?: number | null
+  entry?: number | null // kept in case entry also needs correcting
 }
 
 // The single canonical dispute-resolution path. Replaces the old resolveDispute() (which
@@ -48,9 +48,13 @@ export async function resolveDispute(
 
   // 1. Load the dispute, its current admin_note (may already hold a "raised on behalf
   // of" attribution note from raiseDispute() -- see below), and the trade it's about.
+  // stop/direction are needed here (not just entry/triggered/result_r) because result_r
+  // is no longer taken directly from the caller -- it's computed server-side from
+  // exit_price + entry + stop + direction, the same way a manager's typed exit price
+  // is never trusted as a pre-computed R from the client.
   const { data: dispute, error: loadError } = await serviceClient
     .from('trade_disputes')
-    .select('trade_id, status, admin_note, trade:trade_id ( result_r, triggered, entry )')
+    .select('trade_id, status, admin_note, trade:trade_id ( result_r, triggered, entry, stop, direction )')
     .eq('dispute_id', disputeId)
     .single()
 
@@ -59,12 +63,15 @@ export async function resolveDispute(
     return { success: false, error: 'Dispute is already closed' }
   }
 
-  const trade = dispute.trade as unknown as { result_r: number | null; triggered: boolean; entry: number | null } | null
+  const trade = dispute.trade as unknown as {
+    result_r: number | null; triggered: boolean; entry: number | null; stop: number | null; direction: string
+  } | null
   const hasOverrides = Object.keys(overrides).length > 0
-  let overrideValuesForAudit: DisputeOverrides | null = null
+  let overrideValuesForAudit: Record<string, unknown> | null = null
 
-  // 2. If overrides were provided, snapshot the original values and apply the override
-  // to actual_trades before touching the dispute's own status.
+  // 2. If overrides were provided, snapshot the original values, compute the resulting R
+  // from the exit price (if any), and apply to actual_trades before touching the
+  // dispute's own status.
   if (hasOverrides && trade) {
     const original = {
       result_r: trade.result_r,
@@ -72,13 +79,30 @@ export async function resolveDispute(
       entry: trade.entry,
     }
 
-    const tradeUpdate: DisputeOverrides = { ...overrides }
-    // Untriggered trades don't have a result -- if triggered is explicitly being set to
-    // false, clear result_r regardless of what was passed in. Otherwise keep whatever
-    // result_r ends up set (the override if given, else the trade's existing value).
-    tradeUpdate.result_r = overrides.triggered === false
-      ? null
-      : (overrides.result_r ?? trade.result_r)
+    // entry can be corrected alongside the outcome (e.g. WRONG_ENTRY disputes) -- if it
+    // is, the R calculation below uses the corrected value, not the stale one on file,
+    // so the persisted result_r stays consistent with the persisted entry.
+    const effectiveEntry = overrides.entry ?? trade.entry
+
+    let computedResultR: number | null = trade.result_r
+    if (overrides.triggered === false) {
+      // Untriggered trades don't have a result -- if triggered is explicitly being set
+      // to false, clear result_r regardless of what else was passed in.
+      computedResultR = null
+    } else if (overrides.exit_price != null && effectiveEntry != null && trade.stop != null) {
+      const riskDistance = Math.abs(effectiveEntry - trade.stop)
+      computedResultR = riskDistance > 0
+        ? (trade.direction === 'BUY'
+            ? (overrides.exit_price - effectiveEntry) / riskDistance
+            : (effectiveEntry - overrides.exit_price) / riskDistance)
+        : null
+    }
+
+    const tradeUpdate: { triggered?: boolean; result_r: number | null; entry?: number | null } = {
+      triggered: overrides.triggered,
+      result_r: computedResultR,
+      entry: overrides.entry,
+    }
 
     const { error: tradeError } = await serviceClient
       .from('actual_trades')
@@ -86,7 +110,12 @@ export async function resolveDispute(
       .eq('trade_id', dispute.trade_id)
     if (tradeError) return { success: false, error: `Failed to update trade: ${tradeError.message}` }
 
-    overrideValuesForAudit = tradeUpdate
+    overrideValuesForAudit = {
+      exit_price: overrides.exit_price ?? null,
+      computed_result_r: computedResultR,
+      triggered: overrides.triggered,
+      ...(overrides.entry != null ? { entry: overrides.entry } : {}),
+    }
 
     const { error: valuesError } = await serviceClient
       .from('trade_disputes')

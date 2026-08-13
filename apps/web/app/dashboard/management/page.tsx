@@ -46,7 +46,7 @@ export default async function ManagementWorkspacePage() {
       dispute_id, dispute_type, analyst_note, status,
       created_at, raised_by_analyst_id,
       trade:trade_id (
-        direction, entry, result_r, triggered, published_at, market_id,
+        direction, entry, stop, result_r, triggered, published_at, market_id,
         market:market_id ( symbol )
       ),
       analyst:raised_by_analyst_id ( display_name )
