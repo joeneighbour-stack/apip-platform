@@ -1,0 +1,39 @@
+# ============================================================================
+# Shadow Trade Monitor -- High-Frequency Schedule
+# ============================================================================
+# Split out of engine-daily.yml: this fires every 5 minutes during market hours, and
+# every one of those firings used to trigger the ENTIRE engine-daily.yml workflow (every
+# cron trigger fires the whole workflow, not just the one job it's meant for) -- queuing
+# dozens of runs a day ahead of the low-frequency engine jobs that actually need to run
+# at a precise time. Isolated here so it can't delay them.
+name: Shadow Trade Monitor
+
+on:
+  schedule:
+    - cron: '*/5 5-21 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  shadow-lifecycle:
+    name: Shadow Trade Monitor
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' && github.event.schedule == '*/5 5-21 * * 1-5'
+    defaults:
+      run:
+        working-directory: intelligence-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: intelligence-engine/package-lock.json
+      - run: npm ci
+      - run: npx tsx src/scripts/monitorShadowTrades.ts
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          FINNHUB_CANDLE_API_KEY: ${{ secrets.FINNHUB_CANDLE_API_KEY }}

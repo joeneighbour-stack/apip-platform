@@ -1,11 +1,16 @@
 # ============================================================================
 # APIP Intelligence Engine -- Daily Scheduled Runs
 # ============================================================================
+# Low-frequency engine/weekly jobs only. The high-frequency jobs that used to live here
+# (shadow-lifecycle every 5 minutes, import-actual-trades every 15) are split into their
+# own workflow files (shadow-monitor.yml, import-trades.yml) -- every cron trigger fires
+# the ENTIRE workflow it's declared in, not just the one job it's meant for, so those two
+# firing dozens of times a day was queuing runs ahead of the engine jobs below that need
+# to run at a precise time (e.g. engine-european at 04:50 UTC actually starting on time).
 name: APIP Engine
 
 on:
   schedule:
-    - cron: '*/5 5-21 * * 1-5'
     - cron: '30 4 * * 1-5'
     - cron: '35 4 * * 1-5'
     - cron: '45 4 * * 1-5'
@@ -19,10 +24,6 @@ on:
     - cron: '30 5 * * 1'
     - cron: '45 5 * * 1'
     - cron: '30 22 * * 1-5'
-    # Import actual trades -- every 15 minutes 04:00-20:00 UTC (05:00-21:00 UK)
-    - cron: '*/15 4-20 * * 1-5'
-    # Import actual trades -- every 4 hours outside market hours
-    - cron: '0 0,21,23 * * 1-5'
   workflow_dispatch:
     inputs:
       job:
@@ -42,9 +43,7 @@ on:
           - generate-atr-profiles
           - calculate-kpis
           - calculate-shadow-kpis
-          - shadow-lifecycle
           - condition-awareness
-          - import-actual-trades
           - generate-post-trade-reviews
 
 jobs:
@@ -371,30 +370,6 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
-  shadow-lifecycle:
-    name: Shadow Trade Monitor
-    runs-on: ubuntu-latest
-    if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'shadow-lifecycle' ||
-      github.event_name == 'schedule' && github.event.schedule == '*/5 5-21 * * 1-5'
-    defaults:
-      run:
-        working-directory: intelligence-engine
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: intelligence-engine/package-lock.json
-      - run: npm ci
-      - run: npx tsx src/scripts/monitorShadowTrades.ts
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
-          FINNHUB_CANDLE_API_KEY: ${{ secrets.FINNHUB_CANDLE_API_KEY }}
-
   condition-awareness:
     name: Condition Awareness Check
     runs-on: ubuntu-latest
@@ -416,30 +391,6 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
-
-  import-actual-trades:
-    name: Import Actual Trades
-    runs-on: ubuntu-latest
-    if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'import-actual-trades' ||
-      github.event_name == 'schedule' && (github.event.schedule == '*/15 4-20 * * 1-5' || github.event.schedule == '0 0,21,23 * * 1-5')
-    defaults:
-      run:
-        working-directory: intelligence-engine
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: intelligence-engine/package-lock.json
-      - run: npm ci
-      - run: npx tsx src/scripts/importActualTrades.ts
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          N8N_WEBHOOK_USERNAME: ${{ secrets.N8N_WEBHOOK_USERNAME }}
-          N8N_WEBHOOK_PASSWORD: ${{ secrets.N8N_WEBHOOK_PASSWORD }}
 
   generate-post-trade-reviews:
     name: Generate Post-Trade Reviews

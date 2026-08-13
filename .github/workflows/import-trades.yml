@@ -1,0 +1,42 @@
+# ============================================================================
+# Import Actual Trades -- High-Frequency Schedule
+# ============================================================================
+# Split out of engine-daily.yml for the same reason as shadow-monitor.yml: this fires
+# every 15 minutes during market hours (plus every 4 hours off-hours), and every one of
+# those firings used to trigger the ENTIRE engine-daily.yml workflow, queuing runs ahead
+# of the low-frequency engine jobs that need to run at a precise time. Isolated here so
+# it can't delay them.
+name: Import Actual Trades
+
+on:
+  schedule:
+    # Every 15 minutes 04:00-20:00 UTC (05:00-21:00 UK)
+    - cron: '*/15 4-20 * * 1-5'
+    # Every 4 hours outside market hours
+    - cron: '0 0,21,23 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  import-actual-trades:
+    name: Import Actual Trades
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' && (github.event.schedule == '*/15 4-20 * * 1-5' || github.event.schedule == '0 0,21,23 * * 1-5')
+    defaults:
+      run:
+        working-directory: intelligence-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: intelligence-engine/package-lock.json
+      - run: npm ci
+      - run: npx tsx src/scripts/importActualTrades.ts
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          N8N_WEBHOOK_USERNAME: ${{ secrets.N8N_WEBHOOK_USERNAME }}
+          N8N_WEBHOOK_PASSWORD: ${{ secrets.N8N_WEBHOOK_PASSWORD }}
