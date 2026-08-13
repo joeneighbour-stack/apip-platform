@@ -120,7 +120,7 @@ export function PerformanceReport({ data }: Props) {
             <div className="mb-4"><ReportBestPerformers best={data.bestWorst.best} /></div>
           )}
           {hasBestWorst && (
-            <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-4">
               <AttributionTable title={`Best Performing Markets (min ${MIN_TRADES_FOR_MARKET_RANKING} trades)`}
                 rows={data.bestMarkets} showMaxDD={false} />
               <AttributionTable title={`Worst Performing Markets (min ${MIN_TRADES_FOR_MARKET_RANKING} trades)`}
