@@ -12,6 +12,7 @@ interface Review {
   review_status: string
   analyst_facing_review: string
   created_at: string
+  trade: { result_r: number | null; triggered: boolean } | null
 }
 
 interface CompliancePanelProps {
@@ -26,6 +27,20 @@ export function CompliancePanel({ reviews }: CompliancePanelProps) {
   const directionAligned = reviews.filter(r => r.direction_alignment === 'Aligned').length
   const entryAligned = reviews.filter(r => r.entry_alignment === 'High').length
   const fullAlignment = reviews.filter(r => r.alignment_score === 4).length
+
+  // Performance vs alignment -- only closed (result_r known) trades count, since an
+  // open/untriggered trade has no outcome to average in either direction.
+  const closedReviews = reviews.filter(r => r.trade?.result_r != null)
+  const alignedTrades = closedReviews.filter(r => r.alignment_score >= 3)
+  const notAlignedTrades = closedReviews.filter(r => r.alignment_score <= 2)
+
+  const alignedAvgR = alignedTrades.length > 0
+    ? alignedTrades.reduce((s, r) => s + Number(r.trade?.result_r ?? 0), 0) / alignedTrades.length
+    : null
+
+  const notAlignedAvgR = notAlignedTrades.length > 0
+    ? notAlignedTrades.reduce((s, r) => s + Number(r.trade?.result_r ?? 0), 0) / notAlignedTrades.length
+    : null
 
   return (
     <section className="space-y-3">
@@ -70,6 +85,40 @@ export function CompliancePanel({ reviews }: CompliancePanelProps) {
               </p>
             </div>
           </div>
+
+          {/* Performance vs alignment */}
+          {closedReviews.length > 0 && (
+            <div className="mt-4 rounded-lg border border-border p-4">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-3">
+                Performance vs alignment
+              </p>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-xs text-muted-foreground">When aligned (score &ge; 3)</p>
+                  <p className={`text-xl font-semibold mt-1 ${alignedAvgR !== null && alignedAvgR >= 0 ? 'text-green-700' : 'text-red-600'}`}>
+                    {alignedAvgR !== null ? `${alignedAvgR >= 0 ? '+' : ''}${alignedAvgR.toFixed(2)}R` : '—'}
+                  </p>
+                  <p className="text-xs text-muted-foreground">{alignedTrades.length} trades</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">When not aligned (score &le; 2)</p>
+                  <p className={`text-xl font-semibold mt-1 ${notAlignedAvgR !== null && notAlignedAvgR >= 0 ? 'text-green-700' : 'text-red-600'}`}>
+                    {notAlignedAvgR !== null ? `${notAlignedAvgR >= 0 ? '+' : ''}${notAlignedAvgR.toFixed(2)}R` : '—'}
+                  </p>
+                  <p className="text-xs text-muted-foreground">{notAlignedTrades.length} trades</p>
+                </div>
+              </div>
+              {alignedAvgR !== null && notAlignedAvgR !== null && (
+                <p className="text-xs text-muted-foreground mt-3 pt-3 border-t border-border">
+                  {alignedAvgR > notAlignedAvgR
+                    ? `Following coaching adds ${(alignedAvgR - notAlignedAvgR).toFixed(2)}R per trade on average.`
+                    : alignedAvgR < notAlignedAvgR
+                    ? `Diverging from coaching has added ${(notAlignedAvgR - alignedAvgR).toFixed(2)}R per trade — worth reviewing why.`
+                    : 'No meaningful difference between aligned and non-aligned trades yet.'}
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Recent reviews table */}
           <div className="rounded-lg border border-border overflow-hidden">

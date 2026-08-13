@@ -25,7 +25,7 @@ export default async function AnalystMonitorPage() {
     .lt('published_at', yesterdayStr + 'T23:59:59Z')
 
   const ytrades = (yesterdayTrades ?? []) as any[]
-  const yTriggered = ytrades.filter(t => t.triggered)
+  const yTriggered = ytrades.filter(t => t.triggered === true)
   const yClosed = ytrades.filter(t => t.result_r !== null)
   const yWins = yClosed.filter(t => Number(t.result_r) > 0)
   const yReturn = yClosed.reduce((s, t) => s + Number(t.result_r), 0)
@@ -74,7 +74,12 @@ export default async function AnalystMonitorPage() {
   const { data: reviews } = tradeIdList.length > 0
     ? await supabase
         .from('post_trade_reviews')
-        .select('review_id, market, session, direction_alignment, entry_alignment, stop_alignment, target_alignment, alignment_score, review_status, analyst_facing_review, created_at')
+        .select(`
+          review_id, market, session,
+          direction_alignment, entry_alignment, stop_alignment, target_alignment,
+          alignment_score, review_status, analyst_facing_review, created_at,
+          trade:trade_id ( result_r, triggered )
+        `)
         .in('trade_id', tradeIdList)
         .order('created_at', { ascending: false })
         .limit(50)
