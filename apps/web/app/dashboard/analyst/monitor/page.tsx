@@ -125,10 +125,10 @@ export default async function AnalystMonitorPage() {
             <div className="rounded-lg border border-border bg-card p-4">
               <p className="text-xs text-muted-foreground">Triggered</p>
               <p className="text-2xl font-semibold mt-1">
-                {yTriggered.length}
-                {yTriggerRate !== null && (
-                  <span className="text-sm font-normal text-muted-foreground ml-1">{yTriggerRate}%</span>
-                )}
+                {yTriggerRate !== null ? `${yTriggerRate}%` : '—'}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {yTriggered.length}/{ytrades.length} triggered
               </p>
             </div>
             <div className="rounded-lg border border-border bg-card p-4">

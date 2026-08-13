@@ -111,13 +111,17 @@ export function CompliancePanel({ reviews }: CompliancePanelProps) {
                   <p className="text-xs text-muted-foreground">{notAlignedTrades.length} trades</p>
                 </div>
               </div>
-              {alignedAvgR !== null && notAlignedAvgR !== null && (
+              {alignedTrades.length >= 5 && notAlignedTrades.length >= 5 && alignedAvgR !== null && notAlignedAvgR !== null ? (
                 <p className="text-xs text-muted-foreground mt-3 pt-3 border-t border-border">
                   {alignedAvgR > notAlignedAvgR
                     ? `Following coaching adds ${(alignedAvgR - notAlignedAvgR).toFixed(2)}R per trade on average.`
                     : alignedAvgR < notAlignedAvgR
                     ? `Diverging from coaching has added ${(notAlignedAvgR - alignedAvgR).toFixed(2)}R per trade — worth reviewing why.`
                     : 'No meaningful difference between aligned and non-aligned trades yet.'}
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground mt-3 pt-3 border-t border-border">
+                  Insufficient data for comparison — need at least 5 closed trades in each group.
                 </p>
               )}
             </div>
