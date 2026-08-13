@@ -62,28 +62,29 @@ export default async function AnalystMonitorPage() {
   }))
 
   // Post-trade reviews -- post_trade_reviews has no analyst_id column, so scope it to
-  // this analyst via a join through actual_trades.trade_id. Without this, every
-  // analyst's reviews (not just this one's) showed up here.
-  const { data: analystTradeIds } = await supabase
-    .from('actual_trades')
-    .select('trade_id')
-    .eq('analyst_id', user.analystId)
-
-  const tradeIdList = (analystTradeIds ?? []).map((t: any) => t.trade_id)
-
-  const { data: reviews } = tradeIdList.length > 0
-    ? await supabase
-        .from('post_trade_reviews')
-        .select(`
-          review_id, market, session,
-          direction_alignment, entry_alignment, stop_alignment, target_alignment,
-          alignment_score, review_status, analyst_facing_review, created_at,
-          trade:trade_id ( result_r, triggered )
-        `)
-        .in('trade_id', tradeIdList)
-        .order('created_at', { ascending: false })
-        .limit(50)
-    : { data: [] }
+  // this analyst via a join through actual_trades.trade_id. Previously done as a
+  // two-step fetch (list this analyst's trade_ids, then .in('trade_id', list)) --
+  // broke silently for any analyst with 1000+ trades, since the trade_id-listing
+  // query had no .range()/pagination and Supabase caps unbounded queries at 1000 rows,
+  // so reviews linked to trades past the first 1000 were invisible.
+  //
+  // Filtering directly on the joined table instead avoids ever needing to paginate
+  // actual_trades at all -- but the embed MUST use `!inner`, not the default embed.
+  // Verified against the live DB before writing this: `.eq('trade.analyst_id', X)`
+  // on a plain `trade:trade_id(...)` embed returns EVERY post_trade_reviews row
+  // (all analysts), just nulling out `trade` on non-matching rows -- it does not
+  // filter the outer query. `trade:trade_id!inner(...)` does filter correctly.
+  const { data: reviews } = await supabase
+    .from('post_trade_reviews')
+    .select(`
+      review_id, market, session,
+      direction_alignment, entry_alignment, stop_alignment, target_alignment,
+      alignment_score, review_status, analyst_facing_review, created_at,
+      trade:trade_id!inner ( result_r, triggered, analyst_id )
+    `)
+    .eq('trade.analyst_id', user.analystId)
+    .order('created_at', { ascending: false })
+    .limit(100)
 
   // Existing disputes
   const { data: disputes } = await supabase

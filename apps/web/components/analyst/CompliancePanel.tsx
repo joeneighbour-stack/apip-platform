@@ -12,7 +12,10 @@ interface Review {
   review_status: string
   analyst_facing_review: string
   created_at: string
-  trade: { result_r: number | null; triggered: boolean } | null
+  // analyst_id is fetched (needed for the !inner join filter in monitor/page.tsx --
+  // see that file's comment) but not otherwise used here; every review already
+  // belongs to the viewing analyst by construction of that query.
+  trade: { result_r: number | null; triggered: boolean; analyst_id: string } | null
 }
 
 interface CompliancePanelProps {
