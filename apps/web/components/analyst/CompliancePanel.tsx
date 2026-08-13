@@ -1,5 +1,7 @@
 'use client'
 
+import { Fragment, useState } from 'react'
+
 interface Review {
   review_id: string
   market: string
@@ -23,6 +25,7 @@ interface CompliancePanelProps {
 }
 
 export function CompliancePanel({ reviews }: CompliancePanelProps) {
+  const [expandedReview, setExpandedReview] = useState<string | null>(null)
   const hasData = reviews.length > 0
 
   // Compute summary stats
@@ -151,34 +154,64 @@ export function CompliancePanel({ reviews }: CompliancePanelProps) {
                   <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Entry</th>
                   <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Score</th>
                   <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Status</th>
+                  <th className="px-4 py-2.5"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {reviews.slice(0, 10).map((review) => (
-                  <tr key={review.review_id} className="hover:bg-muted/30 transition-colors">
-                    <td className="px-4 py-2.5 font-medium">{review.market}</td>
-                    <td className="px-4 py-2.5 text-muted-foreground">{review.session}</td>
-                    <td className="px-4 py-2.5">
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                        review.direction_alignment === 'Aligned'
-                          ? 'bg-blue-50 text-blue-700'
-                          : 'bg-muted text-muted-foreground'
-                      }`}>
-                        {review.direction_alignment}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                        review.entry_alignment === 'High'
-                          ? 'bg-blue-50 text-blue-700'
-                          : 'bg-muted text-muted-foreground'
-                      }`}>
-                        {review.entry_alignment}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2.5 font-medium">{review.alignment_score}/4</td>
-                    <td className="px-4 py-2.5 text-xs text-muted-foreground">{review.review_status}</td>
-                  </tr>
+                  <Fragment key={review.review_id}>
+                    <tr
+                      className="hover:bg-muted/30 transition-colors cursor-pointer"
+                      onClick={() => setExpandedReview(
+                        expandedReview === review.review_id ? null : review.review_id
+                      )}
+                    >
+                      <td className="px-4 py-2.5 font-medium">{review.market}</td>
+                      <td className="px-4 py-2.5 text-muted-foreground">{review.session}</td>
+                      <td className="px-4 py-2.5">
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                          review.direction_alignment === 'Aligned'
+                            ? 'bg-blue-50 text-blue-700'
+                            : 'bg-muted text-muted-foreground'
+                        }`}>
+                          {review.direction_alignment}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                          review.entry_alignment === 'High'
+                            ? 'bg-blue-50 text-blue-700'
+                            : 'bg-muted text-muted-foreground'
+                        }`}>
+                          {review.entry_alignment}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 font-medium">{review.alignment_score}/4</td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground">{review.review_status}</td>
+                      <td className="px-4 py-2.5 text-muted-foreground text-xs">
+                        {expandedReview === review.review_id ? '▲' : '▼'}
+                      </td>
+                    </tr>
+                    {expandedReview === review.review_id && (
+                      <tr>
+                        <td colSpan={7} className="px-4 py-3 bg-muted/20 border-t border-border">
+                          <p className="text-xs text-muted-foreground leading-relaxed">
+                            {review.analyst_facing_review}
+                          </p>
+                          {review.alignment_score === 4 && (
+                            <p className="text-xs text-green-700 mt-2 font-medium">
+                              &#10003; Full alignment — direction, entry, stop and target all within coaching range.
+                            </p>
+                          )}
+                          {review.alignment_score <= 2 && (
+                            <p className="text-xs text-amber-700 mt-2 font-medium">
+                              Review your entry and risk placement against the coaching suggestion.
+                            </p>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
