@@ -24,6 +24,8 @@ on:
     - cron: '30 5 * * 1'
     - cron: '45 5 * * 1'
     - cron: '30 22 * * 1-5'
+    - cron: '0 22 * * 1-5'   # populate-daily evening run
+    - cron: '15 22 * * 1-5'  # derive-regime evening run
   workflow_dispatch:
     inputs:
       job:
@@ -50,9 +52,16 @@ jobs:
   populate-daily:
     name: Populate Market State Daily
     runs-on: ubuntu-latest
+    # 0 22 * * 1-5 is a second run after the US session closes (22:00 UTC), so
+    # market_state_daily has that day's complete bar (close/ATR etc.) rather than
+    # only the 04:30 UTC run's partial/prior-day data -- the next morning's European
+    # session (and anything else reading market_state_daily) then sees a finished bar.
     if: |
       github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'populate-daily' ||
-      github.event_name == 'schedule' && github.event.schedule == '30 4 * * 1-5'
+      github.event_name == 'schedule' && (
+        github.event.schedule == '30 4 * * 1-5' ||
+        github.event.schedule == '0 22 * * 1-5'
+      )
     defaults:
       run:
         working-directory: intelligence-engine
@@ -74,10 +83,15 @@ jobs:
   derive-regime:
     name: Derive Market Regime
     runs-on: ubuntu-latest
+    # 15 22 * * 1-5 mirrors populate-daily's 0 22 * * 1-5 evening run above -- regime
+    # derived from that run's now-complete daily bar, not the partial one from 04:35 UTC.
     if: |
       github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'derive-regime' ||
-      github.event_name == 'schedule' && github.event.schedule == '35 4 * * 1-5' ||
-      github.event_name == 'schedule' && github.event.schedule == '15 5 * * 1'
+      github.event_name == 'schedule' && (
+        github.event.schedule == '35 4 * * 1-5' ||
+        github.event.schedule == '15 22 * * 1-5' ||
+        github.event.schedule == '15 5 * * 1'
+      )
     defaults:
       run:
         working-directory: intelligence-engine
