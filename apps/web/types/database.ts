@@ -2082,6 +2082,8 @@ export type Database = {
           review_id: string
           review_status: string
           session: string
+          stop_alignment: string
+          target_alignment: string
           trade_id: string
         }
         Insert: {
@@ -2095,6 +2097,8 @@ export type Database = {
           review_id?: string
           review_status?: string
           session: string
+          stop_alignment: string
+          target_alignment: string
           trade_id: string
         }
         Update: {
@@ -2108,6 +2112,8 @@ export type Database = {
           review_id?: string
           review_status?: string
           session?: string
+          stop_alignment?: string
+          target_alignment?: string
           trade_id?: string
         }
         Relationships: [
