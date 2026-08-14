@@ -8,18 +8,13 @@
 # firing dozens of times a day was queuing runs ahead of the engine jobs below that need
 # to run at a precise time (e.g. engine-european at 04:50 UTC actually starting on time).
 #
-# NOTE: Daily job schedules (European/US/APAC engine, populate-daily, derive-regime,
-# post-trade-reviews) are triggered by the Railway engine-trigger service, NOT by
-# GitHub Actions cron. Only weekly Monday jobs remain scheduled here.
-# See engine-trigger/index.js for the authoritative schedule.
+# NOTE: ALL job schedules (daily and weekly) are triggered by the Railway
+# engine-trigger service via workflow_dispatch. There are no GitHub Actions
+# cron schedules in this file — Railway is the authoritative scheduler.
+# See engine-trigger/index.js for the complete schedule.
 name: APIP Engine
 
 on:
-  schedule:
-    - cron: '0 5 * * 1'
-    - cron: '15 5 * * 1'
-    - cron: '30 5 * * 1'
-    - cron: '45 5 * * 1'
   workflow_dispatch:
     inputs:
       job:
