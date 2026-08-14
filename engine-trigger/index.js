@@ -64,6 +64,22 @@ cron.schedule('13 22 * * 1-5', () => triggerWorkflow('derive-regime'))
 // post-trade reviews: 22:28
 cron.schedule('28 22 * * 1-5', () => triggerWorkflow('generate-post-trade-reviews'))
 
+// ── Weekly Monday jobs (mirrors engine-daily.yml's remaining on.schedule entries) ──
+// generate-profiles: Monday 04:58 UTC
+cron.schedule('58 4 * * 1', () => triggerWorkflow('generate-profiles'))
+
+// derive-regime Monday: 05:15 UTC (after weekly profiles)
+cron.schedule('15 5 * * 1', () => triggerWorkflow('derive-regime'))
+
+// calculate-kpis: Monday 05:28 UTC
+cron.schedule('28 5 * * 1', () => triggerWorkflow('calculate-kpis'))
+
+// calculate-shadow-kpis: Monday 05:29 UTC
+cron.schedule('29 5 * * 1', () => triggerWorkflow('calculate-shadow-kpis'))
+
+// generate-atr-profiles: Monday 05:43 UTC
+cron.schedule('43 5 * * 1', () => triggerWorkflow('generate-atr-profiles'))
+
 console.log('APIP Engine Trigger running — waiting for scheduled times (UTC)')
 console.log('Schedules:')
 console.log('  04:28 populate-daily')
@@ -77,3 +93,9 @@ console.log('  12:28 engine-apac (Mon-Thu)')
 console.log('  21:58 populate-daily (evening)')
 console.log('  22:13 derive-regime (evening)')
 console.log('  22:28 post-trade-reviews')
+console.log('  Monday only:')
+console.log('  04:58 generate-profiles')
+console.log('  05:15 derive-regime (weekly)')
+console.log('  05:28 calculate-kpis')
+console.log('  05:29 calculate-shadow-kpis')
+console.log('  05:43 generate-atr-profiles')
