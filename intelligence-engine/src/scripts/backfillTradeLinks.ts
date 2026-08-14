@@ -11,15 +11,19 @@
 // those trades stay unlinked forever -- nothing re-attempts them.
 //
 // This script is a coarser, one-off catch-up pass for those leftovers: same-day
-// matching on analyst + market + direction alone (via the opportunity, then that
-// opportunity's coaching_recommendation for the trade's analyst), no time-window
-// requirement. Coarser also means less precise -- a market only ever belongs to one
-// session per day (see SESSION_MARKETS in runEngineSession.ts, the three session
-// market lists are disjoint), so date + market_id is already close to unique among
-// opportunities without needing session in the match; if a trade's direction doesn't
-// match what was actually recommended (analyst went off-recommendation, or manual/
-// counter-trend), no opportunity row matches and the trade is correctly left unlinked
-// rather than mismatched to the wrong one.
+// matching on analyst + market alone (via the opportunity, then that opportunity's
+// coaching_recommendation for the trade's analyst), no time-window requirement.
+// Coarser also means less precise -- a market only ever belongs to one session per
+// day (see SESSION_MARKETS in runEngineSession.ts, the three session market lists
+// are disjoint), so date + market_id is already close to unique among opportunities
+// without needing session in the match.
+//
+// Deliberately NOT matched on direction: an analyst trading the opposite direction
+// to the coaching recommendation is exactly the case worth linking, not excluding --
+// those are the most valuable reviews, since they show where an analyst diverged
+// from coaching and how that played out. direction_alignment is scored afterwards
+// in generatePostTradeReviews.ts by comparing the linked opportunity's direction
+// against the trade's own, not decided here by whether a row matched at all.
 //
 // Scoped to trades from 2026-07-13 onwards -- opportunities/coaching_recommendations
 // only exist from when the live platform pipeline started producing them; nothing
@@ -81,14 +85,13 @@ async function main() {
     const trade = trades[i]!
     const tradeDate = trade.published_at.slice(0, 10)
 
-    // Find the opportunity for the same date + market + direction (any session --
-    // see the module comment on why session isn't needed in this match).
+    // Find the opportunity for the same date + market (any session, any direction --
+    // see the module comment on why neither is needed in this match).
     const { data: opp } = await db
       .from('opportunities')
       .select('opportunity_id')
       .eq('date', tradeDate)
       .eq('market_id', trade.market_id)
-      .eq('direction', trade.direction)
       .limit(1)
       .single()
 

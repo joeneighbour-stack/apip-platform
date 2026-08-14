@@ -514,14 +514,18 @@ async function main() {
 
       if (!coaching) continue
 
-      // Verify market and direction match via opportunity
+      // Verify market matches via opportunity. Direction is deliberately not checked --
+      // an analyst trading opposite to the coaching recommendation should still link,
+      // not be silently dropped: that divergence is exactly what direction_alignment
+      // in generatePostTradeReviews.ts scores afterwards, by comparing this
+      // opportunity's direction against the trade's own.
       const { data: opp } = await db
         .from('opportunities')
-        .select('market_id, direction')
+        .select('market_id')
         .eq('opportunity_id', coaching.opportunity_id)
         .single()
 
-      if (!opp || opp.market_id !== trade.market_id || opp.direction !== trade.direction) continue
+      if (!opp || opp.market_id !== trade.market_id) continue
 
       await db.from('actual_trades')
         .update({
