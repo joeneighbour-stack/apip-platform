@@ -1,0 +1,79 @@
+import cron from 'node-cron'
+
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN
+const OWNER = 'joeneighbour-stack'
+const REPO = 'apip-platform'
+const WORKFLOW = 'engine-daily.yml'
+
+async function triggerWorkflow(job) {
+  const url = `https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/${WORKFLOW}/dispatches`
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${GITHUB_TOKEN}`,
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      ref: 'master',
+      inputs: { job }
+    })
+  })
+
+  if (res.status === 204) {
+    console.log(`[${new Date().toISOString()}] Triggered: ${job}`)
+  } else {
+    const text = await res.text()
+    console.error(`[${new Date().toISOString()}] Failed to trigger ${job}: ${res.status} ${text}`)
+  }
+}
+
+// All times UTC
+// populate-daily: 04:28
+cron.schedule('28 4 * * 1-5', () => triggerWorkflow('populate-daily'))
+
+// derive-regime: 04:33
+cron.schedule('33 4 * * 1-5', () => triggerWorkflow('derive-regime'))
+
+// snapshot-european: 04:43
+cron.schedule('43 4 * * 1-5', () => triggerWorkflow('snapshot-european'))
+
+// engine-european: 04:48
+cron.schedule('48 4 * * 1-5', () => triggerWorkflow('engine-european'))
+
+// snapshot-us: 08:43
+cron.schedule('43 8 * * 1-5', () => triggerWorkflow('snapshot-us'))
+
+// engine-us: 08:48
+cron.schedule('48 8 * * 1-5', () => triggerWorkflow('engine-us'))
+
+// snapshot-apac: 12:23 Mon-Thu
+cron.schedule('23 12 * * 1-4', () => triggerWorkflow('snapshot-apac'))
+
+// engine-apac: 12:28 Mon-Thu
+cron.schedule('28 12 * * 1-4', () => triggerWorkflow('engine-apac'))
+
+// populate-daily evening: 21:58
+cron.schedule('58 21 * * 1-5', () => triggerWorkflow('populate-daily'))
+
+// derive-regime evening: 22:13
+cron.schedule('13 22 * * 1-5', () => triggerWorkflow('derive-regime'))
+
+// post-trade reviews: 22:28
+cron.schedule('28 22 * * 1-5', () => triggerWorkflow('generate-post-trade-reviews'))
+
+console.log('APIP Engine Trigger running — waiting for scheduled times (UTC)')
+console.log('Schedules:')
+console.log('  04:28 populate-daily')
+console.log('  04:33 derive-regime')
+console.log('  04:43 snapshot-european')
+console.log('  04:48 engine-european')
+console.log('  08:43 snapshot-us')
+console.log('  08:48 engine-us')
+console.log('  12:23 snapshot-apac (Mon-Thu)')
+console.log('  12:28 engine-apac (Mon-Thu)')
+console.log('  21:58 populate-daily (evening)')
+console.log('  22:13 derive-regime (evening)')
+console.log('  22:28 post-trade-reviews')
