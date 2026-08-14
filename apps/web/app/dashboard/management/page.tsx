@@ -1,5 +1,5 @@
 import { getCurrentUser } from '@/lib/auth'
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { WorkloadPanel } from '@/components/management/WorkloadPanel'
 import { DisputeQueue } from '@/components/management/DisputeQueue'
@@ -167,12 +167,28 @@ export default async function ManagementWorkspacePage() {
   // returned row (inner join semantics), so no separate not-null filter is needed --
   // confirmed live: an explicit .not('trade', 'is', null) here returns the identical
   // row count with or without it.
-  const { data: coachingAlignment } = await supabase
+  //
+  // Uses the service-role client (adminDb), not the RLS-scoped `supabase` used
+  // everywhere else on this page -- this table's own RLS is scoped exactly the same
+  // way actual_trades's is: post_trade_reviews_select_manager (migrations/
+  // 035_post_trade_reviews_rls.sql) only returns rows where manages_analyst() is true
+  // for the trade's own analyst_id, and actual_trades_select_manager
+  // (002_rls.sql) applies the identical manages_analyst() restriction to the joined
+  // trade row itself. A manager who doesn't manage every analyst on the team would get
+  // a silently incomplete (or empty) result under the RLS-scoped client -- this table
+  // is meant to be a full cross-team view, so it deliberately bypasses that scoping.
+  const adminDb = createAdminClient()
+  const { data: coachingAlignment, error: alignmentError } = await adminDb
     .from('post_trade_reviews')
     .select(`
       direction_alignment, alignment_score,
       trade:trade_id!inner ( result_r, analyst_id )
     `)
+    .limit(1000) // 372 reviews today -- headroom against future growth, not a real cap
+
+  if (alignmentError) {
+    console.error('coaching alignment query failed:', alignmentError)
+  }
 
   // Aggregate per analyst
   const alignmentByAnalyst = (activeAnalysts ?? []).map(analyst => {

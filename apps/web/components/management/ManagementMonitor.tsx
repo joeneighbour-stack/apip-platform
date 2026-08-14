@@ -80,12 +80,23 @@ export function ManagementMonitor({
     ? trades
     : trades.filter(t => t.analyst_id === selectedAnalyst)
 
+  const filteredAlignment = selectedAnalyst === 'all'
+    ? alignmentByAnalyst
+    : alignmentByAnalyst.filter(a => a.analyst_id === selectedAnalyst)
+
+  const selectedAnalystName = selectedAnalyst === 'all'
+    ? null
+    : activeAnalysts.find(a => a.analyst_id === selectedAnalyst)?.display_name ?? null
+
   return (
     <div className="space-y-4">
-      {alignmentByAnalyst.length > 0 && (
+      {filteredAlignment.length > 0 && (
         <div className="rounded-lg border border-border overflow-hidden mb-6">
           <div className="px-4 py-3 border-b border-border">
-            <h3 className="text-sm font-medium">Coaching alignment</h3>
+            <h3 className="text-sm font-medium">
+              Coaching alignment
+              {selectedAnalystName && <span className="text-muted-foreground font-normal"> — {selectedAnalystName}</span>}
+            </h3>
             <p className="text-xs text-muted-foreground mt-0.5">
               Direction alignment and performance vs coaching recommendations
             </p>
@@ -102,7 +113,7 @@ export function ManagementMonitor({
               </tr>
             </thead>
             <tbody>
-              {[...alignmentByAnalyst]
+              {[...filteredAlignment]
                 .sort((a, b) => (b.pctAligned ?? 0) - (a.pctAligned ?? 0))
                 .map(a => (
                 <tr key={a.analyst_id} className="border-b border-border last:border-0 hover:bg-muted/20">
@@ -146,7 +157,10 @@ export function ManagementMonitor({
       )}
 
       <div className="flex items-center gap-3">
-        <h2 className="text-sm font-medium">Team Trade Monitor</h2>
+        <h2 className="text-sm font-medium">
+          Team Trade Monitor
+          {selectedAnalystName && <span className="text-muted-foreground font-normal"> — {selectedAnalystName}</span>}
+        </h2>
         <select
           value={selectedAnalyst}
           onChange={e => setSelectedAnalyst(e.target.value)}
