@@ -140,6 +140,22 @@ function preferApiPerDay(trades: ActualTrade[]): ActualTrade[] {
   })
 }
 
+// Max drawdown over a chronologically-sorted triggered-trade sequence -- same
+// peak-to-trough method as calculateKpis.ts's maxDrawdown() and this file's own
+// shadowRecentDrawdown below, just for the ActualTrade shape. Callers sort by
+// published_at before calling this; it only needs the trades in the right order.
+function computeMaxDrawdown(triggered: { result_r: number | null }[]): number | null {
+  if (triggered.length === 0) return null
+  let equity = 0, peak = 0, maxDd = 0
+  for (const t of triggered) {
+    equity += t.result_r ?? 0
+    if (equity > peak) peak = equity
+    const dd = equity - peak
+    if (dd < maxDd) maxDd = dd
+  }
+  return maxDd
+}
+
 function shadowResultR(outcome: ShadowOutcome): number | null {
   if (outcome.result_r !== null) return outcome.result_r
   if (outcome.trade_outcome_status === 'TARGET_HIT') return outcome.shadow_trade?.rr ?? null
@@ -236,6 +252,21 @@ export function TeamPerformanceGrid({
           liveTeamAgg['triggered_rate'].push(trigRate)
         }
       }
+    }
+
+    // Team-wide max drawdown: one combined equity curve across every analyst's
+    // triggered trades for the period, not an average of per-analyst drawdowns --
+    // drawdown isn't meaningfully additive/averageable across analysts the way
+    // return R is. displayAgg's own aggregation below averages whatever's in this
+    // array, so pushing the single already-computed team value here (rather than
+    // per-analyst values) passes it through unchanged.
+    const teamTriggered = periodTrades.filter(t => t.triggered && t.result_r !== null)
+    const sortedTeamTriggered = [...teamTriggered].sort((a, b) =>
+      (a.published_at ?? '').localeCompare(b.published_at ?? '')
+    )
+    const teamMaxDd = computeMaxDrawdown(sortedTeamTriggered)
+    if (teamMaxDd !== null) {
+      liveTeamAgg['max_drawdown'] = [teamMaxDd]
     }
   }
 
@@ -401,11 +432,18 @@ export function TeamPerformanceGrid({
                   const apiTriggered = period === 'LAST_WEEK' ? triggered : triggered.filter(t => t.source_system === 'ACUITY_PERFORMANCE_API')
                   const pubTotal = periodPublications.filter(p => p.analyst_id === analyst.analyst_id).length
                   const trigRate = pubTotal > 0 ? apiTriggered.length / pubTotal : null
+                  const sortedTriggered = [...triggered].sort((a, b) =>
+                    (a.published_at ?? '').localeCompare(b.published_at ?? '')
+                  )
+                  const maxDd = computeMaxDrawdown(sortedTriggered)
                   const liveVals: Record<string, number | null> = {
                     total_return_r: triggered.length > 0 ? totalR : null,
                     win_rate: winRate,
                     triggered_rate: trigRate,
-                    max_drawdown: null,
+                    max_drawdown: maxDd,
+                    // Still null -- requires post-trade reviews, which aren't available in
+                    // the live actualTrades fetch. Shows from executive_kpis for Last Month
+                    // once the KPI batch has run.
                     alignment_rate: null,
                   }
                   hasData = triggered.length > 0

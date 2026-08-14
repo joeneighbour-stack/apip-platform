@@ -281,9 +281,15 @@ async function main() {
       })
 
       if (monthReviews.length > 0) {
-        const fullyAligned = monthReviews.filter(r => r.alignment_score === 2).length
-        const partiallyAligned = monthReviews.filter(r => r.alignment_score === 1).length
-        const notAligned = monthReviews.filter(r => r.alignment_score === 0).length
+        // 0-4 scale (direction + entry + stop + target, 1 point each) -- was still reading
+        // the original 0-2 scale (direction + entry only) from before migration 047 widened
+        // alignment_score's range, so every review here was landing in "not aligned" (score
+        // 0-2 all fell into the old fullyAligned===2/partiallyAligned===1 checks matching
+        // nothing above 2, or worse, a genuine 2 being miscounted as "fully aligned" under
+        // the old scale when it's actually only half-aligned on the new one).
+        const fullyAligned = monthReviews.filter(r => r.alignment_score === 4).length
+        const partiallyAligned = monthReviews.filter(r => r.alignment_score >= 2 && r.alignment_score < 4).length
+        const notAligned = monthReviews.filter(r => r.alignment_score <= 1).length
         const alignmentRate = (fullyAligned + partiallyAligned * 0.5) / monthReviews.length
         kpiRows.push({
           ...baseKpi,
