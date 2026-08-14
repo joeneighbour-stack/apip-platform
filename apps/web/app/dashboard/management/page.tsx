@@ -221,6 +221,8 @@ export default async function ManagementWorkspacePage() {
       pctAligned: total > 0 ? Math.round(100 * aligned / total) : null,
       alignedAvgR,
       differentAvgR,
+      closedAlignedCount: closedAligned.length,
+      closedDifferentCount: closedDifferent.length,
       fullAlignment,
       fullAlignmentPct: total > 0 ? Math.round(100 * fullAlignment / total) : null,
     }

@@ -52,6 +52,8 @@ interface AnalystAlignment {
   pctAligned: number | null
   alignedAvgR: number | null
   differentAvgR: number | null
+  closedAlignedCount: number
+  closedDifferentCount: number
   fullAlignment: number
   fullAlignmentPct: number | null
 }
@@ -137,15 +139,25 @@ export function ManagementMonitor({
                   </td>
                   <td className="px-4 py-2.5 text-right">
                     {a.alignedAvgR !== null ? (
-                      <span className={a.alignedAvgR >= 0 ? 'text-green-700' : 'text-red-600'}>
-                        {a.alignedAvgR >= 0 ? '+' : ''}{a.alignedAvgR.toFixed(2)}R
+                      <span>
+                        <span className={a.alignedAvgR >= 0 ? 'text-green-700' : 'text-red-600'}>
+                          {a.alignedAvgR >= 0 ? '+' : ''}{a.alignedAvgR.toFixed(2)}R
+                        </span>
+                        <span className="text-xs text-muted-foreground ml-1">
+                          ({a.closedAlignedCount})
+                        </span>
                       </span>
                     ) : <span className="text-muted-foreground">—</span>}
                   </td>
                   <td className="px-4 py-2.5 text-right">
                     {a.differentAvgR !== null ? (
-                      <span className={a.differentAvgR >= 0 ? 'text-green-700' : 'text-red-600'}>
-                        {a.differentAvgR >= 0 ? '+' : ''}{a.differentAvgR.toFixed(2)}R
+                      <span>
+                        <span className={a.differentAvgR >= 0 ? 'text-green-700' : 'text-red-600'}>
+                          {a.differentAvgR >= 0 ? '+' : ''}{a.differentAvgR.toFixed(2)}R
+                        </span>
+                        <span className="text-xs text-muted-foreground ml-1">
+                          ({a.closedDifferentCount})
+                        </span>
                       </span>
                     ) : <span className="text-muted-foreground">—</span>}
                   </td>
@@ -153,6 +165,10 @@ export function ManagementMonitor({
               ))}
             </tbody>
           </table>
+          <p className="text-xs text-muted-foreground px-4 py-2 border-t border-border">
+            Avg R figures shown with closed trade count in brackets.
+            Results with fewer than 5 closed trades should be treated as indicative only.
+          </p>
         </div>
       )}
 
