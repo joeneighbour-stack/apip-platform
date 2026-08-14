@@ -162,6 +162,54 @@ export default async function ManagementWorkspacePage() {
 
   const allDisputesByTradeId = new Map((allDisputes ?? []).map((d: any) => [d.trade_id, d]))
 
+  // Coaching alignment by analyst -- not scoped to the 30-day trade window above,
+  // full history. `trade:trade_id!inner` already guarantees a non-null trade on every
+  // returned row (inner join semantics), so no separate not-null filter is needed --
+  // confirmed live: an explicit .not('trade', 'is', null) here returns the identical
+  // row count with or without it.
+  const { data: coachingAlignment } = await supabase
+    .from('post_trade_reviews')
+    .select(`
+      direction_alignment, alignment_score,
+      trade:trade_id!inner ( result_r, analyst_id )
+    `)
+
+  // Aggregate per analyst
+  const alignmentByAnalyst = (activeAnalysts ?? []).map(analyst => {
+    const reviews = (coachingAlignment ?? []).filter(
+      r => (r.trade as any)?.analyst_id === analyst.analyst_id
+    )
+    const total = reviews.length
+    const aligned = reviews.filter(r => r.direction_alignment === 'Aligned').length
+    const different = reviews.filter(r => r.direction_alignment === 'Different').length
+    const closedAligned = reviews.filter(r =>
+      r.direction_alignment === 'Aligned' && (r.trade as any)?.result_r != null
+    )
+    const closedDifferent = reviews.filter(r =>
+      r.direction_alignment === 'Different' && (r.trade as any)?.result_r != null
+    )
+    const alignedAvgR = closedAligned.length > 0
+      ? closedAligned.reduce((s, r) => s + Number((r.trade as any).result_r), 0) / closedAligned.length
+      : null
+    const differentAvgR = closedDifferent.length > 0
+      ? closedDifferent.reduce((s, r) => s + Number((r.trade as any).result_r), 0) / closedDifferent.length
+      : null
+    const fullAlignment = reviews.filter(r => r.alignment_score === 4).length
+
+    return {
+      analyst_id: analyst.analyst_id,
+      display_name: analyst.display_name,
+      total,
+      aligned,
+      different,
+      pctAligned: total > 0 ? Math.round(100 * aligned / total) : null,
+      alignedAvgR,
+      differentAvgR,
+      fullAlignment,
+      fullAlignmentPct: total > 0 ? Math.round(100 * fullAlignment / total) : null,
+    }
+  }).filter(a => a.total > 0)
+
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
@@ -213,6 +261,7 @@ export default async function ManagementWorkspacePage() {
             disputesByTradeId={allDisputesByTradeId}
             reviewsByTradeId={reviewsByTradeId}
             activeAnalysts={activeAnalysts ?? []}
+            alignmentByAnalyst={alignmentByAnalyst}
             currentUserRole={user.role as 'MANAGER' | 'ADMIN'}
             currentUserDisplayName={user.displayName}
           />

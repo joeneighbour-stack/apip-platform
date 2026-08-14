@@ -43,11 +43,25 @@ interface ActiveAnalyst {
   display_name: string
 }
 
+interface AnalystAlignment {
+  analyst_id: string
+  display_name: string
+  total: number
+  aligned: number
+  different: number
+  pctAligned: number | null
+  alignedAvgR: number | null
+  differentAvgR: number | null
+  fullAlignment: number
+  fullAlignmentPct: number | null
+}
+
 interface Props {
   trades: Trade[]
   disputesByTradeId: Map<string, Dispute>
   reviewsByTradeId: Map<string, Review>
   activeAnalysts: ActiveAnalyst[]
+  alignmentByAnalyst: AnalystAlignment[]
   currentUserRole: 'MANAGER' | 'ADMIN'
   currentUserDisplayName: string
 }
@@ -58,7 +72,7 @@ interface Props {
 // correctly even in the unfiltered "All analysts" view where no single analystId
 // prop could be correct.
 export function ManagementMonitor({
-  trades, disputesByTradeId, reviewsByTradeId, activeAnalysts, currentUserRole, currentUserDisplayName,
+  trades, disputesByTradeId, reviewsByTradeId, activeAnalysts, alignmentByAnalyst, currentUserRole, currentUserDisplayName,
 }: Props) {
   const [selectedAnalyst, setSelectedAnalyst] = useState<string>('all')
 
@@ -68,6 +82,69 @@ export function ManagementMonitor({
 
   return (
     <div className="space-y-4">
+      {alignmentByAnalyst.length > 0 && (
+        <div className="rounded-lg border border-border overflow-hidden mb-6">
+          <div className="px-4 py-3 border-b border-border">
+            <h3 className="text-sm font-medium">Coaching alignment</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Direction alignment and performance vs coaching recommendations
+            </p>
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border bg-muted/30">
+                <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Analyst</th>
+                <th className="text-right px-4 py-2.5 text-xs font-medium text-muted-foreground">Reviews</th>
+                <th className="text-right px-4 py-2.5 text-xs font-medium text-muted-foreground">Dir. aligned</th>
+                <th className="text-right px-4 py-2.5 text-xs font-medium text-muted-foreground">Full alignment</th>
+                <th className="text-right px-4 py-2.5 text-xs font-medium text-muted-foreground">Avg R (aligned)</th>
+                <th className="text-right px-4 py-2.5 text-xs font-medium text-muted-foreground">Avg R (diverged)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...alignmentByAnalyst]
+                .sort((a, b) => (b.pctAligned ?? 0) - (a.pctAligned ?? 0))
+                .map(a => (
+                <tr key={a.analyst_id} className="border-b border-border last:border-0 hover:bg-muted/20">
+                  <td className="px-4 py-2.5 font-medium">{a.display_name}</td>
+                  <td className="px-4 py-2.5 text-right text-muted-foreground">{a.total}</td>
+                  <td className="px-4 py-2.5 text-right">
+                    <span className={`font-medium ${
+                      (a.pctAligned ?? 0) >= 60 ? 'text-green-700' :
+                      (a.pctAligned ?? 0) >= 40 ? 'text-foreground' :
+                      'text-amber-700'
+                    }`}>
+                      {a.pctAligned ?? '—'}%
+                    </span>
+                    <span className="text-xs text-muted-foreground ml-1">
+                      {a.aligned}/{a.total}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2.5 text-right">
+                    <span className="font-medium">{a.fullAlignmentPct ?? '—'}%</span>
+                    <span className="text-xs text-muted-foreground ml-1">{a.fullAlignment}/{a.total}</span>
+                  </td>
+                  <td className="px-4 py-2.5 text-right">
+                    {a.alignedAvgR !== null ? (
+                      <span className={a.alignedAvgR >= 0 ? 'text-green-700' : 'text-red-600'}>
+                        {a.alignedAvgR >= 0 ? '+' : ''}{a.alignedAvgR.toFixed(2)}R
+                      </span>
+                    ) : <span className="text-muted-foreground">—</span>}
+                  </td>
+                  <td className="px-4 py-2.5 text-right">
+                    {a.differentAvgR !== null ? (
+                      <span className={a.differentAvgR >= 0 ? 'text-green-700' : 'text-red-600'}>
+                        {a.differentAvgR >= 0 ? '+' : ''}{a.differentAvgR.toFixed(2)}R
+                      </span>
+                    ) : <span className="text-muted-foreground">—</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       <div className="flex items-center gap-3">
         <h2 className="text-sm font-medium">Team Trade Monitor</h2>
         <select
