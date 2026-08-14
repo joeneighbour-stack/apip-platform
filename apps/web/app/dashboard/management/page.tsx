@@ -6,6 +6,8 @@ import { DisputeQueue } from '@/components/management/DisputeQueue'
 import { AbsenceQueue } from '@/components/management/AbsenceQueue'
 import { EmergencyAbsence } from '@/components/management/EmergencyAbsence'
 import { LiveTradesPanel } from '@/components/management/LiveTradesPanel'
+import { ManagementMonitor } from '@/components/management/ManagementMonitor'
+import { ManagementTabs } from '@/components/management/ManagementTabs'
 
 export default async function ManagementWorkspacePage() {
   const user = await getCurrentUser()
@@ -112,6 +114,54 @@ export default async function ManagementWorkspacePage() {
   const openDisputes = (disputes ?? []).length
   const pendingAbsences = (absenceRequests ?? []).filter((a: any) => a.status === 'PENDING').length
 
+  // ── Monitor tab: unified 30-day trade stream across all analysts ────────────────
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+
+  const { data: allTrades } = await supabase
+    .from('actual_trades')
+    .select(`
+      trade_id, direction, result_r, triggered,
+      published_at, historical_backfill, analyst_id,
+      entry, stop, target, session,
+      market:market_id ( symbol, asset_class )
+    `)
+    .gte('published_at', thirtyDaysAgo + 'T00:00:00Z')
+    .eq('source_system', 'ACUITY_PERFORMANCE_API')
+    .order('published_at', { ascending: false })
+    .limit(500)
+
+  const allTradeIds = (allTrades ?? []).map((t: any) => t.trade_id)
+
+  // post_trade_reviews has no analyst_id column -- `trade:trade_id!inner` filters via
+  // the FK-joined actual_trades row instead (see monitor/page.tsx's identical pattern).
+  // Not scoped to a single analyst here, so a plain (non-!inner) embed would already
+  // return every matching review -- !inner kept anyway for consistency with that file
+  // and because it's required if this ever adds an analyst-scoped filter later.
+  const { data: allReviews } = allTradeIds.length > 0
+    ? await supabase
+        .from('post_trade_reviews')
+        .select(`
+          review_id, trade_id, market, session,
+          direction_alignment, entry_alignment, stop_alignment, target_alignment,
+          alignment_score, review_status, analyst_facing_review, created_at,
+          trade:trade_id!inner ( result_r, triggered, analyst_id )
+        `)
+        .in('trade_id', allTradeIds)
+    : { data: [] }
+
+  const reviewsByTradeId = new Map((allReviews ?? []).map((r: any) => [r.trade_id, r]))
+
+  // Every dispute for this 30-day trade set, any status -- TradeHistoryTable's Flag
+  // column needs RESOLVED/REJECTED too, not just the open ones DisputeQueue shows above.
+  const { data: allDisputes } = allTradeIds.length > 0
+    ? await supabase
+        .from('trade_disputes')
+        .select('trade_id, status, dispute_type')
+        .in('trade_id', allTradeIds)
+    : { data: [] }
+
+  const allDisputesByTradeId = new Map((allDisputes ?? []).map((d: any) => [d.trade_id, d]))
+
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
@@ -138,20 +188,36 @@ export default async function ManagementWorkspacePage() {
         </div>
       </div>
 
-      {/* Workload summary */}
-      <WorkloadPanel allocations={todayAllocations} availability={availability ?? []} />
+      <ManagementTabs
+        overview={
+          <div className="space-y-8">
+            {/* Workload summary */}
+            <WorkloadPanel allocations={todayAllocations} availability={availability ?? []} />
 
-      {/* Today's live trades */}
-      <LiveTradesPanel trades={tradesWithAlignment} />
-      {/* Absences */}
-      <div id="absences">
-        <AbsenceQueue requests={(absenceRequests ?? []) as any} />
-      </div>
+            {/* Today's live trades */}
+            <LiveTradesPanel trades={tradesWithAlignment} />
+            {/* Absences */}
+            <div id="absences">
+              <AbsenceQueue requests={(absenceRequests ?? []) as any} />
+            </div>
 
-      {/* Disputes */}
-      <div id="disputes">
-        <DisputeQueue disputes={(disputes ?? []) as any} />
-      </div>
+            {/* Disputes */}
+            <div id="disputes">
+              <DisputeQueue disputes={(disputes ?? []) as any} />
+            </div>
+          </div>
+        }
+        monitor={
+          <ManagementMonitor
+            trades={(allTrades ?? []) as any}
+            disputesByTradeId={allDisputesByTradeId}
+            reviewsByTradeId={reviewsByTradeId}
+            activeAnalysts={activeAnalysts ?? []}
+            currentUserRole={user.role as 'MANAGER' | 'ADMIN'}
+            currentUserDisplayName={user.displayName}
+          />
+        }
+      />
     </div>
   )
 }

@@ -2,7 +2,6 @@ import { getCurrentUser } from '@/lib/auth'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { TradeHistoryTable } from '@/components/analyst/TradeHistoryTable'
-import { CompliancePanel } from '@/components/analyst/CompliancePanel'
 
 export default async function AnalystMonitorPage() {
   const user = await getCurrentUser()
@@ -77,7 +76,7 @@ export default async function AnalystMonitorPage() {
   const { data: reviews } = await supabase
     .from('post_trade_reviews')
     .select(`
-      review_id, market, session,
+      review_id, trade_id, market, session,
       direction_alignment, entry_alignment, stop_alignment, target_alignment,
       alignment_score, review_status, analyst_facing_review, created_at,
       trade:trade_id!inner ( result_r, triggered, analyst_id )
@@ -85,6 +84,26 @@ export default async function AnalystMonitorPage() {
     .eq('trade.analyst_id', user.analystId)
     .order('created_at', { ascending: false })
     .limit(100)
+
+  const reviewList = (reviews ?? []) as any[]
+  const reviewsByTradeId = new Map(reviewList.map(r => [r.trade_id, r]))
+
+  // Compact compliance summary, shown above the unified trade log -- the "Recent
+  // reviews" table CompliancePanel also renders is dropped here, since each review is
+  // now inline in TradeHistoryTable's expandable rows instead of a separate table.
+  const totalReviews = reviewList.length
+  const directionAligned = reviewList.filter(r => r.direction_alignment === 'Aligned').length
+  const entryAligned = reviewList.filter(r => r.entry_alignment === 'High').length
+  const fullAlignment = reviewList.filter(r => r.alignment_score === 4).length
+  const closedReviews = reviewList.filter(r => r.trade?.result_r != null)
+  const alignedReviews = closedReviews.filter(r => r.alignment_score >= 3)
+  const notAlignedReviews = closedReviews.filter(r => r.alignment_score <= 2)
+  const alignedAvgR = alignedReviews.length > 0
+    ? alignedReviews.reduce((s, r) => s + Number(r.trade?.result_r ?? 0), 0) / alignedReviews.length
+    : null
+  const notAlignedAvgR = notAlignedReviews.length > 0
+    ? notAlignedReviews.reduce((s, r) => s + Number(r.trade?.result_r ?? 0), 0) / notAlignedReviews.length
+    : null
 
   // Existing disputes
   const { data: disputes } = await supabase
@@ -147,15 +166,75 @@ export default async function AnalystMonitorPage() {
         </section>
       )}
 
-      {/* Coaching compliance */}
-      <CompliancePanel reviews={reviews ?? []} />
+      {/* Coaching compliance -- compact summary only; individual reviews are inline in
+          the trade log below via reviewsByTradeId, not a separate table here. */}
+      {totalReviews > 0 && (
+        <section className="space-y-2">
+          <h2 className="text-sm font-medium">Coaching Compliance</h2>
+          <div className="rounded-lg border border-border bg-card p-4">
+            <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
+              <div>
+                <p className="text-xs text-muted-foreground">Direction alignment</p>
+                <p className="text-lg font-semibold mt-0.5">
+                  {Math.round((directionAligned / totalReviews) * 100)}%
+                  <span className="text-xs font-normal text-muted-foreground ml-1.5">{directionAligned}/{totalReviews}</span>
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Entry alignment</p>
+                <p className="text-lg font-semibold mt-0.5">
+                  {Math.round((entryAligned / totalReviews) * 100)}%
+                  <span className="text-xs font-normal text-muted-foreground ml-1.5">{entryAligned}/{totalReviews}</span>
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Full alignment</p>
+                <p className="text-lg font-semibold mt-0.5">
+                  {Math.round((fullAlignment / totalReviews) * 100)}%
+                  <span className="text-xs font-normal text-muted-foreground ml-1.5">{fullAlignment}/{totalReviews}</span>
+                </p>
+              </div>
+              {closedReviews.length > 0 && (
+                <div>
+                  <p className="text-xs text-muted-foreground">Aligned vs not aligned</p>
+                  <p className="text-lg font-semibold mt-0.5 tabular-nums">
+                    <span className={alignedAvgR !== null && alignedAvgR >= 0 ? 'text-green-700' : 'text-red-600'}>
+                      {alignedAvgR !== null ? `${alignedAvgR >= 0 ? '+' : ''}${alignedAvgR.toFixed(2)}R` : '—'}
+                    </span>
+                    <span className="text-xs font-normal text-muted-foreground mx-1.5">vs</span>
+                    <span className={notAlignedAvgR !== null && notAlignedAvgR >= 0 ? 'text-green-700' : 'text-red-600'}>
+                      {notAlignedAvgR !== null ? `${notAlignedAvgR >= 0 ? '+' : ''}${notAlignedAvgR.toFixed(2)}R` : '—'}
+                    </span>
+                  </p>
+                </div>
+              )}
+            </div>
+            {directionAligned === totalReviews && (
+              <p className="text-xs text-amber-700 bg-amber-50 px-2 py-1.5 rounded mt-3">
+                These reviews only include trades that matched the coaching direction.
+                Counter-direction trades will appear as the platform captures more live data.
+              </p>
+            )}
+            {alignedReviews.length >= 5 && notAlignedReviews.length >= 5 && alignedAvgR !== null && notAlignedAvgR !== null && (
+              <p className="text-xs text-muted-foreground mt-3 pt-3 border-t border-border">
+                {alignedAvgR > notAlignedAvgR
+                  ? `Following coaching adds ${(alignedAvgR - notAlignedAvgR).toFixed(2)}R per trade on average.`
+                  : alignedAvgR < notAlignedAvgR
+                  ? `Diverging from coaching has added ${(notAlignedAvgR - alignedAvgR).toFixed(2)}R per trade — worth reviewing why.`
+                  : 'No meaningful difference between aligned and non-aligned trades yet.'}
+              </p>
+            )}
+          </div>
+        </section>
+      )}
 
-      {/* 30-day trade log */}
+      {/* 30-day trade log, with post-trade reviews merged in inline */}
       <section className="space-y-3">
         <TradeHistoryTable
           trades={tradesWithDetails}
           analystId={user.analystId!}
           disputesByTradeId={disputesByTradeId}
+          reviewsByTradeId={reviewsByTradeId}
           currentUserRole={user.role as 'ANALYST' | 'MANAGER' | 'ADMIN'}
           currentUserDisplayName={user.displayName}
         />
