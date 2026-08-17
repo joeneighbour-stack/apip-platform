@@ -6,9 +6,11 @@ interface PageProps {
   params: Promise<{ analystId: string }>
 }
 
-// Full profile (recommendations, KPIs, performance breakdown, coaching compliance,
-// trade log) -- kept available for management via the "Full profile ↗" link on the
-// KPI-only view at /dashboard/management/analyst/[analystId], which is the default now.
+// Full performance history (KPIs, performance breakdown, coaching compliance) -- kept
+// available for management via the "Performance history ↗" link on the KPI-only view
+// at /dashboard/management/analyst/[analystId], which is the default now. Today's
+// Recommendations and the trade log were dropped from this view -- both are redundant
+// with the analyst workspace and the management Monitor tab respectively.
 export default async function AnalystFullProfilePage({ params }: PageProps) {
   const user = await getCurrentUser()
   if (!['MANAGER', 'ADMIN'].includes(user.role)) redirect('/login')
