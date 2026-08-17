@@ -283,6 +283,24 @@ export default async function ManagementWorkspacePage() {
             <div id="disputes">
               <DisputeQueue disputes={(disputes ?? []) as any} />
             </div>
+
+            {/* Automation Readiness -- placeholder until sufficient clean shadow data available */}
+            <div className="rounded-lg border border-border bg-card p-6 mt-6">
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-sm font-medium">Automation Readiness</h2>
+                <span className="text-xs font-medium px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
+                  Coming soon
+                </span>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Automation readiness metrics will be available once sufficient clean shadow trade
+                data has been collected. Requires approximately 4 weeks of reliable engine runs
+                with correct regime classification.
+              </p>
+              <p className="text-xs text-muted-foreground mt-2">
+                Available from approximately mid-September 2026.
+              </p>
+            </div>
           </div>
         }
         monitor={
