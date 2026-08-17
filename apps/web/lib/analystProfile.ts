@@ -220,7 +220,7 @@ export async function getAnalystProfileData(
   const { data: tradeDetails } = tradeIds.length > 0
     ? await supabase
         .from('actual_trades')
-        .select('trade_id, entry, stop, target, session')
+        .select('trade_id, entry, stop, target, session, expiry')
         .in('trade_id', tradeIds)
     : { data: [] }
 
