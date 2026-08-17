@@ -74,43 +74,45 @@ export function WorkloadPanel({ allocations, availability }: WorkloadPanelProps)
         </div>
       ) : (
         <div className="space-y-3">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
             {entries.map(([analystId, { name, allocs }]) => {
               const cap = capByAnalyst.get(analystId) ?? null
               const isAtCapacity = cap !== null && allocs.length >= cap
               const isExpanded = expandedAnalystId === analystId
               return (
-                <div key={analystId} className="rounded-lg border border-border bg-card p-4">
-                  <div className="flex items-start justify-between mb-3">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <p className="font-medium text-sm">{name}</p>
-                        {isAtCapacity && (
-                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
-                            At capacity
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-0.5">{allocs.length} markets</p>
+                <div key={analystId}
+                  className="rounded-lg border border-border bg-card p-4 flex flex-col justify-between min-h-[120px]">
+                  {/* Top -- name and count */}
+                  <div>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <p className="font-medium text-sm">{name}</p>
+                      {isAtCapacity && (
+                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
+                          At capacity
+                        </span>
+                      )}
                     </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => toggle(analystId, 'view')}
-                        className={`text-xs px-2 py-1 rounded border hover:bg-muted/30 ${
-                          isExpanded && expandedPanel === 'view' ? 'border-primary text-primary font-medium' : 'border-border'
-                        }`}
-                      >
-                        View
-                      </button>
-                      <button
-                        onClick={() => toggle(analystId, 'profile')}
-                        className={`text-xs px-2 py-1 rounded border hover:bg-muted/30 ${
-                          isExpanded && expandedPanel === 'profile' ? 'border-primary text-primary font-medium' : 'border-border'
-                        }`}
-                      >
-                        Profile
-                      </button>
-                    </div>
+                    <p className="text-xl font-semibold mt-1">{allocs.length}</p>
+                    <p className="text-xs text-muted-foreground">markets</p>
+                  </div>
+                  {/* Bottom -- buttons */}
+                  <div className="flex gap-2 mt-3">
+                    <button
+                      onClick={() => toggle(analystId, 'view')}
+                      className={`flex-1 text-xs px-2 py-1.5 rounded border hover:bg-muted/30 transition-colors ${
+                        isExpanded && expandedPanel === 'view' ? 'border-primary text-primary font-medium' : 'border-border'
+                      }`}
+                    >
+                      View
+                    </button>
+                    <button
+                      onClick={() => toggle(analystId, 'profile')}
+                      className={`flex-1 text-xs px-2 py-1.5 rounded border hover:bg-muted/30 transition-colors ${
+                        isExpanded && expandedPanel === 'profile' ? 'border-primary text-primary font-medium' : 'border-border'
+                      }`}
+                    >
+                      Profile
+                    </button>
                   </div>
                 </div>
               )
