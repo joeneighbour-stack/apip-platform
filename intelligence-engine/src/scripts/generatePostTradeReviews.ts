@@ -76,63 +76,69 @@ function scoreRangeAlignment(
 
 // ── Review text ───────────────────────────────────────────────────────────────
 
+// Omitted entirely when triggered but still open (resultR null) -- nothing useful
+// to say yet, and a "pending" filler line isn't worth the clutter.
+function outcomeLine(triggered: boolean, resultR: number | null): string {
+  if (!triggered) return `The setup didn't trigger this session.`
+  if (resultR === null) return ''
+  if (resultR > 0) return `The trade closed at +${resultR.toFixed(2)}R \u2014 a solid result.`
+  if (resultR < 0) return `The trade closed at ${resultR.toFixed(2)}R.`
+  return `The trade closed at breakeven.`
+}
+
+/**
+ * Coaching-toned review text: encouraging regardless of outcome, frames the
+ * recommendation as a suggestion the analyst chose to follow or not, and
+ * stays to 2-3 sentences -- no bullet-point checklist. Template picked from
+ * direction alignment first (a direction call is a different kind of choice
+ * than a level being slightly off), then the overall 0-4 alignment score.
+ */
 function generateReviewText(
   symbol: string,
   tradeDir: string,
-  coachingDir: string,
   dirAlignment: string,
   entryAlignment: string,
   stopAlignment: string,
   targetAlignment: string,
-  tradeEntry: number,
   entryRangeLow: number,
   entryRangeHigh: number,
   triggered: boolean,
   resultR: number | null,
 ): string {
-  const lines: string[] = []
+  const score = (dirAlignment === 'Aligned' ? 1 : 0)
+    + (entryAlignment === 'High' ? 1 : 0)
+    + (stopAlignment === 'High' ? 1 : 0)
+    + (targetAlignment === 'High' ? 1 : 0)
 
-  // Direction alignment
-  if (dirAlignment === 'Aligned') {
-    lines.push(`Direction aligned with coaching: ${symbol} ${tradeDir} matches the suggested ${coachingDir} setup.`)
+  const outcome = outcomeLine(triggered, resultR)
+  const entryRangeFmt = `${entryRangeLow.toFixed(4)}\u2013${entryRangeHigh.toFixed(4)}`
+
+  let intro: string
+  let closing: string
+
+  if (dirAlignment !== 'Aligned') {
+    intro = `You took ${symbol} ${tradeDir} while the coaching suggested the opposite direction.`
+    closing = `It's worth comparing both approaches \u2014 sometimes your read on the market will differ from the framework, and that's valuable information either way.`
+  } else if (score === 4) {
+    intro = `Strong process on ${symbol} ${tradeDir} \u2014 your entry, stop and target all fell within the suggested ranges.`
+    closing = `This is exactly the kind of disciplined execution the framework is designed to support.`
+  } else if (score === 3) {
+    intro = `Good discipline on ${symbol} ${tradeDir} \u2014 you followed the coaching direction and most of the suggested levels.`
+    closing = entryAlignment !== 'High'
+      ? `Your entry landed outside the suggested ${entryRangeFmt} zone.`
+      : stopAlignment !== 'High'
+        ? `Your stop placement was outside the suggested risk range.`
+        : `Your target was set outside the suggested range.`
+  } else if (score === 2) {
+    intro = `You took ${symbol} ${tradeDir} in line with the coaching direction.`
+    closing = `Your entry/stop/target differed from the suggested ranges \u2014 worth comparing the two approaches when reviewing this trade.`
   } else {
-    lines.push(`Direction diverged from coaching: ${symbol} ${tradeDir} taken; coaching suggested ${coachingDir}.`)
+    // score === 1: direction aligned, entry/stop/target all off
+    intro = `You followed the coaching direction on ${symbol} ${tradeDir}.`
+    closing = `Your entry and risk levels were outside the suggested ranges this time \u2014 the framework suggested ${entryRangeFmt} as the entry zone.`
   }
 
-  // Entry alignment
-  const entryFmt = tradeEntry.toFixed(4)
-  const rangeFmt = `${entryRangeLow.toFixed(4)}\u2013${entryRangeHigh.toFixed(4)}`
-  if (entryAlignment === 'High') {
-    lines.push(`Entry ${entryFmt} was within or near the suggested range (${rangeFmt}).`)
-  } else {
-    lines.push(`Entry ${entryFmt} was outside the suggested range (${rangeFmt}).`)
-  }
-
-  // Stop placement
-  if (stopAlignment !== 'Unknown') {
-    lines.push(`Stop placement: ${stopAlignment === 'High' ? 'within' : 'outside'} the suggested risk range.`)
-  }
-
-  // Target placement
-  if (targetAlignment !== 'Unknown') {
-    lines.push(`Target placement: ${targetAlignment === 'High' ? 'within' : 'outside'} the suggested target range.`)
-  }
-
-  // Outcome -- omitted entirely when triggered but still open (resultR null): nothing
-  // useful to say yet, and a "pending" filler line isn't worth the clutter.
-  if (!triggered) {
-    lines.push('The setup was not triggered \u2014 the market did not reach the entry range.')
-  } else if (resultR !== null) {
-    if (resultR > 0) {
-      lines.push(`Outcome: +${resultR.toFixed(2)}R \u2014 profitable trade.`)
-    } else if (resultR < 0) {
-      lines.push(`Outcome: ${resultR.toFixed(2)}R \u2014 trade stopped out.`)
-    } else {
-      lines.push('Outcome: breakeven.')
-    }
-  }
-
-  return lines.join(' ')
+  return [intro, outcome, closing].filter(Boolean).join(' ')
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
@@ -239,9 +245,9 @@ async function main() {
 
     const reviewText = generateReviewText(
       market?.symbol ?? '\u2014',
-      trade.direction, coachingDir,
+      trade.direction,
       dirAlignment, entryAlignment, stopAlignment, targetAlignment,
-      Number(trade.entry), Number(rv.entry_range_low), Number(rv.entry_range_high),
+      Number(rv.entry_range_low), Number(rv.entry_range_high),
       trade.triggered,
       trade.result_r !== null ? Number(trade.result_r) : null,
     )
