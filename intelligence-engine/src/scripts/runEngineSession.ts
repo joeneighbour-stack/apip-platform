@@ -110,13 +110,22 @@ async function completeStep(
 // MIN_MARKETS_PER_ANALYST so a session with many analysts relative to its market count
 // doesn't start penalising someone before they've even reached the soft target (e.g. 28
 // EUROPEAN markets / 5 analysts is an even split of 6, below the 8 floor -- without the
-// floor, penalties would kick in two markets earlier than intended). hardCap tightens
-// further to whichever is smaller of MAX_MARKETS_PER_ANALYST or target+2, so a session with
-// few analysts/many markets still can't let one analyst take an unbounded share. Below
-// target: score is untouched. Between target and hardCap: a 15%-per-market-over-target
-// penalty makes an already-busy analyst progressively less attractive to the ranking without
-// excluding them outright, so a market with no other decent match still goes to someone. At
-// or above hardCap: excluded entirely (-1 sentinel), full stop.
+// floor, penalties would kick in two markets earlier than intended).
+//
+// hardCap is a tighter fair-share ceiling (even split + 1 buffer, capped at
+// MAX_MARKETS_PER_ANALYST), not target+2 -- confirmed live: without this, a
+// high-scoring analyst-first pick (e.g. Ian, Mona) could sweep most of a session's
+// REGIME-tier markets before workload pressure meant anything, starving other
+// analysts (Maged/Khaled/Tibor) of markets they'd otherwise qualify for. With 28
+// markets / 5 analysts: ceil(28/5)=6, +1 buffer = 7 -- each analyst caps out at 7 in
+// this pass, regardless of score. This is now sometimes BELOW targetPerAnalyst's
+// 8-floor (as in this exact example), which makes the 15%-over-target soft-penalty
+// band below unreachable for that session shape -- hardCap excludes at 7 before
+// workload could ever reach the 8-floor target. That's an accepted consequence of
+// deliberately prioritising the tighter fair-share ceiling over the soft-penalty
+// mechanism for analyst-first allocation specifically; MAX_MARKETS_PER_ANALYST
+// itself (the cross-session daily cap) is unaffected and still enforced via
+// initialWorkload seeding into allocateCoverage() for the separate fallback pass.
 function workloadAdjustedScore(
   baseScore: number,
   currentWorkload: number,
@@ -124,7 +133,8 @@ function workloadAdjustedScore(
   totalAnalysts: number
 ): number {
   const targetPerAnalyst = Math.max(MIN_MARKETS_PER_ANALYST, Math.ceil(totalMarkets / totalAnalysts))
-  const hardCap = Math.min(MAX_MARKETS_PER_ANALYST, targetPerAnalyst + 2)
+  const analystFirstCap = Math.ceil(totalMarkets / totalAnalysts) + 1
+  const hardCap = Math.min(MAX_MARKETS_PER_ANALYST, analystFirstCap)
 
   if (currentWorkload >= hardCap) return -1
 
