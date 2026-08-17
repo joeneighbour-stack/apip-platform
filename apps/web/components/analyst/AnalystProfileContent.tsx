@@ -16,10 +16,13 @@ interface Props {
   mode?: 'full' | 'kpi-only'
 }
 
-// Shared between the management analyst-profile page (/dashboard/management/analyst/[analystId])
-// and the analyst's own "My KPIs" tab (/dashboard/analyst/performance) -- same layout, same
-// data, same queries (see lib/analystProfile.ts) regardless of who's viewing. subtitle/backHref
-// are the only things that differ between the two callers.
+// The management analyst-profile page (/dashboard/management/analyst/[analystId]) and the
+// management "full profile" page (.../[analystId]/full) that used to call this with
+// mode='full' and mode='kpi-only'+backHref respectively have both been removed -- the only
+// remaining caller is the analyst's own "My KPIs" tab (/dashboard/analyst/performance),
+// which always passes mode='kpi-only' with no backHref. The mode==='full' branch and the
+// mode==='kpi-only' && backHref branch below are therefore currently unreachable; left in
+// place rather than deleted since trimming them wasn't asked for.
 export async function AnalystProfileContent({ analystId, subtitle, backHref, backLabel = 'Back', mode = 'full' }: Props) {
   const data = await getAnalystProfileData(analystId, mode)
   if (!data.analyst) notFound()
@@ -50,10 +53,6 @@ export async function AnalystProfileContent({ analystId, subtitle, backHref, bac
             <p className="text-sm text-muted-foreground mt-1">{subtitle}</p>
           </div>
           <div className="flex items-center gap-3 shrink-0">
-            <a href={`/dashboard/management/analyst/${analystId}/full`}
-              className="text-sm text-primary hover:underline">
-              Performance history &#8599;
-            </a>
             <a href={backHref} className="text-sm text-muted-foreground hover:text-foreground transition-colors">
               &larr; {backLabel}
             </a>

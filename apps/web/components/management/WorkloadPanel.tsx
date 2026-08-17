@@ -1,8 +1,3 @@
-'use client'
-import { useState } from 'react'
-import { InlineAnalystProfile } from './InlineAnalystProfile'
-import { InlineAnalystWorkspace } from './InlineAnalystWorkspace'
-
 interface AllocationOpportunity {
   analyst_action: string | null
   direction: string | null
@@ -28,28 +23,12 @@ interface Availability {
 
 interface WorkloadPanelProps {
   allocations: Allocation[]
+  // No longer read here (the per-analyst capacity indicator was dropped along with the
+  // card/inline-expand layout), kept in the signature so callers don't need to change.
   availability: Availability[]
 }
 
-type Panel = 'view' | 'profile' | null
-
-export function WorkloadPanel({ allocations, availability }: WorkloadPanelProps) {
-  const [expandedAnalystId, setExpandedAnalystId] = useState<string | null>(null)
-  const [expandedPanel, setExpandedPanel] = useState<Panel>(null)
-
-  // Only one panel (View or Profile), for at most one analyst, is ever open at a time --
-  // clicking a button for a different analyst (or the other button for the same one)
-  // switches straight to that panel rather than requiring a separate collapse first.
-  function toggle(analystId: string, panel: 'view' | 'profile') {
-    if (expandedAnalystId === analystId && expandedPanel === panel) {
-      setExpandedAnalystId(null)
-      setExpandedPanel(null)
-    } else {
-      setExpandedAnalystId(analystId)
-      setExpandedPanel(panel)
-    }
-  }
-
+export function WorkloadPanel({ allocations }: WorkloadPanelProps) {
   // Count and group allocations per analyst
   const byAnalyst = new Map<string, { name: string; allocs: Allocation[] }>()
   for (const alloc of allocations) {
@@ -60,7 +39,6 @@ export function WorkloadPanel({ allocations, availability }: WorkloadPanelProps)
     else byAnalyst.set(analyst_id, { name: display_name, allocs: [alloc] })
   }
 
-  const capByAnalyst = new Map(availability.map(a => [a.analyst_id, a.workload_cap]))
   const entries = [...byAnalyst.entries()].sort((a, b) => b[1].allocs.length - a[1].allocs.length)
 
   return (
@@ -71,63 +49,19 @@ export function WorkloadPanel({ allocations, availability }: WorkloadPanelProps)
           <p className="text-sm text-muted-foreground">No allocations yet for today&apos;s session.</p>
         </div>
       ) : (
-        <div className="space-y-2">
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-            {entries.map(([analystId, { name, allocs }]) => {
-              const cap = capByAnalyst.get(analystId) ?? null
-              const atCap = cap !== null && allocs.length >= cap
-              const isExpanded = expandedAnalystId === analystId
-              return (
-                <div
-                  key={analystId}
-                  className={`rounded-lg border p-3 text-left transition-all ${
-                    atCap ? 'border-amber-200 bg-amber-50' :
-                    isExpanded ? 'border-primary bg-primary/5' :
-                    'border-border bg-card'
-                  }`}
-                >
-                  <p className="text-xs text-muted-foreground truncate">{name}</p>
-                  <p className="text-2xl font-semibold mt-1">{allocs.length}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {cap !== null ? `of ${cap} max` : 'markets'}
-                  </p>
-                  {atCap && <p className="text-xs text-amber-700 mt-1 font-medium">At capacity</p>}
-                  <div className="flex items-center gap-3 mt-2">
-                    <button
-                      onClick={() => toggle(analystId, 'view')}
-                      className={`text-xs hover:underline ${isExpanded && expandedPanel === 'view' ? 'font-medium text-primary' : 'text-primary'}`}
-                    >
-                      View
-                    </button>
-                    <button
-                      onClick={() => toggle(analystId, 'profile')}
-                      className={`text-xs hover:underline ${isExpanded && expandedPanel === 'profile' ? 'font-medium text-primary' : 'text-primary'}`}
-                    >
-                      Profile
-                    </button>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-
-          {/* Inline expand: View (workspace coverage strip) or Profile (KPI summary) */}
-          {expandedAnalystId && expandedPanel && byAnalyst.has(expandedAnalystId) && (
-            <div className="rounded-lg border border-primary/20 bg-card overflow-hidden">
-              <div className="px-4 py-2.5 bg-muted/30 border-b border-border">
-                <p className="text-xs font-medium">
-                  {byAnalyst.get(expandedAnalystId)!.name} &mdash; {expandedPanel === 'view' ? 'Workspace' : 'Profile'}
-                </p>
-              </div>
-              <div className="p-4">
-                {expandedPanel === 'view' ? (
-                  <InlineAnalystWorkspace analystId={expandedAnalystId} />
-                ) : (
-                  <InlineAnalystProfile analystId={expandedAnalystId} />
-                )}
+        <div className="rounded-lg border border-border divide-y divide-border">
+          {entries.map(([analystId, { name, allocs }]) => (
+            <div key={analystId} className="flex items-center justify-between px-4 py-2">
+              <span className="font-medium text-sm">{name}</span>
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-muted-foreground">{allocs.length} markets</span>
+                <a href={`/dashboard/management/analyst/${analystId}/workspace`}
+                  className="text-xs text-accent hover:underline">
+                  View workspace &rarr;
+                </a>
               </div>
             </div>
-          )}
+          ))}
         </div>
       )}
     </section>

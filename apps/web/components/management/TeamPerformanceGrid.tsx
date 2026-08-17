@@ -469,7 +469,7 @@ export function TeamPerformanceGrid({
                 return (
                   <tr key={analyst.analyst_id} className="hover:bg-muted/30 transition-colors">
                     <td className="px-4 py-3 font-medium">
-                      <a href={`/dashboard/management/analyst/${analyst.analyst_id}`}
+                      <a href={`/dashboard/management/analyst/${analyst.analyst_id}/workspace`}
                         className="hover:text-primary hover:underline transition-colors">
                         {analyst.display_name}
                       </a>
