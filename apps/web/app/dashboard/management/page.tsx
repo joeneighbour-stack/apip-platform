@@ -147,7 +147,7 @@ export default async function ManagementWorkspacePage() {
   // Not scoped to a single analyst here, so a plain (non-!inner) embed would already
   // return every matching review -- !inner kept anyway for consistency with that file
   // and because it's required if this ever adds an analyst-scoped filter later.
-  const { data: allReviews } = allTradeIds.length > 0
+  const { data: allReviews, error: reviewsError } = allTradeIds.length > 0
     ? await adminDb
         .from('post_trade_reviews')
         .select(`
@@ -157,7 +157,9 @@ export default async function ManagementWorkspacePage() {
           trade:trade_id!inner ( result_r, triggered, analyst_id )
         `)
         .in('trade_id', allTradeIds)
-    : { data: [] }
+    : { data: [], error: null }
+
+  console.log(`Management Monitor: allTradeIds=${allTradeIds.length}, allReviews=${allReviews?.length ?? 0}, error=${reviewsError?.message ?? 'none'}`)
 
   const reviewsByTradeId = new Map((allReviews ?? []).map((r: any) => [r.trade_id, r]))
 
