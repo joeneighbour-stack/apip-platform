@@ -2,9 +2,9 @@
 // APIP Trading Intelligence & Performance Platform
 // Market State Daily Population Script
 // ============================================================================
-// Fetches daily OHLC from Finnhub for all FINNHUB_OANDA/FINNHUB_CRYPTO markets,
-// computes ATR14 (backward compat) and ATR20 (canonical), and upserts into
-// market_state_daily.
+// Fetches daily OHLC from Finnhub for all FINNHUB_OANDA/FINNHUB_CRYPTO/IC_MARKETS
+// markets, computes ATR14 (backward compat) and ATR20 (canonical), and upserts
+// into market_state_daily.
 //
 // ATR20 Wilder RMA is the canonical zone input per locked methodology V1.4.
 // ATR14 is retained alongside for historical continuity during transition.
@@ -131,6 +131,28 @@ async function fetchHistoricalOhlc(
   return bars
 }
 
+/**
+ * IC Markets-sourced instruments (currently just SA40 -- Finnhub OANDA doesn't
+ * carry it, see migrations/044_markets_price_data_symbols.sql) come through
+ * Finnhub's stock candle endpoint rather than forex/crypto.
+ */
+async function fetchStockOhlc(
+  finnhubSymbol: string, days: number, apiKey: string
+): Promise<OhlcBar[]> {
+  const to   = Math.floor(Date.now() / 1000)
+  const from = to - days * 24 * 60 * 60
+  const endpoint = `https://finnhub.io/api/v1/stock/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=D&from=${from}&to=${to}&token=${apiKey}`
+  const response = await fetch(endpoint)
+  const body: FinnhubCandleResponse = await response.json()
+  if (body.s !== 'ok' || !body.c?.length) throw new Error(`Finnhub stock status '${body.s}' for ${finnhubSymbol}`)
+  const bars: OhlcBar[] = body.t.map((ts, i) => ({
+    date: new Date(ts * 1000).toISOString().slice(0, 10),
+    open: body.o[i]!, high: body.h[i]!, low: body.l[i]!, close: body.c[i]!,
+  }))
+  bars.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+  return bars
+}
+
 async function main() {
   const SUPABASE_URL              = process.env.SUPABASE_URL
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -177,10 +199,14 @@ async function main() {
   }
 
   const markets = (marketRows ?? []).filter(m =>
-    m.price_data_provider === 'FINNHUB_OANDA' || m.price_data_provider === 'FINNHUB_CRYPTO'
+    m.price_data_provider === 'FINNHUB_OANDA' ||
+    m.price_data_provider === 'FINNHUB_CRYPTO' ||
+    m.price_data_provider === 'IC_MARKETS'
   )
   const skippedProviders = (marketRows ?? []).filter(m =>
-    m.price_data_provider !== 'FINNHUB_OANDA' && m.price_data_provider !== 'FINNHUB_CRYPTO'
+    m.price_data_provider !== 'FINNHUB_OANDA' &&
+    m.price_data_provider !== 'FINNHUB_CRYPTO' &&
+    m.price_data_provider !== 'IC_MARKETS'
   )
 
   console.log(`Markets to fetch: ${markets.length}`)
@@ -195,16 +221,21 @@ async function main() {
   for (const market of markets) {
     if (!market.price_data_symbol) continue
     try {
+      const isICMarkets = market.price_data_provider === 'IC_MARKETS'
       const isCrypto = market.price_data_provider === 'FINNHUB_CRYPTO'
-      const bars = isHistory
-        ? await fetchHistoricalOhlc(market.price_data_symbol, HISTORY_START, FINNHUB_CANDLE_API_KEY!, isCrypto)
-        : await fetchRecentOhlc(market.price_data_symbol, DAYS_TO_FETCH, FINNHUB_API_KEY, isCrypto)
+      const bars = isICMarkets
+        ? await fetchStockOhlc(market.price_data_symbol, DAYS_TO_FETCH, FINNHUB_API_KEY)
+        : isHistory
+          ? await fetchHistoricalOhlc(market.price_data_symbol, HISTORY_START, FINNHUB_CANDLE_API_KEY!, isCrypto)
+          : await fetchRecentOhlc(market.price_data_symbol, DAYS_TO_FETCH, FINNHUB_API_KEY, isCrypto)
 
       // Finnhub's daily forex candle lags 1-2 days; fill today/yesterday from
       // 5-minute bars when the daily endpoint hasn't caught up yet. Only
       // fills genuinely missing dates -- never replaces a real daily candle.
+      // IC Markets (stock/candle) has no equivalent lag observed, and Finnhub's
+      // stock resolution=5 access isn't confirmed for this key -- skipped entirely.
       const syntheticDates = new Set<string>()
-      if (FINNHUB_CANDLE_API_KEY) {
+      if (FINNHUB_CANDLE_API_KEY && !isICMarkets) {
         const existingDates = new Set(bars.map(b => b.date))
         for (const date of [yesterday, today]) {
           if (existingDates.has(date)) continue
