@@ -147,32 +147,41 @@ export default async function ManagementWorkspacePage() {
   // Not scoped to a single analyst here, so a plain (non-!inner) embed would already
   // return every matching review -- !inner kept anyway for consistency with that file
   // and because it's required if this ever adds an analyst-scoped filter later.
-  const { data: allReviews, error: reviewsError } = allTradeIds.length > 0
-    ? await adminDb
-        .from('post_trade_reviews')
-        .select(`
-          review_id, trade_id, market, session,
-          direction_alignment, entry_alignment, stop_alignment, target_alignment,
-          alignment_score, review_status, analyst_facing_review, created_at,
-          trade:trade_id!inner ( result_r, triggered, analyst_id )
-        `)
-        .in('trade_id', allTradeIds)
-    : { data: [], error: null }
+  //
+  // Batched: a single .in() with up to 500 UUIDs can exceed PostgREST/Supabase's URL
+  // length limit ("TypeError: fetch failed"), so trade IDs are chunked instead.
+  const BATCH_SIZE = 100
+  const allReviews: any[] = []
+  for (let i = 0; i < allTradeIds.length; i += BATCH_SIZE) {
+    const batch = allTradeIds.slice(i, i + BATCH_SIZE)
+    const { data: batchReviews } = await adminDb
+      .from('post_trade_reviews')
+      .select(`
+        review_id, trade_id, market, session,
+        direction_alignment, entry_alignment, stop_alignment, target_alignment,
+        alignment_score, review_status, analyst_facing_review, created_at,
+        trade:trade_id!inner ( result_r, triggered, analyst_id )
+      `)
+      .in('trade_id', batch)
+    if (batchReviews) allReviews.push(...batchReviews)
+  }
 
-  console.log(`Management Monitor: allTradeIds=${allTradeIds.length}, allReviews=${allReviews?.length ?? 0}, error=${reviewsError?.message ?? 'none'}`)
-
-  const reviewsByTradeId = new Map((allReviews ?? []).map((r: any) => [r.trade_id, r]))
+  const reviewsByTradeId = new Map(allReviews.map((r: any) => [r.trade_id, r]))
 
   // Every dispute for this 30-day trade set, any status -- TradeHistoryTable's Flag
   // column needs RESOLVED/REJECTED too, not just the open ones DisputeQueue shows above.
-  const { data: allDisputes } = allTradeIds.length > 0
-    ? await supabase
-        .from('trade_disputes')
-        .select('trade_id, status, dispute_type')
-        .in('trade_id', allTradeIds)
-    : { data: [] }
+  // Batched for the same URL-length reason as allReviews above.
+  const allDisputes: any[] = []
+  for (let i = 0; i < allTradeIds.length; i += BATCH_SIZE) {
+    const batch = allTradeIds.slice(i, i + BATCH_SIZE)
+    const { data: batchDisputes } = await supabase
+      .from('trade_disputes')
+      .select('trade_id, status, dispute_type')
+      .in('trade_id', batch)
+    if (batchDisputes) allDisputes.push(...batchDisputes)
+  }
 
-  const allDisputesByTradeId = new Map((allDisputes ?? []).map((d: any) => [d.trade_id, d]))
+  const allDisputesByTradeId = new Map(allDisputes.map((d: any) => [d.trade_id, d]))
 
   // Coaching alignment by analyst -- not scoped to the 30-day trade window above,
   // full history. `trade:trade_id!inner` already guarantees a non-null trade on every
