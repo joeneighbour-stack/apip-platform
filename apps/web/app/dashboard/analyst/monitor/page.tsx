@@ -38,7 +38,7 @@ export default async function AnalystMonitorPage() {
     .from('actual_trades')
     .select(`
       trade_id, direction, result_r, triggered,
-      published_at, historical_backfill,
+      published_at, historical_backfill, expiry,
       market:market_id ( symbol, asset_class )
     `)
     .eq('analyst_id', user.analystId)

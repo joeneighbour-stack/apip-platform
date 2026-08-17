@@ -9,6 +9,7 @@ interface Trade {
   entry: number
   result_r: number | null
   triggered: boolean
+  expiry: string | null
   published_at: string
   session: string | null
   historical_backfill: boolean

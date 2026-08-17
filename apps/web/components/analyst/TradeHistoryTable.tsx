@@ -9,6 +9,7 @@ interface Trade {
   entry: number
   result_r: number | null
   triggered: boolean
+  expiry: string | null
   published_at: string
   session: string | null
   historical_backfill: boolean
@@ -56,6 +57,26 @@ interface TradeHistoryTableProps {
   analystId: string
   currentUserRole: 'ANALYST' | 'MANAGER' | 'ADMIN'
   currentUserDisplayName: string
+}
+
+function tradeStatus(trade: Trade): {
+  label: string
+  color: string
+} {
+  if (trade.triggered && trade.result_r !== null) {
+    if (Number(trade.result_r) > 0) return { label: 'Profit', color: 'text-green-700' }
+    if (Number(trade.result_r) < 0) return { label: 'Loss', color: 'text-red-600' }
+    return { label: 'Breakeven', color: 'text-muted-foreground' }
+  }
+  if (trade.triggered && trade.result_r === null) {
+    return { label: 'Open', color: 'text-blue-600' }
+  }
+  // Not triggered
+  if (trade.expiry) {
+    const expired = new Date(trade.expiry) < new Date()
+    if (expired) return { label: 'Expired', color: 'text-muted-foreground' }
+  }
+  return { label: 'Pending', color: 'text-amber-600' }
 }
 
 export function TradeHistoryTable({
@@ -119,7 +140,7 @@ export function TradeHistoryTable({
                 <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Market</th>
                 <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Dir</th>
                 <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Entry</th>
-                <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Triggered</th>
+                <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Status</th>
                 <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Result R</th>
                 <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Source</th>
                 <th className="text-left px-3 py-2.5 text-xs font-medium text-muted-foreground">Review</th>
@@ -154,9 +175,10 @@ export function TradeHistoryTable({
                         {trade.entry != null ? Number(trade.entry).toFixed(4) : '—'}
                       </td>
                       <td className="px-4 py-2.5">
-                        {trade.triggered
-                          ? <span className="text-xs text-green-700">Yes</span>
-                          : <span className="text-xs text-muted-foreground">No</span>}
+                        {(() => {
+                          const s = tradeStatus(trade)
+                          return <span className={`text-xs font-medium ${s.color}`}>{s.label}</span>
+                        })()}
                       </td>
                       <td className="px-4 py-2.5 tabular-nums">
                         {trade.result_r !== null

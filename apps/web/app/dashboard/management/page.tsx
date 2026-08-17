@@ -132,7 +132,7 @@ export default async function ManagementWorkspacePage() {
     .select(`
       trade_id, direction, result_r, triggered,
       published_at, historical_backfill, analyst_id,
-      entry, stop, target, session,
+      entry, stop, target, session, expiry,
       market:market_id ( symbol, asset_class )
     `)
     .gte('published_at', thirtyDaysAgo + 'T00:00:00Z')
