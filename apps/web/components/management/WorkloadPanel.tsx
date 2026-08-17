@@ -1,3 +1,8 @@
+'use client'
+import { useState } from 'react'
+import { InlineAnalystProfile } from './InlineAnalystProfile'
+import { InlineAnalystWorkspace } from './InlineAnalystWorkspace'
+
 interface AllocationOpportunity {
   analyst_action: string | null
   direction: string | null
@@ -26,7 +31,25 @@ interface WorkloadPanelProps {
   availability: Availability[]
 }
 
+type Panel = 'view' | 'profile' | null
+
 export function WorkloadPanel({ allocations, availability }: WorkloadPanelProps) {
+  const [expandedAnalystId, setExpandedAnalystId] = useState<string | null>(null)
+  const [expandedPanel, setExpandedPanel] = useState<Panel>(null)
+
+  // Only one panel (View or Profile), for at most one analyst, is ever open at a time --
+  // clicking a button for a different analyst (or the other button for the same one)
+  // switches straight to that panel rather than requiring a separate collapse first.
+  function toggle(analystId: string, panel: 'view' | 'profile') {
+    if (expandedAnalystId === analystId && expandedPanel === panel) {
+      setExpandedAnalystId(null)
+      setExpandedPanel(null)
+    } else {
+      setExpandedAnalystId(analystId)
+      setExpandedPanel(panel)
+    }
+  }
+
   // Count and group allocations per analyst
   const byAnalyst = new Map<string, { name: string; allocs: Allocation[] }>()
   for (const alloc of allocations) {
@@ -54,29 +77,49 @@ export function WorkloadPanel({ allocations, availability }: WorkloadPanelProps)
           {entries.map(([analystId, { name, allocs }]) => {
             const cap = capByAnalyst.get(analystId) ?? null
             const isAtCapacity = cap !== null && allocs.length >= cap
+            const isExpanded = expandedAnalystId === analystId
             return (
-              <div key={analystId} className="flex items-center justify-between py-2 border-b border-border last:border-0">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-sm">{name}</span>
-                  {isAtCapacity && (
-                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
-                      At capacity
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-sm text-muted-foreground">{allocs.length} markets</span>
+              <div key={analystId} className="border-b border-border last:border-0">
+                <div className="flex items-center justify-between py-2">
                   <div className="flex items-center gap-2">
-                    <a href={`/dashboard/management/analyst/${analystId}/workspace`}
-                      className="text-xs px-2 py-1 rounded border border-border hover:bg-muted/30">
-                      View
-                    </a>
-                    <a href={`/dashboard/management/analyst/${analystId}`}
-                      className="text-xs px-2 py-1 rounded border border-border hover:bg-muted/30">
-                      Profile
-                    </a>
+                    <span className="font-medium text-sm">{name}</span>
+                    {isAtCapacity && (
+                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
+                        At capacity
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm text-muted-foreground">{allocs.length} markets</span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => toggle(analystId, 'view')}
+                        className={`text-xs px-2 py-1 rounded border hover:bg-muted/30 ${
+                          isExpanded && expandedPanel === 'view' ? 'border-primary text-primary font-medium' : 'border-border'
+                        }`}
+                      >
+                        View
+                      </button>
+                      <button
+                        onClick={() => toggle(analystId, 'profile')}
+                        className={`text-xs px-2 py-1 rounded border hover:bg-muted/30 ${
+                          isExpanded && expandedPanel === 'profile' ? 'border-primary text-primary font-medium' : 'border-border'
+                        }`}
+                      >
+                        Profile
+                      </button>
+                    </div>
                   </div>
                 </div>
+                {isExpanded && expandedPanel && (
+                  <div className="pb-3">
+                    {expandedPanel === 'view' ? (
+                      <InlineAnalystWorkspace analystId={analystId} />
+                    ) : (
+                      <InlineAnalystProfile analystId={analystId} />
+                    )}
+                  </div>
+                )}
               </div>
             )
           })}
