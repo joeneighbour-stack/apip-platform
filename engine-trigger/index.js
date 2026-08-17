@@ -49,11 +49,15 @@ cron.schedule('43 8 * * 1-5', () => triggerWorkflow('snapshot-us'))
 // engine-us: 08:48
 cron.schedule('48 8 * * 1-5', () => triggerWorkflow('engine-us'))
 
-// snapshot-apac: 12:23 Mon-Thu
-cron.schedule('23 12 * * 1-4', () => triggerWorkflow('snapshot-apac'))
+// snapshot-apac: 05:30 Mon-Thu -- ahead of the Asian market close, not after it
+// (the old 12:23 slot landed once APAC trading had already wound down for the
+// day). Mon-Thu only, Friday intentionally skipped -- matches engine-apac's
+// belt-and-suspenders Friday guard in engine-daily.yml for manual triggers.
+cron.schedule('30 5 * * 1-4', () => triggerWorkflow('snapshot-apac'))
 
-// engine-apac: 12:28 Mon-Thu
-cron.schedule('28 12 * * 1-4', () => triggerWorkflow('engine-apac'))
+// engine-apac: 05:35 Mon-Thu -- same before-close reasoning and Mon-Thu-only
+// scope as snapshot-apac above.
+cron.schedule('35 5 * * 1-4', () => triggerWorkflow('engine-apac'))
 
 // populate-daily evening: 21:58
 cron.schedule('58 21 * * 1-5', () => triggerWorkflow('populate-daily'))
@@ -88,8 +92,8 @@ console.log('  04:43 snapshot-european')
 console.log('  04:48 engine-european')
 console.log('  08:43 snapshot-us')
 console.log('  08:48 engine-us')
-console.log('  12:23 snapshot-apac (Mon-Thu)')
-console.log('  12:28 engine-apac (Mon-Thu)')
+console.log('  05:30 snapshot-apac (Mon-Thu)')
+console.log('  05:35 engine-apac (Mon-Thu)')
 console.log('  21:58 populate-daily (evening)')
 console.log('  22:13 derive-regime (evening)')
 console.log('  22:28 post-trade-reviews')
