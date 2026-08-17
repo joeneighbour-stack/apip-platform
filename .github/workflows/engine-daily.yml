@@ -41,16 +41,14 @@ jobs:
   populate-daily:
     name: Populate Market State Daily
     runs-on: ubuntu-latest
-    # 0 22 * * 1-5 is a second run after the US session closes (22:00 UTC), so
-    # market_state_daily has that day's complete bar (close/ATR etc.) rather than
-    # only the 04:30 UTC run's partial/prior-day data -- the next morning's European
-    # session (and anything else reading market_state_daily) then sees a finished bar.
+    # Railway triggers this job twice a day via workflow_dispatch (see
+    # engine-trigger/index.js) -- once early and again after the US session
+    # closes, so market_state_daily has that day's complete bar (close/ATR
+    # etc.) rather than only the early run's partial/prior-day data -- the
+    # next morning's European session (and anything else reading
+    # market_state_daily) then sees a finished bar.
     if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'populate-daily' ||
-      github.event_name == 'schedule' && (
-        github.event.schedule == '30 4 * * 1-5' ||
-        github.event.schedule == '0 22 * * 1-5'
-      )
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'populate-daily'
     defaults:
       run:
         working-directory: intelligence-engine
@@ -72,15 +70,11 @@ jobs:
   derive-regime:
     name: Derive Market Regime
     runs-on: ubuntu-latest
-    # 15 22 * * 1-5 mirrors populate-daily's 0 22 * * 1-5 evening run above -- regime
-    # derived from that run's now-complete daily bar, not the partial one from 04:35 UTC.
+    # Mirrors populate-daily's evening run above (both triggered by Railway --
+    # see engine-trigger/index.js) -- regime derived from that run's now-complete
+    # daily bar, not the partial one from the earlier run.
     if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'derive-regime' ||
-      github.event_name == 'schedule' && (
-        github.event.schedule == '35 4 * * 1-5' ||
-        github.event.schedule == '15 22 * * 1-5' ||
-        github.event.schedule == '15 5 * * 1'
-      )
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'derive-regime'
     defaults:
       run:
         working-directory: intelligence-engine
@@ -101,8 +95,7 @@ jobs:
     name: Intraday Snapshot -- European
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'snapshot-european' ||
-      github.event_name == 'schedule' && github.event.schedule == '45 4 * * 1-5'
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'snapshot-european'
     defaults:
       run:
         working-directory: intelligence-engine
@@ -125,8 +118,7 @@ jobs:
     name: Engine Session -- European
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'engine-european' ||
-      github.event_name == 'schedule' && github.event.schedule == '50 4 * * 1-5'
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'engine-european'
     defaults:
       run:
         working-directory: intelligence-engine
@@ -139,10 +131,10 @@ jobs:
           cache-dependency-path: intelligence-engine/package-lock.json
       - run: npm ci
       # Guarantees fresh regime data for this session regardless of the standalone
-      # derive-regime job's own schedule/timing -- GitHub Actions' `needs:` cannot
-      # bridge separately cron-triggered jobs in this workflow (each job only runs
-      # in the single triggering event that matches its own `if:` condition), so
-      # ordering must be enforced within this job, not across jobs.
+      # derive-regime job's own timing -- GitHub Actions' `needs:` cannot bridge
+      # jobs triggered by separate workflow_dispatch calls from Railway (each job
+      # only runs in the single triggering event that matches its own `if:`
+      # condition), so ordering must be enforced within this job, not across jobs.
       - run: npx tsx src/scripts/deriveMarketRegime.ts
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -157,8 +149,7 @@ jobs:
     name: Intraday Snapshot -- US
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'snapshot-us' ||
-      github.event_name == 'schedule' && github.event.schedule == '45 8 * * 1-5'
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'snapshot-us'
     defaults:
       run:
         working-directory: intelligence-engine
@@ -181,8 +172,7 @@ jobs:
     name: Engine Session -- US
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'engine-us' ||
-      github.event_name == 'schedule' && github.event.schedule == '50 8 * * 1-5'
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'engine-us'
     defaults:
       run:
         working-directory: intelligence-engine
@@ -195,7 +185,7 @@ jobs:
           cache-dependency-path: intelligence-engine/package-lock.json
       - run: npm ci
       # See engine-european's identical step -- needs: can't bridge separately
-      # cron-triggered jobs, so regime freshness is enforced within this job.
+      # workflow_dispatch-triggered jobs, so regime freshness is enforced within this job.
       - run: npx tsx src/scripts/deriveMarketRegime.ts
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -210,8 +200,7 @@ jobs:
     name: Intraday Snapshot -- APAC
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'snapshot-apac' ||
-      github.event_name == 'schedule' && github.event.schedule == '25 12 * * 1-4'
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'snapshot-apac'
     defaults:
       run:
         working-directory: intelligence-engine
@@ -234,8 +223,7 @@ jobs:
     name: Engine Session -- APAC
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'engine-apac' ||
-      github.event_name == 'schedule' && github.event.schedule == '30 12 * * 1-4'
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'engine-apac'
     defaults:
       run:
         working-directory: intelligence-engine
@@ -247,11 +235,13 @@ jobs:
           cache: 'npm'
           cache-dependency-path: intelligence-engine/package-lock.json
       - run: npm ci
-      # Belt-and-suspenders guard for manual workflow_dispatch triggers on a Friday --
-      # the schedule itself is already Mon-Thu only (1-4), so this only ever bites a
-      # manual run. A bare `exit 0` inside a run: step only ends that step
-      # successfully, it doesn't skip the rest of the job -- so the check is exposed
-      # as a step output and the two real-work steps below are gated on it instead.
+      # Guard against a Friday run -- Railway's own cron (engine-trigger/index.js)
+      # already restricts engine-apac to Mon-Thu, but a manual workflow_dispatch
+      # trigger has no day-of-week restriction at all, so this is the only thing
+      # stopping one on a Friday. A bare `exit 0` inside a run: step only ends
+      # that step successfully, it doesn't skip the rest of the job -- so the
+      # check is exposed as a step output and the two real-work steps below are
+      # gated on it instead.
       - name: Skip if Friday
         id: friday-check
         run: |
@@ -262,7 +252,7 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
       # See engine-european's identical step -- needs: can't bridge separately
-      # cron-triggered jobs, so regime freshness is enforced within this job.
+      # workflow_dispatch-triggered jobs, so regime freshness is enforced within this job.
       - run: npx tsx src/scripts/deriveMarketRegime.ts
         if: steps.friday-check.outputs.skip != 'true'
         env:
@@ -279,8 +269,7 @@ jobs:
     name: Generate Analyst Profiles
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'generate-profiles' ||
-      github.event_name == 'schedule' && github.event.schedule == '0 5 * * 1'
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'generate-profiles'
     defaults:
       run:
         working-directory: intelligence-engine
@@ -300,18 +289,18 @@ jobs:
   generate-atr-profiles:
     name: Generate Analyst ATR Profiles
     runs-on: ubuntu-latest
-    # Must run after generate-profiles (0 5 * * 1) -- ATR profiles are derived from
+    # Must run after generate-profiles -- ATR profiles are derived from
     # analyst profiles, so reading them before generate-profiles has written this
     # week's data would produce stale results. GitHub Actions' `needs:` can't bridge
-    # jobs triggered by separate cron schedules (same limitation documented on
-    # engine-european/engine-us/engine-apac above), so there's no way to make that
-    # dependency explicit -- the 45-minute gap between 0 5 * * 1 and 45 5 * * 1 is the
-    # buffer this relies on instead. generate-profiles has consistently finished well
-    # within that window; if it's ever changed to do meaningfully more work, re-check
-    # this gap is still enough.
+    # jobs triggered by separate workflow_dispatch calls from Railway (same
+    # limitation documented on engine-european/engine-us/engine-apac above), so
+    # there's no way to make that dependency explicit -- the 45-minute gap between
+    # generate-profiles (Monday 04:58 UTC) and generate-atr-profiles (Monday 05:43
+    # UTC) in engine-trigger/index.js is the buffer this relies on instead.
+    # generate-profiles has consistently finished well within that window; if it's
+    # ever changed to do meaningfully more work, re-check this gap is still enough.
     if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'generate-atr-profiles' ||
-      github.event_name == 'schedule' && github.event.schedule == '45 5 * * 1'
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'generate-atr-profiles'
     defaults:
       run:
         working-directory: intelligence-engine
@@ -333,8 +322,7 @@ jobs:
     name: Calculate Analyst KPIs
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'calculate-kpis' ||
-      github.event_name == 'schedule' && github.event.schedule == '30 5 * * 1'
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'calculate-kpis'
     defaults:
       run:
         working-directory: intelligence-engine
@@ -355,8 +343,7 @@ jobs:
     name: Calculate Shadow System KPIs
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'calculate-shadow-kpis' ||
-      github.event_name == 'schedule' && github.event.schedule == '30 5 * * 1'
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'calculate-shadow-kpis'
     defaults:
       run:
         working-directory: intelligence-engine
@@ -399,8 +386,7 @@ jobs:
     name: Generate Post-Trade Reviews
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'generate-post-trade-reviews' ||
-      github.event_name == 'schedule' && github.event.schedule == '30 22 * * 1-5'
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'generate-post-trade-reviews'
     defaults:
       run:
         working-directory: intelligence-engine
