@@ -1,6 +1,7 @@
 'use client'
 
 import { Fragment, useState } from 'react'
+import { MessageCircle } from 'lucide-react'
 import { DisputeModal } from '@/components/analyst/DisputeModal'
 
 interface Trade {
@@ -142,7 +143,6 @@ export function TradeHistoryTable({
                 <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Entry</th>
                 <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Status</th>
                 <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Result R</th>
-                <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Source</th>
                 <th className="text-left px-3 py-2.5 text-xs font-medium text-muted-foreground">Review</th>
                 <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground"></th>
               </tr>
@@ -162,7 +162,12 @@ export function TradeHistoryTable({
                       onClick={() => review && setExpandedTrade(isExpanded ? null : trade.trade_id)}
                       className={`transition-colors ${review ? 'cursor-pointer hover:bg-muted/30' : 'hover:bg-muted/30'}`}
                     >
-                      <td className="px-4 py-2.5 text-muted-foreground tabular-nums">{date}</td>
+                      <td className="px-4 py-2.5 text-muted-foreground tabular-nums">
+                        <div>{date}</div>
+                        {trade.historical_backfill && (
+                          <span className="text-[10px] text-muted-foreground/60">Backfill</span>
+                        )}
+                      </td>
                       <td className="px-4 py-2.5 font-medium">{trade.market?.symbol ?? '—'}</td>
                       <td className="px-4 py-2.5">
                         <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
@@ -187,21 +192,19 @@ export function TradeHistoryTable({
                             </span>
                           : <span className="text-muted-foreground">—</span>}
                       </td>
-                      <td className="px-4 py-2.5">
-                        {trade.historical_backfill
-                          ? <span className="text-xs text-muted-foreground">Historical</span>
-                          : <span className="text-xs text-blue-600">Live</span>}
-                      </td>
                       <td className="px-3 py-2.5 text-xs">
                         {review ? (
-                          <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
-                            review.alignment_score === 4 ? 'bg-green-50 text-green-700' :
-                            review.alignment_score >= 3 ? 'bg-blue-50 text-blue-700' :
-                            review.alignment_score >= 2 ? 'bg-amber-50 text-amber-700' :
-                            'bg-red-50 text-red-700'
-                          }`}>
-                            {review.alignment_score}/4
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <MessageCircle size={14} className="text-muted-foreground" aria-hidden="true" />
+                            <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                              review.alignment_score === 4 ? 'bg-green-50 text-green-700' :
+                              review.alignment_score >= 3 ? 'bg-blue-50 text-blue-700' :
+                              review.alignment_score >= 2 ? 'bg-amber-50 text-amber-700' :
+                              'bg-red-50 text-red-700'
+                            }`}>
+                              {review.alignment_score}/4
+                            </span>
+                          </div>
                         ) : (
                           <span className="text-muted-foreground/40">—</span>
                         )}
@@ -227,7 +230,7 @@ export function TradeHistoryTable({
                     </tr>
                     {isExpanded && review && (
                       <tr>
-                        <td colSpan={9} className="px-4 py-3 bg-muted/20 border-t border-border">
+                        <td colSpan={8} className="px-4 py-3 bg-muted/20 border-t border-border">
                           <p className="text-xs text-muted-foreground leading-relaxed">
                             {review.analyst_facing_review}
                           </p>
