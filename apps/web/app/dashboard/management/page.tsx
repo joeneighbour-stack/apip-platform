@@ -116,9 +116,18 @@ export default async function ManagementWorkspacePage() {
   const pendingAbsences = (absenceRequests ?? []).filter((a: any) => a.status === 'PENDING').length
 
   // ── Monitor tab: unified 30-day trade stream across all analysts ────────────────
+  // Uses the service-role client (adminDb), not the RLS-scoped `supabase` used
+  // everywhere else on this page -- actual_trades_select_manager (migrations/
+  // 002_rls.sql) and post_trade_reviews_select_manager (035_post_trade_reviews_rls.sql)
+  // both restrict reads to rows where manages_analyst() is true for the analyst_id in
+  // question. A manager who doesn't manage every analyst on the team would get a
+  // silently incomplete (or empty) result under the RLS-scoped client for either query
+  // -- this tab is meant to be a full cross-team view (same reasoning already applied
+  // to the coachingAlignment query below), so both deliberately bypass that scoping.
+  const adminDb = createAdminClient()
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
-  const { data: allTrades } = await supabase
+  const { data: allTrades } = await adminDb
     .from('actual_trades')
     .select(`
       trade_id, direction, result_r, triggered,
@@ -139,7 +148,7 @@ export default async function ManagementWorkspacePage() {
   // return every matching review -- !inner kept anyway for consistency with that file
   // and because it's required if this ever adds an analyst-scoped filter later.
   const { data: allReviews } = allTradeIds.length > 0
-    ? await supabase
+    ? await adminDb
         .from('post_trade_reviews')
         .select(`
           review_id, trade_id, market, session,
@@ -169,16 +178,7 @@ export default async function ManagementWorkspacePage() {
   // confirmed live: an explicit .not('trade', 'is', null) here returns the identical
   // row count with or without it.
   //
-  // Uses the service-role client (adminDb), not the RLS-scoped `supabase` used
-  // everywhere else on this page -- this table's own RLS is scoped exactly the same
-  // way actual_trades's is: post_trade_reviews_select_manager (migrations/
-  // 035_post_trade_reviews_rls.sql) only returns rows where manages_analyst() is true
-  // for the trade's own analyst_id, and actual_trades_select_manager
-  // (002_rls.sql) applies the identical manages_analyst() restriction to the joined
-  // trade row itself. A manager who doesn't manage every analyst on the team would get
-  // a silently incomplete (or empty) result under the RLS-scoped client -- this table
-  // is meant to be a full cross-team view, so it deliberately bypasses that scoping.
-  const adminDb = createAdminClient()
+  // Reuses the same adminDb declared above (allTrades/allReviews) -- same RLS reasoning.
   const { data: coachingAlignment, error: alignmentError } = await adminDb
     .from('post_trade_reviews')
     .select(`
