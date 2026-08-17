@@ -66,10 +66,16 @@ export function WorkloadPanel({ allocations, availability }: WorkloadPanelProps)
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-sm text-muted-foreground">{allocs.length} markets</span>
-                  <a href={`/dashboard/management/analyst/${analystId}/workspace`}
-                    className="text-xs text-accent hover:underline">
-                    View workspace &rarr;
-                  </a>
+                  <div className="flex items-center gap-2">
+                    <a href={`/dashboard/management/analyst/${analystId}/workspace`}
+                      className="text-xs px-2 py-1 rounded border border-border hover:bg-muted/30">
+                      View
+                    </a>
+                    <a href={`/dashboard/management/analyst/${analystId}`}
+                      className="text-xs px-2 py-1 rounded border border-border hover:bg-muted/30">
+                      Profile
+                    </a>
+                  </div>
                 </div>
               </div>
             )

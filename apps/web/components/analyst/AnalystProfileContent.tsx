@@ -16,13 +16,12 @@ interface Props {
   mode?: 'full' | 'kpi-only'
 }
 
-// The management analyst-profile page (/dashboard/management/analyst/[analystId]) and the
-// management "full profile" page (.../[analystId]/full) that used to call this with
-// mode='full' and mode='kpi-only'+backHref respectively have both been removed -- the only
-// remaining caller is the analyst's own "My KPIs" tab (/dashboard/analyst/performance),
-// which always passes mode='kpi-only' with no backHref. The mode==='full' branch and the
-// mode==='kpi-only' && backHref branch below are therefore currently unreachable; left in
-// place rather than deleted since trimming them wasn't asked for.
+// Shared between the management analyst-profile page (/dashboard/management/analyst/
+// [analystId], mode='kpi-only' with backHref) and the analyst's own "My KPIs" tab
+// (/dashboard/analyst/performance, mode='kpi-only' with no backHref). The management
+// "full profile" page (.../[analystId]/full) that used to call this with mode='full' was
+// removed and hasn't come back -- that branch below is therefore currently unreachable;
+// left in place rather than deleted since trimming it wasn't asked for.
 export async function AnalystProfileContent({ analystId, subtitle, backHref, backLabel = 'Back', mode = 'full' }: Props) {
   const data = await getAnalystProfileData(analystId, mode)
   if (!data.analyst) notFound()
