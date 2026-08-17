@@ -73,25 +73,27 @@ export function WorkloadPanel({ allocations, availability }: WorkloadPanelProps)
           <p className="text-sm text-muted-foreground">No allocations yet for today&apos;s session.</p>
         </div>
       ) : (
-        <div className="rounded-lg border border-border px-4">
-          {entries.map(([analystId, { name, allocs }]) => {
-            const cap = capByAnalyst.get(analystId) ?? null
-            const isAtCapacity = cap !== null && allocs.length >= cap
-            const isExpanded = expandedAnalystId === analystId
-            return (
-              <div key={analystId} className="border-b border-border last:border-0">
-                <div className="flex items-center justify-between py-2">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-sm">{name}</span>
-                    {isAtCapacity && (
-                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
-                        At capacity
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm text-muted-foreground">{allocs.length} markets</span>
-                    <div className="flex items-center gap-2">
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {entries.map(([analystId, { name, allocs }]) => {
+              const cap = capByAnalyst.get(analystId) ?? null
+              const isAtCapacity = cap !== null && allocs.length >= cap
+              const isExpanded = expandedAnalystId === analystId
+              return (
+                <div key={analystId} className="rounded-lg border border-border bg-card p-4">
+                  <div className="flex items-start justify-between mb-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium text-sm">{name}</p>
+                        {isAtCapacity && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
+                            At capacity
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">{allocs.length} markets</p>
+                    </div>
+                    <div className="flex gap-2">
                       <button
                         onClick={() => toggle(analystId, 'view')}
                         className={`text-xs px-2 py-1 rounded border hover:bg-muted/30 ${
@@ -111,18 +113,27 @@ export function WorkloadPanel({ allocations, availability }: WorkloadPanelProps)
                     </div>
                   </div>
                 </div>
-                {isExpanded && expandedPanel && (
-                  <div className="pb-3">
-                    {expandedPanel === 'view' ? (
-                      <InlineAnalystWorkspace analystId={analystId} />
-                    ) : (
-                      <InlineAnalystProfile analystId={analystId} />
-                    )}
-                  </div>
+              )
+            })}
+          </div>
+
+          {/* Dropdown panel renders below the full grid, not inside a card */}
+          {expandedAnalystId && expandedPanel && (
+            <div className="rounded-lg border border-primary/20 bg-card overflow-hidden">
+              <div className="px-4 py-2.5 bg-muted/30 border-b border-border">
+                <p className="text-xs font-medium">
+                  {byAnalyst.get(expandedAnalystId)!.name} &mdash; {expandedPanel === 'view' ? 'Workspace' : 'Profile'}
+                </p>
+              </div>
+              <div className="p-4">
+                {expandedPanel === 'view' ? (
+                  <InlineAnalystWorkspace analystId={expandedAnalystId} />
+                ) : (
+                  <InlineAnalystProfile analystId={expandedAnalystId} />
                 )}
               </div>
-            )
-          })}
+            </div>
+          )}
         </div>
       )}
     </section>
