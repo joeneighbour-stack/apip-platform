@@ -620,7 +620,10 @@ async function main() {
             profilesByAnalyst.get(a.analyst) ?? [],
           )
           const workload = analystWorkload.get(a.analyst) ?? 0
-          const baseValue = raw.confidence * raw.avgR * raw.alignmentMultiplier
+          // Use absolute avgR for competition -- a negative edge analyst with REGIME-tier
+          // match still has meaningful historical data and should compete fairly.
+          // Real avgR is preserved on raw.avgR for display and template selection.
+          const baseValue = raw.confidence * Math.abs(raw.avgR) * raw.alignmentMultiplier
           const adjustedValue = raw.profileTier === 'NONE'
             ? -1
             : workloadAdjustedScore(baseValue, workload, sessionMarkets.length, eligibleAnalysts.length)

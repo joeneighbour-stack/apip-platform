@@ -256,16 +256,30 @@ export function scoreAnalystForMarket(
   )
   if (directionPick) return buildScore(analystId, marketId, 'DIRECTION', directionPick, trendState)
 
-  // NONE tier -- no tier found a usable signal for this analyst+market. avgR/confidence
-  // are 0, not the analyst's overall/team-wide avgR: using an overall figure here would
-  // let the single best all-round analyst win every NONE-tier market on raw historical
-  // edge regardless of whether they have any actual data for THIS market, which is
-  // exactly backwards for a tier that by definition means "no real signal for this
-  // market." Scoring 0 lets the caller's workload balancing (runEngineSession.ts) decide
-  // instead -- see that file's tiebreak-by-workload comment for why this genuinely
-  // achieves "distributed by workload" rather than just deferring to array order.
+  // NONE tier -- no tier found a usable signal for this analyst+market. Uses the
+  // analyst's overall cross-market avgR as a prior (confidence: 0.1, low but
+  // non-zero) rather than flat 0, so the fallback allocator has something to
+  // differentiate analysts on instead of nothing.
+  //
+  // CURRENTLY INERT: the only caller (runEngineSession.ts) hard-excludes every
+  // profileTier==='NONE' candidate before these values are ever read --
+  // `adjustedValue = raw.profileTier === 'NONE' ? -1 : ...`, then filters out
+  // anything < 0 -- so this avgR/confidence never actually reaches a scoring
+  // comparison today. Left this way deliberately per explicit instruction; the
+  // previous version of this comment explained why an overall-avgR prior was
+  // wrong here (lets the single best all-round analyst win every NONE-tier
+  // market on raw historical edge, regardless of whether they have any actual
+  // data for THIS market) -- that rationale still applies if the -1 exclusion
+  // in runEngineSession.ts is ever removed to let this value matter.
+  const overallAvgR = profiles.length > 0
+    ? profiles.reduce((s, p) => s + (p.profile_data?.avg_r ?? 0), 0) / profiles.length
+    : 0
+
   return {
-    analystId, marketId, preferredDirection: null, avgR: 0, profileTier: 'NONE', profileQuality: null, confidence: 0,
+    analystId, marketId, preferredDirection: null,
+    avgR: overallAvgR, // overall prior, not 0
+    profileTier: 'NONE', profileQuality: null,
+    confidence: 0.1, // low but non-zero -- allows workload tiebreak to work
     directionAlignment: 'NONE', alignmentMultiplier: 0.85,
   }
 }
