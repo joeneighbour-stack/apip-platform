@@ -39,6 +39,12 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
+// Shared so the calcAdx() call site and the index-alignment offset in main() can never
+// drift out of sync with each other again -- the offset bug this file previously had
+// (adxOffset = 14*2+14 = 42, should have been 27) came from two different hardcoded
+// "14"s that had no shared source of truth to keep them honest against each other.
+const ADX_PERIOD = 14
+
 // ── Indicator calculations ────────────────────────────────────────────────────
 
 function calcEma(closes: number[], period: number): number[] {
@@ -77,14 +83,23 @@ function calcAdx(
     minusDmArr.push(minusDm)
   }
 
-  // Wilder smoothing
+  // Wilder smoothing (RMA) -- seeded and expressed as a running average (matches
+  // TradingView's ta.rma()), not the sum-scaled form this used to be. Verified against
+  // real DAX bars before making this change: the sum-scaled form produces an ADX series
+  // that is numerically IDENTICAL (differences at floating-point noise level, ~1e-14) to
+  // this average-based form -- the p-times scaling that the sum form carries on
+  // smoothTr/smoothPlus/smoothMinus cancels out exactly in the plusDi/minusDi ratios
+  // below, since all three series carry the identical scale factor. So this change is
+  // purely for clarity/matching the standard formula, not a behavioural fix -- it does
+  // NOT change any ADX value. The real bug was adxOffset (see below).
   function wilderSmooth(arr: number[], p: number): number[] {
+    if (arr.length < p) return []
     const result: number[] = []
-    let sum = arr.slice(0, p).reduce((a, b) => a + b, 0)
-    result.push(sum)
+    let val = arr.slice(0, p).reduce((a, b) => a + b, 0) / p
+    result.push(val)
     for (let i = p; i < arr.length; i++) {
-      sum = sum - sum / p + arr[i]!
-      result.push(sum)
+      val = (val * (p - 1) + arr[i]!) / p
+      result.push(val)
     }
     return result
   }
@@ -288,11 +303,11 @@ async function main() {
     const ema20Series = calcEma(closes, 20)
     const ema50Series = calcEma(closes, 50)
     const ema200Series = calcEma(closes, 200)
-    const adxSeries = calcAdx(highs, lows, closes, 14)
+    const adxSeries = calcAdx(highs, lows, closes, ADX_PERIOD)
 
     // The EMA series are offset -- align by index
     // ema200Series[0] corresponds to closes[199]
-    // adxSeries starts after period*2 roughly
+    // adxSeries offset is derived precisely below, at the adxOffset comment
     // We process from the last N dates (or all for backfill)
 
     const processFromIndex = isBackfill ? 200 : Math.max(200, bars.length - 60)
@@ -302,9 +317,23 @@ async function main() {
       const ema20Idx = i - 20 // ema20Series[0] = closes[19]
       const ema50Idx = i - 50
       const ema200Idx = i - 200
-      // ADX: ema starts at trArr index period-1, and trArr is closes-1 long
-      // approx: adxSeries[j] ≈ bars[j + period*2 + period]
-      const adxOffset = 14 * 2 + 14
+      // ADX offset -- verified by hand and empirically (index-tagged against real DAX
+      // bars) rather than trusted from either the old code or a first-pass derivation,
+      // since both turned out wrong:
+      //   trArr has closes.length-1 entries; trArr[k] corresponds to closes[k+1].
+      //   wilderSmooth seeds from trArr[0..period-1], so smoothTr[0] <-> trArr[period-1]
+      //     <-> closes[period]. Generally smoothTr[j] <-> closes[period+j].
+      //   dxHistory has one entry per smoothTr entry (every iteration pushes, even the
+      //     tr===0 branch), so dxHistory[j] <-> closes[period+j] too.
+      //   adxArr starts once dxHistory.length >= period, i.e. at loop index period-1
+      //     (the period-th push) -- that's smoothTr[period-1] <-> closes[period + period-1]
+      //     = closes[2*period - 1]. So adxArr[0] <-> closes[2*period-1], NOT closes[2*period]
+      //     -- period*2 (28 for period=14) is off by one; the previous 14*2+14=42 was
+      //     wrong by a different, much larger margin (a 15-trading-day lag between the
+      //     ADX value used and the date a regime row attributed it to -- this, not the
+      //     wilderSmooth formula above, is what actually caused regime rows to carry
+      //     stale/understated ADX).
+      const adxOffset = 2 * ADX_PERIOD - 1
       const adxIdx = i - adxOffset
 
       if (ema20Idx < 0 || ema50Idx < 0 || ema200Idx < 0 || adxIdx < 0) continue
