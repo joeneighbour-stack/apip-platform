@@ -78,6 +78,11 @@ export function CoverageStrip({ rows, recommendationsGeneratedToday = 0 }: Props
                 <Fragment key={row.recommendationId}>
                   <tr
                     onClick={() => setExpandedId(isExpanded ? null : row.recommendationId)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpandedId(isExpanded ? null : row.recommendationId) }
+                    }}
                     className={`cursor-pointer border-t border-border hover:bg-muted/30 transition-colors ${
                       i % 2 === 1 ? 'bg-muted/10' : ''
                     } ${row.isDoNotUse ? 'opacity-60' : ''} ${isExpanded ? 'bg-muted/30' : ''}`}

@@ -71,6 +71,9 @@ export function EngineRunsPanel({ runs }: { runs: EngineRun[] }) {
       )}
 
       <div className="rounded-lg border border-border overflow-hidden">
+        {runs.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-4 text-center">No data yet.</p>
+        ) : (
         <table className="w-full text-sm">
           <thead className="bg-muted/50">
             <tr>
@@ -113,6 +116,7 @@ export function EngineRunsPanel({ runs }: { runs: EngineRun[] }) {
             ))}
           </tbody>
         </table>
+        )}
       </div>
     </section>
   )

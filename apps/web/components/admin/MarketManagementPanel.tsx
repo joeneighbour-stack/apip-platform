@@ -85,6 +85,9 @@ export function MarketManagementPanel({ markets }: { markets: Market[] }) {
       )}
 
       <div className="rounded-lg border border-border overflow-hidden">
+        {filtered.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-4 text-center">No data yet.</p>
+        ) : (
         <table className="w-full text-sm">
           <thead className="bg-muted/50">
             <tr>
@@ -166,6 +169,7 @@ export function MarketManagementPanel({ markets }: { markets: Market[] }) {
             ))}
           </tbody>
         </table>
+        )}
       </div>
     </section>
   )

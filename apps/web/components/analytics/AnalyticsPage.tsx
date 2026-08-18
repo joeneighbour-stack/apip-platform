@@ -54,6 +54,7 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
   const [pubs, setPubs] = useState<MetricsPublication[]>([])
   const [rawDataLoaded, setRawDataLoaded] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [reportOpen, setReportOpen] = useState(false)
   const [cachedView, setCachedView] = useState<DefaultAnalyticsView | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -104,15 +105,28 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
   // and handleGenerateReport below), not on every default-view load. On any other view (a
   // filter is already active via URL params, or this is the analyst-locked view, which can
   // never use the cache), this is unchanged: fetch raw and compute everything client-side.
-  useEffect(() => {
+  // Shared by the mount effect below and the error state's "Try again" button -- checks
+  // isDefaultView fresh each call, so a retry after a filter's already been applied
+  // correctly re-fetches raw data instead of re-fetching the (no longer relevant) cache.
+  function loadData() {
     if (isDefaultView) {
       fetch('/api/analytics/summary').then(r => r.json()).then((data: DefaultAnalyticsView) => {
         setCachedView(data)
         setLoading(false)
-      }).catch(() => setLoading(false))
+      }).catch(() => {
+        setError('Failed to load analytics. Please refresh the page.')
+        setLoading(false)
+      })
     } else {
-      fetchRawData().then(() => setLoading(false)).catch(() => setLoading(false))
+      fetchRawData().then(() => setLoading(false)).catch(() => {
+        setError('Failed to load trade data. Please refresh the page.')
+        setLoading(false)
+      })
     }
+  }
+
+  useEffect(() => {
+    loadData()
     // Intentionally runs once on mount only -- filtering below is all client-side against
     // the fetched dataset, matching the page's existing (pre-cache) behaviour.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -130,7 +144,10 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
     // rawDataLoaded is already true by the time any filter runs.
     if (!rawDataLoaded && !lockedAnalystId) {
       setLoading(true)
-      fetchRawData().then(() => setLoading(false)).catch(() => setLoading(false))
+      fetchRawData().then(() => setLoading(false)).catch(() => {
+        setError('Failed to load trade data. Please refresh the page.')
+        setLoading(false)
+      })
     }
   }
 
@@ -256,6 +273,18 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
         <p className="text-sm text-muted-foreground">
           {!rawDataLoaded && !isDefaultView ? 'Loading trade data for filtering...' : 'Loading performance data...'}
         </p>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-lg border border-red-200 bg-red-50 p-6">
+        <p className="text-sm text-red-700">{error}</p>
+        <button onClick={() => { setError(null); setLoading(true); loadData() }}
+          className="mt-2 text-xs text-red-600 underline">
+          Try again
+        </button>
       </div>
     )
   }

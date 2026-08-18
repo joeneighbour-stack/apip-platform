@@ -175,6 +175,9 @@ export function AnalystShadowBreakdown({ rows, analysts }: Props) {
                 <Fragment key={analyst.analyst_id}>
                   <tr
                     onClick={() => toggle(analyst.analyst_id)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(analyst.analyst_id) } }}
                     className={`cursor-pointer hover:bg-muted/30 transition-colors ${
                       isOpen ? 'bg-muted/40' : i % 2 === 1 ? 'bg-muted/20' : ''
                     }`}

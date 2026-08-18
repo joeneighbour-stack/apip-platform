@@ -161,6 +161,11 @@ export function TradeHistoryTable({
                     <tr
                       onClick={() => review && setExpandedTrade(isExpanded ? null : trade.trade_id)}
                       className={`transition-colors ${review ? 'cursor-pointer hover:bg-muted/30' : 'hover:bg-muted/30'}`}
+                      role={review ? 'button' : undefined}
+                      tabIndex={review ? 0 : undefined}
+                      onKeyDown={review ? (e => {
+                        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpandedTrade(isExpanded ? null : trade.trade_id) }
+                      }) : undefined}
                     >
                       <td className="px-4 py-2.5 text-muted-foreground tabular-nums">
                         <div>{date}</div>

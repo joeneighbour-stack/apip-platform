@@ -165,6 +165,14 @@ export function CompliancePanel({ reviews }: CompliancePanelProps) {
                       onClick={() => setExpandedReview(
                         expandedReview === review.review_id ? null : review.review_id
                       )}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          setExpandedReview(expandedReview === review.review_id ? null : review.review_id)
+                        }
+                      }}
                     >
                       <td className="px-4 py-2.5 font-medium">{review.market}</td>
                       <td className="px-4 py-2.5 text-muted-foreground">{review.session}</td>

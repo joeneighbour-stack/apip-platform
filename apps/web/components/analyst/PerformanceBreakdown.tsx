@@ -224,7 +224,10 @@ export function PerformanceBreakdown({ trades }: PerformanceBreakdownProps) {
               <tbody className="divide-y divide-border">
                 {byAssetClass.map(row => (
                   <tr key={row.cls} className="hover:bg-muted/30 transition-colors cursor-pointer"
-                    onClick={() => setAssetClass(row.cls)}>
+                    onClick={() => setAssetClass(row.cls)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setAssetClass(row.cls) } }}>
                     <td className="px-4 py-2.5 font-medium">{row.cls}</td>
                     <td className="px-4 py-2.5 tabular-nums text-muted-foreground">{row.tradeCount}</td>
                     <td className={`px-4 py-2.5 tabular-nums font-medium ${row.totalR >= 0 ? 'text-green-700' : 'text-red-700'}`}>
@@ -258,7 +261,10 @@ export function PerformanceBreakdown({ trades }: PerformanceBreakdownProps) {
             {byDirection.map(row => (
               <div key={row.dir}
                 className="rounded-lg border border-border bg-card p-4 cursor-pointer hover:bg-muted/30 transition-colors"
-                onClick={() => setDirection(row.dir)}>
+                onClick={() => setDirection(row.dir)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDirection(row.dir) } }}>
                 <div className="flex items-center gap-2 mb-2">
                   <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
                     row.dir === 'BUY' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'

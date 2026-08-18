@@ -145,6 +145,9 @@ function DisputeRow({ dispute, onResolved }: { dispute: Dispute; onResolved: (di
       <div
         className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-muted/30 transition-colors"
         onClick={() => setExpanded(!expanded)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpanded(!expanded) } }}
       >
         <div className="flex items-center gap-3">
           <span className="font-medium text-sm">{dispute.analyst?.display_name ?? 'Unknown'}</span>

@@ -68,6 +68,9 @@ export function UserManagementPanel({ users, analysts, isAdmin }: {
       )}
 
       <div className="rounded-lg border border-border overflow-hidden">
+        {users.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-4 text-center">No data yet.</p>
+        ) : (
         <table className="w-full text-sm">
           <thead className="bg-muted/50">
             <tr>
@@ -142,6 +145,7 @@ export function UserManagementPanel({ users, analysts, isAdmin }: {
             ))}
           </tbody>
         </table>
+        )}
       </div>
     </section>
   )
