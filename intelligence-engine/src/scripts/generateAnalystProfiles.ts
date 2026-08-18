@@ -12,10 +12,10 @@
 // who thrives in low-volatility ranging markets buying from Zone 1 is
 // distinguished from one who excels in high-volatility trending conditions
 // selling from Zone 4, rather than folding into one coarse bucket. Regime
-// coverage (market_regime_state) currently only reaches back to ~Feb 2025, so
-// a zone-only tier (no regime, entry_zone only) also exists to capture
-// zone-level performance across the much longer trade history outside that
-// window -- see the zone-only profiles loop below.
+// coverage (market_regime_state) reaches back to ~2019-08, while actual_trades
+// go back to 2017, so a zone-only tier (no regime, entry_zone only) also
+// exists to capture zone-level performance across the trade history that
+// predates regime coverage -- see the zone-only profiles loop below.
 // This enables the engine to:
 //   1. Select the best direction for a market given current regime
 //   2. Allocate the best analyst for a market given current regime
@@ -120,7 +120,13 @@ async function main() {
   console.log('Generating analyst profiles from actual_trades...\n')
 
   const generatedAt = new Date().toISOString()
-  const windowStart = new Date(Date.now() - 2.5 * 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  // Use all available history -- actual_trades go back to 2017, regime back to 2019.
+  // Trades before regime coverage (pre-2019-08) fall into the no-regime bucket
+  // (regime: null), which is handled correctly -- they contribute to DIRECTION-tier
+  // profiles but not MARKET/REGIME-tier ones. Used for both the regime fetch below
+  // and the trades fetch further down -- one constant, so the two windows can't
+  // silently drift apart.
+  const windowStart = '2017-01-01'
 
   // Load active analysts
   const { data: analysts } = await db

@@ -9,7 +9,7 @@
 //   EMA20, EMA50, EMA200  -- exponential moving averages of close
 //   ADX14                 -- Average Directional Index (trend strength)
 //   Directional persistence -- % of last 20 bars with close > prev close
-//   ATR percentile        -- ATR14 as % of 60-bar percentile (volatility)
+//   ATR percentile        -- ATR14 as % of 252-bar percentile (volatility)
 //
 // Regime derivation:
 //   TRENDING_UP:   EMA20 > EMA50 > EMA200 AND ADX14 >= 25
@@ -18,7 +18,7 @@
 //   MIXED:         everything else
 //
 // Volatility:
-//   ATR14/close percentile vs last 60 bars
+//   ATR14/close percentile vs last 252 bars (1 trading year)
 //   <25th → LOW_VOL, 25-75th → NORMAL_VOL, 75-90th → HIGH_VOL, >90th → EXTREME_VOL
 //
 // Run:
@@ -346,7 +346,7 @@ async function main() {
       const adx14 = adxSeries[adxIdx]!
 
       const dirPersistence = calcDirectionalPersistence(closes.slice(0, i + 1), 20)
-      const atrPct = calcAtrPercentile(atrs.slice(0, i + 1), closes.slice(0, i + 1), 60)
+      const atrPct = calcAtrPercentile(atrs.slice(0, i + 1), closes.slice(0, i + 1), 252)
 
       const regime = deriveRegime(ema20, ema50, ema200, adx14, dirPersistence, atrPct)
 
