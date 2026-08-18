@@ -98,18 +98,18 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
   }
 
   // On the default view: show the cheap pre-computed cache immediately (fast first paint
-  // for "the most expensive query and most common access pattern"), then fetch the full
-  // raw dataset in the background anyway -- not for this render, but so filtering/Report
-  // Builder work instantly the moment the user touches a filter, instead of only starting
-  // that fetch reactively once they do. On any other view, this is unchanged from before:
-  // fetch raw and compute everything client-side.
+  // for "the most expensive query and most common access pattern") and stop there -- the
+  // 21MB raw trade/publication dataset is only needed once the user actually applies a
+  // filter or opens Report Builder, so it's fetched lazily then instead (see updateFilters
+  // and handleGenerateReport below), not on every default-view load. On any other view (a
+  // filter is already active via URL params, or this is the analyst-locked view, which can
+  // never use the cache), this is unchanged: fetch raw and compute everything client-side.
   useEffect(() => {
     if (isDefaultView) {
       fetch('/api/analytics/summary').then(r => r.json()).then((data: DefaultAnalyticsView) => {
         setCachedView(data)
         setLoading(false)
       }).catch(() => setLoading(false))
-      fetchRawData().catch(() => {})
     } else {
       fetchRawData().then(() => setLoading(false)).catch(() => setLoading(false))
     }
@@ -123,6 +123,15 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
     setFilters(locked)
     const params = filtersToSearchParams(locked)
     router.replace(`${pathname}?${params.toString()}`, { scroll: false })
+
+    // Lazy-load raw data the first time a filter is applied on the default view --
+    // subsequent filter changes reuse it. The locked-analyst view never hits this: it
+    // already fetched raw data on mount above (isDefaultView is always false there), so
+    // rawDataLoaded is already true by the time any filter runs.
+    if (!rawDataLoaded && !lockedAnalystId) {
+      setLoading(true)
+      fetchRawData().then(() => setLoading(false)).catch(() => setLoading(false))
+    }
   }
 
   const assetClassByMarketId = useMemo(() => new Map(markets.map(m => [m.market_id, m.asset_class])), [markets])
@@ -244,7 +253,9 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
     return (
       <div className="rounded-lg border border-border p-12 text-center space-y-3">
         <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
-        <p className="text-sm text-muted-foreground">Loading performance data...</p>
+        <p className="text-sm text-muted-foreground">
+          {!rawDataLoaded && !isDefaultView ? 'Loading trade data for filtering...' : 'Loading performance data...'}
+        </p>
       </div>
     )
   }
