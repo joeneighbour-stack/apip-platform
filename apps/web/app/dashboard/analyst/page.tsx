@@ -1,7 +1,11 @@
 import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
+import { createClient } from '@/lib/supabase/server'
 import { CoverageStrip } from '@/components/analyst/workspace/CoverageStrip'
 import { getWorkspaceData } from '@/lib/workspaceData'
+
+const SESSION_LABELS: Record<string, string> = { EUROPEAN: 'European', US: 'US', APAC: 'APAC' }
+const SESSION_ORDER = ['EUROPEAN', 'US', 'APAC']
 
 function SessionStatus() {
   const now = new Date()
@@ -42,6 +46,31 @@ export default async function AnalystWorkspacePage() {
 
   const { rows, marketsToday, marketsWithEventRisk, yesterdayR, closedYesterdayCount, recommendationsGeneratedToday } = await getWorkspaceData(user.analystId)
 
+  // Day-start coverage forecast (preallocateDay.ts, written 04:20 UTC -- before
+  // any session's real engine run). Advisory, not authoritative: today's actual
+  // recommendations (rows/CoverageStrip below) come from each session's own live
+  // run and can genuinely differ once real intraday data exists -- see
+  // migrations/049_daily_coverage_plan.sql's comment for why. Shown whenever
+  // available rather than only pre-recommendations, since a market can be in
+  // the day's plan for a session that hasn't run yet even after another
+  // session's real recommendations already exist.
+  const supabase = await createClient()
+  const today = new Date().toISOString().slice(0, 10)
+  const { data: coveragePlan } = await supabase
+    .from('daily_coverage_plan')
+    .select('market:market_id ( symbol, asset_class ), session')
+    .eq('date', today)
+    .eq('analyst_id', user.analystId)
+    .order('session')
+
+  const coverageBySession = new Map<string, string[]>()
+  for (const row of (coveragePlan ?? []) as any[]) {
+    const symbol = row.market?.symbol
+    if (!symbol) continue
+    if (!coverageBySession.has(row.session)) coverageBySession.set(row.session, [])
+    coverageBySession.get(row.session)!.push(symbol)
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -74,6 +103,22 @@ export default async function AnalystWorkspacePage() {
           )}
         </div>
       </div>
+
+      {/* Day-start coverage plan -- available from 04:20 UTC, before any session's
+          real recommendations exist */}
+      {coverageBySession.size > 0 && (
+        <section className="space-y-2">
+          <h2 className="text-sm font-medium">Today&apos;s Coverage Plan</h2>
+          <div className="rounded-lg border border-border bg-card p-4 space-y-1.5">
+            {SESSION_ORDER.filter(s => coverageBySession.has(s)).map(session => (
+              <p key={session} className="text-sm">
+                <span className="font-medium">{SESSION_LABELS[session]}:</span>{' '}
+                <span className="text-muted-foreground">{coverageBySession.get(session)!.join(', ')}</span>
+              </p>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Coverage strip */}
       <section className="space-y-3">

@@ -22,6 +22,7 @@ on:
         required: true
         type: choice
         options:
+          - preallocate-day
           - populate-daily
           - derive-regime
           - snapshot-european
@@ -38,6 +39,32 @@ on:
           - generate-post-trade-reviews
 
 jobs:
+  preallocate-day:
+    name: Day-Start Coverage Preallocation
+    runs-on: ubuntu-latest
+    # Runs before every other job today (04:20 UTC, per engine-trigger/index.js) --
+    # no dependency on populate-daily or derive-regime, deliberately: it scores off
+    # whatever market_regime_state already holds (yesterday's reading) rather than
+    # waiting for today's, since the whole point is a plan available before the
+    # day's real data exists. See preallocateDay.ts's own header comment.
+    if: |
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'preallocate-day'
+    defaults:
+      run:
+        working-directory: intelligence-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: intelligence-engine/package-lock.json
+      - run: npm ci
+      - run: npx tsx src/scripts/preallocateDay.ts
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
   populate-daily:
     name: Populate Market State Daily
     runs-on: ubuntu-latest

@@ -1040,6 +1040,48 @@ export type Database = {
           },
         ]
       }
+      daily_coverage_plan: {
+        Row: {
+          analyst_id: string
+          created_at: string
+          date: string
+          market_id: string
+          plan_id: string
+          session: string
+        }
+        Insert: {
+          analyst_id: string
+          created_at?: string
+          date: string
+          market_id: string
+          plan_id?: string
+          session: string
+        }
+        Update: {
+          analyst_id?: string
+          created_at?: string
+          date?: string
+          market_id?: string
+          plan_id?: string
+          session?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "daily_coverage_plan_analyst_id_fkey"
+            columns: ["analyst_id"]
+            isOneToOne: false
+            referencedRelation: "analysts"
+            referencedColumns: ["analyst_id"]
+          },
+          {
+            foreignKeyName: "daily_coverage_plan_market_id_fkey"
+            columns: ["market_id"]
+            isOneToOne: false
+            referencedRelation: "markets"
+            referencedColumns: ["market_id"]
+          },
+        ]
+      }
       economic_calendar_events: {
         Row: {
           actual: string | null

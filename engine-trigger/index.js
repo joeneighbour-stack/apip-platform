@@ -31,6 +31,12 @@ async function triggerWorkflow(job) {
 }
 
 // All times UTC
+// preallocate-day: 04:20 -- before populate-daily, before derive-regime, before
+// any session's engine run. Scores off yesterday's regime (today's hasn't been
+// derived yet) so analysts have a full-day coverage forecast before the day's
+// real data exists. See preallocateDay.ts's own header comment.
+cron.schedule('20 4 * * 1-5', () => triggerWorkflow('preallocate-day'))
+
 // populate-daily: 04:28
 cron.schedule('28 4 * * 1-5', () => triggerWorkflow('populate-daily'))
 
@@ -86,6 +92,7 @@ cron.schedule('43 5 * * 1', () => triggerWorkflow('generate-atr-profiles'))
 
 console.log('APIP Engine Trigger running — waiting for scheduled times (UTC)')
 console.log('Schedules:')
+console.log('  04:20 preallocate-day')
 console.log('  04:28 populate-daily')
 console.log('  04:33 derive-regime')
 console.log('  04:43 snapshot-european')
