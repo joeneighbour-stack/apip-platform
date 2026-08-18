@@ -26,7 +26,7 @@ export interface AnalyticsFilterState {
 }
 
 export const DEFAULT_FILTERS: AnalyticsFilterState = {
-  datePreset: 'YTD',
+  datePreset: 'SINCE_INCEPTION',
   customStart: null,
   customEnd: null,
   product: 'ALL',
