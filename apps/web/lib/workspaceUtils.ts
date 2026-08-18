@@ -318,18 +318,6 @@ export function directionalPersistenceLabel(persistence: number | null): string 
   return `${upDays} up / ${downDays} down in last ${lookback} days`
 }
 
-function ordinal(n: number): string {
-  const rounded = Math.round(n)
-  const mod100 = rounded % 100
-  if (mod100 >= 11 && mod100 <= 13) return `${rounded}th`
-  switch (rounded % 10) {
-    case 1: return `${rounded}st`
-    case 2: return `${rounded}nd`
-    case 3: return `${rounded}rd`
-    default: return `${rounded}th`
-  }
-}
-
 /** Parses a formatGuidanceRange() output ("1.2290–1.2310") into [low, high] numbers. */
 export function parseGuidanceRange(range: string | null | undefined): [number, number] | null {
   if (!range) return null
@@ -942,7 +930,7 @@ export function trendLabel(trendState: string | null, adx: number | null): Condi
     }
     return {
       headline: `Conflicting signals`,
-      implication: 'Short and longer-term trend signals are not aligned. Reduce position sizing.',
+      implication: 'Short and longer-term trend signals are not aligned. Look for confirmation before committing.',
     }
   }
 
@@ -963,7 +951,7 @@ export function trendHeadlineColor(trendState: string | null): string {
 export function volatilityConditionLabel(volatilityState: string | null, atrPercentile: number | null): ConditionLabel {
   if (!volatilityState) return { headline: 'Volatility unknown', implication: '' }
 
-  const pctClause = atrPercentile != null ? ` ATR sits at the ${ordinal(atrPercentile)} percentile of recent history.` : ''
+  const pctClause = atrPercentile != null ? ` Volatility is ${atrPercentile < 25 ? 'below' : atrPercentile < 75 ? 'around' : 'above'} its typical range.` : ''
 
   switch (volatilityState) {
     case 'LOW_VOL': return {
@@ -972,15 +960,15 @@ export function volatilityConditionLabel(volatilityState: string | null, atrPerc
     }
     case 'NORMAL_VOL': return {
       headline: `Normal`,
-      implication: 'Typical market conditions. Standard position sizing applies.',
+      implication: 'Typical market conditions.',
     }
     case 'HIGH_VOL': return {
       headline: `Elevated`,
-      implication: `Price movement is above average. Wider stops may be needed. Reduce position size.${pctClause}`,
+      implication: `Price movement is above average. Wider stops may be appropriate.${pctClause}`,
     }
     case 'EXTREME_VOL': return {
       headline: `Extreme`,
-      implication: `Unusually large price swings. High risk of stop-outs. Consider sitting out or halving position size.${pctClause}`,
+      implication: `Unusually large price swings. High risk of stop-outs. Consider waiting for conditions to stabilise.${pctClause}`,
     }
     default: return { headline: volatilityState, implication: '' }
   }
