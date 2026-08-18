@@ -1,13 +1,12 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { revalidateTag } from 'next/cache'
-import { getCachedDefaultAnalyticsView, CACHE_TAG } from '@/lib/analyticsCache'
+import { getCachedDefaultAnalyticsView, invalidateAnalyticsCache } from '@/lib/analyticsCache'
 
 // Pre-computed "Since Inception / All Analysts / All Markets" bundle -- see
 // lib/analyticsCache.ts for what's actually cached and why. ?force=true is the manual
-// "Refresh" button's path: invalidates the tag so the next read recomputes fresh instead
-// of waiting out the 15-minute TTL, rather than doing a private one-off computation that
-// wouldn't benefit the next visitor.
+// "Refresh" button's path: invalidates the cached row so the next read recomputes fresh
+// instead of returning whatever's already there, rather than doing a private one-off
+// computation that wouldn't benefit the next visitor.
 export async function GET(req: Request) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -21,7 +20,7 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url)
   if (url.searchParams.get('force') === 'true') {
-    revalidateTag(CACHE_TAG)
+    await invalidateAnalyticsCache()
   }
 
   const data = await getCachedDefaultAnalyticsView()

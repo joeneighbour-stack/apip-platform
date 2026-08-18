@@ -4,7 +4,6 @@
 // most common thing anyone actually loads, so it's the only view worth caching: every
 // other filter combination is smaller and rarer, and stays on the existing fetch-and-
 // compute-on-the-client path (see AnalyticsPage.tsx).
-import { unstable_cache } from 'next/cache'
 import { createAdminClient } from './supabase/server'
 import { SINCE_INCEPTION_FLOOR } from './dateRanges'
 import { describeUniverse, DEFAULT_FILTERS, type AnalyticsFilterState } from './analyticsFilters'
@@ -15,7 +14,7 @@ import {
   rankAttribution, MIN_TRADES_FOR_MARKET_RANKING,
 } from './metrics'
 
-const CACHE_TAG = 'analytics-default-view'
+const CACHE_KEY = 'default-analytics-view'
 
 async function fetchAllTrades(): Promise<any[]> {
   const db = createAdminClient()
@@ -54,8 +53,8 @@ async function fetchAllPublications(): Promise<any[]> {
   return all
 }
 
-// Not cached itself -- called both directly (force-refresh) and through the
-// unstable_cache wrapper below (normal path).
+// Not cached itself -- called by getCachedDefaultAnalyticsView() below on a
+// cache miss or explicit recompute.
 async function computeDefaultAnalyticsView() {
   const db = createAdminClient()
   const [rawTrades, rawPubs, analystsRes, marketsRes] = await Promise.all([
@@ -145,14 +144,39 @@ async function computeDefaultAnalyticsView() {
 
 export type DefaultAnalyticsView = Awaited<ReturnType<typeof computeDefaultAnalyticsView>>
 
-// 2-hour TTL -- matches the analytics-cache-warm.yml schedule that keeps this view warm
-// every 2 hours during market hours. Tagged so a manual refresh (see
-// /api/analytics/summary?force=true) can invalidate it on demand without waiting out
-// the TTL, without touching any other cached entry.
-const getCachedDefaultAnalyticsView = unstable_cache(
-  computeDefaultAnalyticsView,
-  [CACHE_TAG],
-  { revalidate: 7200, tags: [CACHE_TAG] }
-)
+// No TTL: the row is only replaced by an explicit recompute -- either
+// /api/analytics/warm-cache (hit every 2 hours during market hours by
+// analytics-cache-warm.yml) or /api/analytics/summary?force=true. This
+// replaces unstable_cache, which hit Next.js's per-entry size limit on this
+// payload (30,000+ trades, 40,000+ publications).
+export async function getCachedDefaultAnalyticsView(): Promise<DefaultAnalyticsView> {
+  const db = createAdminClient()
 
-export { getCachedDefaultAnalyticsView, computeDefaultAnalyticsView, CACHE_TAG }
+  const { data } = await db
+    .from('analytics_cache')
+    .select('payload, computed_at')
+    .eq('cache_key', CACHE_KEY)
+    .single()
+
+  if (data) {
+    console.log(`Analytics cache hit (computed ${data.computed_at})`)
+    return data.payload as DefaultAnalyticsView
+  }
+
+  console.log('Analytics cache miss -- computing...')
+  const result = await computeDefaultAnalyticsView()
+  await db.from('analytics_cache').upsert({
+    cache_key: CACHE_KEY,
+    payload: result as any,
+    computed_at: new Date().toISOString(),
+    trade_count: result.tradeCount,
+  })
+  return result
+}
+
+export async function invalidateAnalyticsCache(): Promise<void> {
+  const db = createAdminClient()
+  await db.from('analytics_cache').delete().eq('cache_key', CACHE_KEY)
+}
+
+export { computeDefaultAnalyticsView }
