@@ -37,8 +37,11 @@ const ANALYST_CODE_MAP: Record<string, string> = {
 
 // Symbol normalisations — API name → APIP market symbol
 const SYMBOL_OVERRIDES: Record<string, string> = {
+  // Duplicate feed for Natural Gas -- already covered by the NATGAS/NATURAL GAS
+  // alias below. Matched case-insensitively via rawSymbol.toUpperCase(), so one
+  // uppercase key is enough; the API has been observed sending both
+  // "NATURAL GAS.1" and "Natural Gas.1" for this same duplicate feed.
   'NATURAL GAS.1': 'SKIP',
-  'Natural Gas.1': 'SKIP',
   'US100':                'NASDAQ',
   'NAS100':               'NASDAQ',
   'WTI':                  'Oil',
@@ -68,7 +71,6 @@ const SYMBOL_OVERRIDES: Record<string, string> = {
   'PALLADIUM':            'Palladium',
   'NATGAS':               'Natural Gas',
   'NATURAL GAS':          'Natural Gas',
-  'NATURAL GAS.1':        'SKIP',
   'BRENT':                'Brent',
   'XRP':                  'Ripple',
   // Equities not in APIP market universe -- will be skipped
