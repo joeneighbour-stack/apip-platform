@@ -37,6 +37,7 @@ on:
           - calculate-shadow-kpis
           - condition-awareness
           - generate-post-trade-reviews
+          - run-shadow-trigger-probability
 
 jobs:
   preallocate-day:
@@ -430,4 +431,25 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
-
+  run-shadow-trigger-probability:
+    name: Run Shadow Trigger Probability
+    runs-on: ubuntu-latest
+    # Monday 05:45 UTC per engine-trigger/index.js -- after generate-profiles,
+    # per this script's own header comment.
+    if: |
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'run-shadow-trigger-probability'
+    defaults:
+      run:
+        working-directory: intelligence-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: intelligence-engine/package-lock.json
+      - run: npm ci
+      - run: npx tsx src/scripts/runShadowTriggerProbability.ts
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

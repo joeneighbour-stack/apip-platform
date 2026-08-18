@@ -90,6 +90,10 @@ cron.schedule('29 5 * * 1', () => triggerWorkflow('calculate-shadow-kpis'))
 // generate-atr-profiles: Monday 05:43 UTC
 cron.schedule('43 5 * * 1', () => triggerWorkflow('generate-atr-profiles'))
 
+// run-shadow-trigger-probability: Monday 05:45 UTC -- after generate-profiles,
+// per that script's own header comment.
+cron.schedule('45 5 * * 1', () => triggerWorkflow('run-shadow-trigger-probability'))
+
 console.log('APIP Engine Trigger running — waiting for scheduled times (UTC)')
 console.log('Schedules:')
 console.log('  04:20 preallocate-day')
@@ -110,3 +114,4 @@ console.log('  05:15 derive-regime (weekly)')
 console.log('  05:28 calculate-kpis')
 console.log('  05:29 calculate-shadow-kpis')
 console.log('  05:43 generate-atr-profiles')
+console.log('  05:45 run-shadow-trigger-probability')
