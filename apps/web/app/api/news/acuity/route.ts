@@ -3,6 +3,7 @@
 // Keeps credentials server-side. Caches bearer token for 12 hours.
 
 import { NextRequest, NextResponse } from 'next/server'
+import { getCurrentUser } from '@/lib/auth'
 
 // Symbol → Acuity asset ID mapping for all APIP markets
 const SYMBOL_TO_ACUITY_ID: Record<string, number> = {
@@ -85,6 +86,11 @@ async function getToken(): Promise<string> {
 }
 
 export async function POST(req: NextRequest) {
+  // getCurrentUser() redirects to /login on its own if unauthenticated -- called
+  // here, before the try/catch below, so that redirect isn't swallowed by the
+  // generic catch-all and turned into a 500.
+  await getCurrentUser()
+
   try {
     const { symbols } = await req.json() as { symbols: string[] }
     if (!symbols?.length) return NextResponse.json({})

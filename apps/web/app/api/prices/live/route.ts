@@ -4,6 +4,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { getCurrentUser } from '@/lib/auth'
 
 const FINNHUB_KEY = process.env.FINNHUB_CANDLE_API_KEY
 
@@ -27,6 +28,12 @@ async function getQuote(symbol: string, isCrypto: boolean): Promise<number | nul
 }
 
 export async function POST(req: NextRequest) {
+  // Already implicitly gated by RLS (markets_select_all requires auth.uid() is
+  // not null), but explicit for defense in depth and consistency with every
+  // other data-serving route. Called before the try/catch below so an
+  // unauthenticated redirect isn't swallowed by the generic catch-all.
+  await getCurrentUser()
+
   if (!FINNHUB_KEY) return NextResponse.json({})
 
   try {
