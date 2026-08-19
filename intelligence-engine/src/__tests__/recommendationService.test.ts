@@ -49,15 +49,19 @@ describe('buildRecommendation', () => {
   });
 
   it('sets analystAction to ENTER_NOW when currentZone matches the selected preferredEntryZone', () => {
-    const { opportunity } = buildRecommendation(baseInput());
-    expect(opportunity.preferredEntryZone).toBe('ZONE_2');
-    expect(opportunity.currentZone).toBe('ZONE_2');
+    // baseInput()'s default marketRegime is null (treated as RANGE by
+    // selectEntryZone()), and direction resolves to BUY -- so the regime-
+    // conditional zone is ZONE_1 (the favourable low-risk edge), not the
+    // trend-aligned ZONE_2. currentZone is set to match it here.
+    const { opportunity } = buildRecommendation(baseInput({ marketState: marketState({ currentZone: 'ZONE_1' }) }));
+    expect(opportunity.preferredEntryZone).toBe('ZONE_1');
+    expect(opportunity.currentZone).toBe('ZONE_1');
     expect(opportunity.analystAction).toBe('ENTER_NOW');
   });
 
   it('sets analystAction to WAIT_FOR_PREFERRED_ZONE when currentZone differs from the selected zone', () => {
     const { opportunity } = buildRecommendation(baseInput({ marketState: marketState({ currentZone: 'ZONE_4' }) }));
-    expect(opportunity.preferredEntryZone).toBe('ZONE_2');
+    expect(opportunity.preferredEntryZone).toBe('ZONE_1'); // BUY + RANGE (default marketRegime: null)
     expect(opportunity.currentZone).toBe('ZONE_4');
     expect(opportunity.analystAction).toBe('WAIT_FOR_PREFERRED_ZONE');
   });
@@ -78,20 +82,37 @@ describe('buildRecommendation', () => {
     expect(diagnostics.eligibleAnalysts).toContain('TIV');
   });
 
-  it('riskRange and targetRange are deterministic TEXT, anchored on the precise hidden stop/target', () => {
+  it('riskRange and targetRange are deterministic TEXT anchored on the exact hidden stop/target, which sit outside/inside the band', () => {
     const { recommendationVersion, hiddenExecutionLevels } = buildRecommendation(baseInput());
     expect(typeof recommendationVersion.riskRange).toBe('string');
     expect(typeof recommendationVersion.targetRange).toBe('string');
-    expect(recommendationVersion.riskRange).toMatch(/^\d+\.\d+\u2013\d+\.\d+$/);
-    // The text range is centred on the hidden stop/target, not equal to it --
-    // confirm hiddenExecutionLevels carries the precise number separately.
+    // "Stop: X" / "Target: X" -- a single band-boundary-derived price, not a q25-q75 range.
+    expect(recommendationVersion.riskRange).toMatch(/^Stop: \d+\.\d+$/);
+    expect(recommendationVersion.targetRange).toMatch(/^Target: \d+\.\d+$/);
     expect(typeof hiddenExecutionLevels.stop).toBe('number');
     expect(typeof hiddenExecutionLevels.target).toBe('number');
+    // BUY + ZONE_1: stop sits outside (below) the lower band, target sits within
+    // (at) the band, beyond the entry price.
+    expect(hiddenExecutionLevels.stop).toBeLessThan(1.08);
+    expect(hiddenExecutionLevels.target).toBeLessThanOrEqual(1.10);
+    expect(hiddenExecutionLevels.target).toBeGreaterThan(hiddenExecutionLevels.entryPrice);
   });
 
   it('hiddenExecutionLevels carries the exact numeric levels for the future shadow trade, structurally separate from the analyst-facing version', () => {
-    const { hiddenExecutionLevels } = buildRecommendation(baseInput({ minimumRr: 3.0 }));
-    expect(hiddenExecutionLevels.rr).toBeCloseTo(3.0, 9);
+    // The default fixture's band-boundary target already clears a 2:1 RR by a wide
+    // margin (rr defaults far above 2.0 here -- see the ZONE_1 case in
+    // entryOptimizerService.test.ts), so minimumRr only becomes visible in rr once
+    // it's set high enough to force the 2:1-floor expansion. minimumRr=12 does that
+    // here without hitting the 1.5xATR20 cap (see entryOptimizerService.test.ts's
+    // "expands the target..."/"caps the expanded target..." tests for the isolated
+    // arithmetic) -- so rr should land exactly on the requested floor.
+    const { hiddenExecutionLevels } = buildRecommendation(baseInput({ minimumRr: 12 }));
+    expect(hiddenExecutionLevels.rr).toBeCloseTo(12, 9);
+    // Stop stays outside the band regardless of the RR floor; target, on the other
+    // hand, is deliberately allowed to extend beyond the band boundary here -- that's
+    // the whole point of the floor (see entryOptimizerService.ts's buildEntryOptimizer()).
+    expect(hiddenExecutionLevels.stop).toBeLessThan(1.08);
+    expect(hiddenExecutionLevels.target).toBeGreaterThan(1.10);
   });
 
   it('the inline generation-time condition assessment is always VALID (current/generation snapshots are identical by construction)', () => {
@@ -101,7 +122,13 @@ describe('buildRecommendation', () => {
   });
 
   it('template/profile diagnostics are available for debugging but are explicitly not part of either persisted shape', () => {
-    const { diagnostics, opportunity, recommendationVersion } = buildRecommendation(baseInput());
+    // baseInput's trades are all entryZone 'ZONE_2' -- an "exact" analyst-profile match
+    // needs the regime-conditional zone to land on ZONE_2 too, which requires a
+    // trend-aligned regime (BUY + TRENDING_UP) rather than the default null/RANGE
+    // (which now resolves to ZONE_1, giving only a 'market_profile' match instead).
+    const { diagnostics, opportunity, recommendationVersion } = buildRecommendation(baseInput({
+      marketRegime: { trendState: 'TRENDING_UP', regimeConfidence: null, regimeTags: [], volatilityState: null },
+    }));
     expect(diagnostics.templateSource).toBe('historical_template');
     expect(diagnostics.profileSource).toBe('exact_profile');
     expect(opportunity).not.toHaveProperty('templateQuality');
@@ -130,10 +157,13 @@ describe('buildRecommendation', () => {
     expect(diagnostics.eventWarning).toBe('high warning');
   });
 
-  it('falls through to the TemplateService BUY/ZONE_1 fallback when there is no trade history at all', () => {
+  it('falls through to the TemplateService BUY fallback when there is no trade history at all, and the regime-conditional zone for BUY+RANGE is ZONE_1', () => {
     const { opportunity, diagnostics } = buildRecommendation(baseInput({ trades: [] }));
     expect(diagnostics.templateSource).toBe('fallback');
     expect(opportunity.direction).toBe('BUY');
+    // ZONE_1 here comes from the entry optimizer's regime-conditional selection
+    // (BUY + RANGE, since marketRegime defaults to null) -- coincidentally the same
+    // zone templateService.ts's own (now unused-for-zone) fallback would have picked.
     expect(opportunity.preferredEntryZone).toBe('ZONE_1');
   });
 
@@ -145,24 +175,31 @@ describe('buildRecommendation', () => {
   });
 
   describe('analyst KPI trigger rate x zone distance', () => {
-    // baseInput's trades resolve assignedAnalystId to 'TIV' and preferredEntryZone to
-    // 'ZONE_2' (see the assignedAnalystId/analystAction tests above) -- the default
-    // marketState() also has currentZone 'ZONE_2', so distance 0 (the 1.3x tier) applies
-    // unless a test overrides currentZone.
+    // baseInput's trades resolve assignedAnalystId to 'TIV'; preferredEntryZone is now
+    // ZONE_1 (regime-conditional: BUY + RANGE, since marketRegime defaults to null --
+    // see the assignedAnalystId/analystAction tests above), not the old template-
+    // derived ZONE_2. Tests that want the "at entry zone" distance-0 (1.3x) tier
+    // explicitly set currentZone to ZONE_1 to match it.
     it('uses the analyst trigger-rate map entry for the assigned analyst, scaled by zone distance', () => {
       const { opportunity } = buildRecommendation(baseInput({
+        marketState: marketState({ currentZone: 'ZONE_1' }),
         analystTriggerRateMap: new Map([['TIV', 0.425]]),
       }));
       expect(opportunity.triggerProbability).toBeCloseTo(0.425 * 1.3, 10);
     });
 
     it('falls back to fallbackTriggerProbability when the assigned analyst has no map entry', () => {
-      const { opportunity } = buildRecommendation(baseInput({ analystTriggerRateMap: new Map() }));
+      const { opportunity } = buildRecommendation(baseInput({
+        marketState: marketState({ currentZone: 'ZONE_1' }),
+        analystTriggerRateMap: new Map(),
+      }));
       expect(opportunity.triggerProbability).toBeCloseTo(0.5 * 1.3, 10);
     });
 
     it('falls back to fallbackTriggerProbability when no map is provided at all', () => {
-      const { opportunity } = buildRecommendation(baseInput());
+      const { opportunity } = buildRecommendation(baseInput({
+        marketState: marketState({ currentZone: 'ZONE_1' }),
+      }));
       expect(opportunity.triggerProbability).toBeCloseTo(0.5 * 1.3, 10);
     });
 
@@ -171,10 +208,11 @@ describe('buildRecommendation', () => {
         marketState: marketState({ currentZone: 'ZONE_4' }),
         analystTriggerRateMap: new Map([['TIV', 0.425]]),
       }));
-      // preferredEntryZone stays ZONE_2 (from template selection); ZONE_2 -> ZONE_4 is
-      // distance 2 on the ladder, the 0.7x tier.
-      expect(opportunity.preferredEntryZone).toBe('ZONE_2');
-      expect(opportunity.triggerProbability).toBeCloseTo(0.425 * 0.7, 10);
+      // preferredEntryZone stays ZONE_1 (regime-conditional: BUY + RANGE); ZONE_1 ->
+      // ZONE_4 is distance 3 on the ladder (TOO_DEEP, ZONE_1, ZONE_2, ZONE_3, ZONE_4,
+      // TOO_HIGH), the 0.4x "three+ zones away" tier.
+      expect(opportunity.preferredEntryZone).toBe('ZONE_1');
+      expect(opportunity.triggerProbability).toBeCloseTo(0.425 * 0.4, 10);
     });
 
     it('expectedR moves with the same triggerProbability the opportunity persists -- no separate raw/scaled split', () => {
@@ -182,6 +220,95 @@ describe('buildRecommendation', () => {
         analystTriggerRateMap: new Map([['TIV', 0.425]]),
       }));
       expect(diagnostics.rawTriggerProbability).toBeCloseTo(opportunity.triggerProbability, 10);
+    });
+  });
+
+  // Zone selection is now regime-conditional (entryOptimizerService.ts's
+  // selectEntryZone()), not sourced from templateService.ts's historical
+  // preferredEntryZone. None of these four combinations trigger the 2:1 RR-floor
+  // expansion against the default marketState() fixture (lowerBand=1.08,
+  // upperBand=1.10, atr14=atr20=0.02), so stop/target land exactly on the natural
+  // band-boundary values, making "stop outside the band, target inside it" a clean
+  // assertion in every case here.
+  describe('regime-conditional zone selection', () => {
+    const sellTrades: RecommendationInputTrade[] = Array.from({ length: 15 }, () => ({
+      market: 'EURUSD', analyst: 'TIV', direction: 'SELL', entryZone: 'ZONE_4', resultR: 1.0, triggered: true,
+    }));
+
+    it('BUY + RANGE prefers ZONE_1 -- the favourable low-risk edge, not the trend-aligned middle zone', () => {
+      const { opportunity, hiddenExecutionLevels } = buildRecommendation(baseInput({
+        marketRegime: { trendState: 'RANGE', regimeConfidence: null, regimeTags: [], volatilityState: null },
+      }));
+      expect(opportunity.direction).toBe('BUY');
+      expect(opportunity.preferredEntryZone).toBe('ZONE_1');
+      expect(hiddenExecutionLevels.stop).toBeLessThan(1.08); // outside (below) the band
+      expect(hiddenExecutionLevels.target).toBeLessThanOrEqual(1.10); // inside (at) the band
+      expect(hiddenExecutionLevels.target).toBeGreaterThan(hiddenExecutionLevels.entryPrice);
+    });
+
+    it('BUY + MIXED also prefers ZONE_1', () => {
+      const { opportunity } = buildRecommendation(baseInput({
+        marketRegime: { trendState: 'MIXED', regimeConfidence: null, regimeTags: [], volatilityState: null },
+      }));
+      expect(opportunity.preferredEntryZone).toBe('ZONE_1');
+    });
+
+    it('SELL + RANGE prefers ZONE_4 -- the favourable low-risk edge, not the trend-aligned middle zone', () => {
+      const { opportunity, hiddenExecutionLevels } = buildRecommendation(baseInput({
+        trades: sellTrades,
+        marketRegime: { trendState: 'RANGE', regimeConfidence: null, regimeTags: [], volatilityState: null },
+      }));
+      expect(opportunity.direction).toBe('SELL');
+      expect(opportunity.preferredEntryZone).toBe('ZONE_4');
+      expect(hiddenExecutionLevels.stop).toBeGreaterThan(1.10); // outside (above) the band
+      expect(hiddenExecutionLevels.target).toBeGreaterThanOrEqual(1.08); // inside (at) the band
+      expect(hiddenExecutionLevels.target).toBeLessThan(hiddenExecutionLevels.entryPrice);
+    });
+
+    it('SELL + MIXED also prefers ZONE_4', () => {
+      const { opportunity } = buildRecommendation(baseInput({
+        trades: sellTrades,
+        marketRegime: { trendState: 'MIXED', regimeConfidence: null, regimeTags: [], volatilityState: null },
+      }));
+      expect(opportunity.preferredEntryZone).toBe('ZONE_4');
+    });
+
+    it('BUY + TRENDING_UP prefers ZONE_2 -- trend-aligned, price may not pull back to the extreme', () => {
+      const { opportunity, hiddenExecutionLevels } = buildRecommendation(baseInput({
+        marketRegime: { trendState: 'TRENDING_UP', regimeConfidence: null, regimeTags: [], volatilityState: null },
+      }));
+      expect(opportunity.direction).toBe('BUY');
+      expect(opportunity.preferredEntryZone).toBe('ZONE_2');
+      expect(hiddenExecutionLevels.stop).toBeLessThan(1.08); // stop is always outside the band, regardless of zone
+      expect(hiddenExecutionLevels.target).toBeLessThanOrEqual(1.10);
+      expect(hiddenExecutionLevels.target).toBeGreaterThan(hiddenExecutionLevels.entryPrice);
+    });
+
+    it('SELL + TRENDING_DOWN prefers ZONE_3 -- trend-aligned, price may not rally back to the extreme', () => {
+      const { opportunity, hiddenExecutionLevels } = buildRecommendation(baseInput({
+        trades: sellTrades,
+        marketRegime: { trendState: 'TRENDING_DOWN', regimeConfidence: null, regimeTags: [], volatilityState: null },
+      }));
+      expect(opportunity.direction).toBe('SELL');
+      expect(opportunity.preferredEntryZone).toBe('ZONE_3');
+      expect(hiddenExecutionLevels.stop).toBeGreaterThan(1.10);
+      expect(hiddenExecutionLevels.target).toBeGreaterThanOrEqual(1.08);
+      expect(hiddenExecutionLevels.target).toBeLessThan(hiddenExecutionLevels.entryPrice);
+    });
+
+    it('BUY + TRENDING_DOWN (counter-trend) still prefers ZONE_1, not the trend-aligned zone', () => {
+      const { opportunity } = buildRecommendation(baseInput({
+        marketRegime: { trendState: 'TRENDING_DOWN', regimeConfidence: null, regimeTags: [], volatilityState: null },
+      }));
+      expect(opportunity.preferredEntryZone).toBe('ZONE_1');
+    });
+
+    it('SELL + TRENDING_UP (counter-trend) still prefers ZONE_4, not the trend-aligned zone', () => {
+      const { opportunity } = buildRecommendation(baseInput({
+        trades: sellTrades,
+        marketRegime: { trendState: 'TRENDING_UP', regimeConfidence: null, regimeTags: [], volatilityState: null },
+      }));
+      expect(opportunity.preferredEntryZone).toBe('ZONE_4');
     });
   });
 });
