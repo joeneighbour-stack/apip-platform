@@ -13,10 +13,11 @@
 // as an input. Entry price is the edge of the selected zone nearest the outer
 // band (zone low for BUY, zone high for SELL), not the zone midpoint, to
 // maximise room to target. Target is the outer band boundary itself (always
-// inside the band by construction); stop is placed just outside the OPPOSITE
-// band boundary, offset by a volatility-scaled buffer. A 2:1 RR floor still
-// applies: if the natural band-boundary target doesn't reach 2:1, it's expanded
-// (capped at 1.5x ATR20 from entry, to prevent unrealistic targets).
+// inside the band by construction); stop is placed one full zone width outside
+// the OPPOSITE band boundary -- geometrically consistent and ATR-scaled by
+// construction, since zone width is itself derived from ATR20 (marketStateService.ts).
+// A 2:1 RR floor still applies: if the natural band-boundary target doesn't
+// reach 2:1, it's expanded to exactly 2x the stop distance.
 //
 // Zone selection (regime-conditional):
 //   BUY:  TRENDING_UP -> ZONE_2 (trend may not pull back to the extreme)
@@ -41,12 +42,11 @@ export interface EntryOptimizerInput {
   marketState: MarketStateOutput;
   direction: Direction;
   minimumRr: number;
-  trendState: string | null;      // drives regime-conditional zone selection
-  volatilityState: string | null; // drives the stop's volatility buffer
+  trendState: string | null; // drives regime-conditional zone selection
   // Kept for interface compatibility -- still used for zone preference in
   // allocation scoring (analystScoringService.ts). Not consumed here: stop/
-  // target geometry is now purely band-boundary + volatility-buffer derived,
-  // not ATR-multiplier-profile derived.
+  // target geometry is now purely band-boundary/zone-width derived, not
+  // ATR-multiplier-profile derived.
   atrProfile?: AtrProfile;
 }
 
@@ -109,23 +109,8 @@ export function zoneBounds(marketState: MarketStateOutput, zone: AtrZone): [numb
   }
 }
 
-/**
- * Volatility-scaled buffer placing the stop just outside the band, rather than
- * a fixed distance regardless of conditions -- a quiet market gets a tight
- * buffer, an extreme one gets more room before the stop is considered hit.
- */
-function volatilityBuffer(volatilityState: string | null, atr20: number): number {
-  switch (volatilityState) {
-    case 'LOW_VOL':     return 0.05 * atr20;
-    case 'NORMAL_VOL':  return 0.10 * atr20;
-    case 'HIGH_VOL':    return 0.15 * atr20;
-    case 'EXTREME_VOL': return 0.20 * atr20;
-    default:            return 0.10 * atr20;
-  }
-}
-
 export function buildEntryOptimizer(input: EntryOptimizerInput): EntryOptimizerOutput {
-  const { marketState, direction, minimumRr, trendState, volatilityState } = input;
+  const { marketState, direction, minimumRr, trendState } = input;
 
   const preferredZone = selectEntryZone(direction, trendState);
   const [zoneLow, zoneHigh] = zoneBounds(marketState, preferredZone);
@@ -137,14 +122,10 @@ export function buildEntryOptimizer(input: EntryOptimizerInput): EntryOptimizerO
   // outer band, maximising the distance available to the (in-band) target.
   const entryPrice = direction === 'BUY' ? entryRangeLow : entryRangeHigh;
 
-  const atr20 = marketState.atr20 ?? marketState.atr14 ?? 0;
   const lowerBand = marketState.lowerBand;
   const upperBand = marketState.upperBand;
 
-  if (
-    Number.isNaN(entryPrice) || lowerBand == null || upperBand == null ||
-    !Number.isFinite(atr20) || atr20 <= 0
-  ) {
+  if (Number.isNaN(entryPrice) || lowerBand == null || upperBand == null) {
     return {
       preferredZone, entryRangeLow, entryRangeHigh, entryMid, entryPrice,
       riskRangeLow: NaN, riskRangeHigh: NaN, targetRangeLow: NaN, targetRangeHigh: NaN,
@@ -153,31 +134,24 @@ export function buildEntryOptimizer(input: EntryOptimizerInput): EntryOptimizerO
   }
 
   // Target: always the outer band boundary.
-  let target = direction === 'BUY' ? upperBand : lowerBand;
+  const rawTarget = direction === 'BUY' ? upperBand : lowerBand;
 
-  // Stop: always outside the OPPOSITE band boundary, offset by a
-  // volatility-scaled buffer.
-  const buffer = volatilityBuffer(volatilityState, atr20);
-  const stop = direction === 'BUY' ? lowerBand - buffer : upperBand + buffer;
+  // Stop: one full zone width outside the OPPOSITE band boundary. Zone width
+  // is itself ATR20-derived (marketStateService.ts), so this is geometrically
+  // consistent and ATR-scaled by construction -- no separate volatility
+  // lookup needed.
+  const step = (upperBand - lowerBand) / 4;
+  const stop = direction === 'BUY' ? lowerBand - step : upperBand + step;
 
   // 2:1 RR floor: if the natural (band-boundary) target doesn't reach it,
-  // expand toward/beyond the band boundary -- capped at 1.5x ATR20 from entry
-  // so the floor can never demand an unrealistic target.
+  // expand to exactly minimumRr x the stop distance.
   const stopDistance = Math.abs(entryPrice - stop);
-  const targetDistance = Math.abs(target - entryPrice);
-  const minimumTargetDistance = minimumRr * stopDistance;
-
-  if (targetDistance < minimumTargetDistance) {
-    const expandedTarget = direction === 'BUY'
-      ? entryPrice + minimumTargetDistance
-      : entryPrice - minimumTargetDistance;
-    const maxTarget = direction === 'BUY'
-      ? entryPrice + 1.5 * atr20
-      : entryPrice - 1.5 * atr20;
-    target = direction === 'BUY'
-      ? Math.min(expandedTarget, maxTarget)
-      : Math.max(expandedTarget, maxTarget);
-  }
+  const naturalTargetDistance = Math.abs(rawTarget - entryPrice);
+  const target = naturalTargetDistance >= minimumRr * stopDistance
+    ? rawTarget
+    : direction === 'BUY'
+      ? entryPrice + minimumRr * stopDistance
+      : entryPrice - minimumRr * stopDistance;
 
   const finalTargetDistance = Math.abs(target - entryPrice);
   const rr = stopDistance > 0 ? finalTargetDistance / stopDistance : NaN;

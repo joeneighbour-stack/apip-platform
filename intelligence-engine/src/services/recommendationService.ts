@@ -186,7 +186,6 @@ export function buildRecommendation(input: BuildRecommendationInput): BuildRecom
   const entryStopTarget = buildEntryOptimizer({
     marketState, direction, minimumRr,
     trendState: marketRegime?.trendState ?? null,
-    volatilityState: marketRegime?.volatilityState ?? null,
   });
   const zone = entryStopTarget.preferredZone;
   const analystProfiles: AnalystProfile[] = buildAnalystProfiles(trades);
