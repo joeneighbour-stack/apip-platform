@@ -41,13 +41,18 @@ describe('lintAnalystText', () => {
 });
 
 describe('generateCoachingNote', () => {
-  it('produces the exact notebook template text for a VALID recommendation', () => {
+  it('produces the current ENTER_NOW template text for a VALID recommendation, including the zone-selection rationale', () => {
     const note = generateCoachingNote(baseInput());
-    expect(note).toContain('EURUSD is currently in ZONE_2.');
-    expect(note).toContain('favours BUY interest around ZONE_2.');
+    // ENTER_NOW branch: currentZoneDesc for ZONE_2 is 'in the lower-mid section of
+    // its recent range' (describeZone()), not a bare "ZONE_2" label -- coaching
+    // text avoids zone-number terminology per spec sheet 11.
+    expect(note).toContain('EURUSD is in the lower-mid section of its recent range, which aligns with the preferred buy area.');
     expect(note).toContain('1.0875 to 1.09');
     expect(note).toContain('65%');
     expect(note).toContain('1.30R');
+    // trendState is null (RANGE) in baseInput() -- describeZoneSelectionRationale()
+    // explains the regime-conditional zone choice for BUY + RANGE as Zone 1.
+    expect(note).toContain('Zone 1 is preferred: in ranging or mixed conditions');
     expect(note).toContain('Treat this as a coaching range rather than an instruction');
   });
 
@@ -56,18 +61,18 @@ describe('generateCoachingNote', () => {
       recommendationValidityStatus: 'STALE_PRICE',
       volatilityWarning: 'Market has moved.',
     }));
-    expect(withWarning).toContain('Current condition note: Market has moved.');
+    expect(withWarning).toContain('Condition note: Market has moved.');
 
     const withoutWarning = generateCoachingNote(baseInput({
       recommendationValidityStatus: 'VALID',
       volatilityWarning: 'Should be suppressed.',
     }));
-    expect(withoutWarning).not.toContain('Current condition note:');
+    expect(withoutWarning).not.toContain('Condition note:');
   });
 
   it('appends event risk note when non-empty', () => {
     const note = generateCoachingNote(baseInput({ eventWarning: 'High impact event at 13:30.' }));
-    expect(note).toContain('Event risk note: High impact event at 13:30.');
+    expect(note).toContain('Event risk: High impact event at 13:30.');
   });
 
   it('falls back to exact notebook fallback string when a forbidden term appears', () => {

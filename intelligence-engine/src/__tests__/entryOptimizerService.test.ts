@@ -127,8 +127,10 @@ describe('buildEntryOptimizer', () => {
     });
     // BUY stop = lowerBand - buffer, so a bigger buffer means a LOWER (further away) stop.
     expect(extreme.stop).toBeLessThan(low.stop);
-    expect(low.entryPrice).toBeCloseTo(1.08 - 0.05 * 0.02, 10);
-    expect(extreme.entryPrice).toBeCloseTo(1.08, 10); // entry unaffected by volatility, only the stop is
+    // entryPrice is the zone boundary (lowerBand for BUY + ZONE_1), unaffected by
+    // volatility -- only the stop's buffer scales with volatilityState.
+    expect(low.entryPrice).toBeCloseTo(1.08, 10);
+    expect(extreme.entryPrice).toBeCloseTo(1.08, 10);
   });
 
   it('produces NaN stop/target/rr when the band boundaries are missing', () => {
