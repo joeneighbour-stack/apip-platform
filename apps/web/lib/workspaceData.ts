@@ -43,23 +43,62 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
   const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
   const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10)
 
-  const { data: allRecs } = await adminDb
-    .from('coaching_recommendations')
-    .select(`
-      recommendation_id, opportunity_id, entry_range_low, entry_range_high,
-      risk_range, target_range, trigger_probability, expected_r,
-      coaching_note, shown_at,
-      opportunity:opportunity_id (
-        analyst_action, direction, current_zone, preferred_entry_zone, session,
-        market:market_id ( symbol, market_id, asset_class, display_precision )
-      ),
-      recommendation_version:active_recommendation_version_id (
-        recommendation_validity_status, volatility_warning, requires_refresh, regime_tags
-      )
-    `)
-    .eq('analyst_id', analystId)
-    .gte('shown_at', today + 'T00:00:00Z')
-    .order('shown_at', { ascending: false })
+  // Wave 1 -- none of these four depend on each other or on anything computed below.
+  // allRecs is the only one wave 2 needs anything from (marketIds, extracted after this
+  // resolves); the other three don't depend on allRecs either, so there's no reason to
+  // make any of them wait on one another. Collapses 4 sequential round-trips into 1.
+  const [
+    { data: allRecs },
+    { data: allAnalystProfileRowsRaw },
+    { data: yesterdayTrades },
+    { count: recommendationsGeneratedToday },
+  ] = await Promise.all([
+    adminDb
+      .from('coaching_recommendations')
+      .select(`
+        recommendation_id, opportunity_id, entry_range_low, entry_range_high,
+        risk_range, target_range, trigger_probability, expected_r,
+        coaching_note, shown_at,
+        opportunity:opportunity_id (
+          analyst_action, direction, current_zone, preferred_entry_zone, session,
+          market:market_id ( symbol, market_id, asset_class, display_precision )
+        ),
+        recommendation_version:active_recommendation_version_id (
+          recommendation_validity_status, volatility_warning, requires_refresh, regime_tags
+        )
+      `)
+      .eq('analyst_id', analystId)
+      .gte('shown_at', today + 'T00:00:00Z')
+      .order('shown_at', { ascending: false }),
+    // This analyst's FULL profile set, every market (not scoped to marketIds) --
+    // needed for the tiered evidence system's REGIME tier, which deliberately
+    // rolls up across every market in the same asset class, not just today's
+    // recommended ones. asset_class comes from the market:market_id FK embed
+    // rather than a separate markets query. Mirrors
+    // intelligence-engine/src/services/analystScoringService.ts's own tiers.
+    // Scoped by analystId only -- independent of allRecs/marketIds.
+    adminDb
+      .from('analyst_profiles')
+      .select('market_id, direction, profile_data, market:market_id ( asset_class )')
+      .eq('analyst_id', analystId),
+    // Yesterday's trades, for the top-tile summary and the per-market "Your trade" line.
+    // Scoped by analystId + a fixed date range only -- independent of allRecs/marketIds.
+    supabase
+      .from('actual_trades')
+      .select('market_id, direction, result_r, triggered')
+      .eq('analyst_id', analystId)
+      .gte('published_at', yesterday + 'T00:00:00Z')
+      .lt('published_at', today + 'T00:00:00Z'),
+    // Section 4 selection funnel, "N with recommendations generated" -- total opportunities
+    // for today across every analyst/session, via adminDb (opportunities RLS scopes ANALYST
+    // to only their own assigned rows, migrations/002_rls.sql). Every opportunity gets exactly
+    // one recommendation_version at generation (runEngineSession.ts), so this count doubles as
+    // "recommendations generated." Scoped by today's date only -- independent of allRecs/marketIds.
+    adminDb
+      .from('opportunities')
+      .select('opportunity_id', { count: 'exact', head: true })
+      .eq('date', today),
+  ])
 
   const seenSymbols = new Set<string>()
   const recommendations = (allRecs ?? []).filter((rec: any) => {
@@ -79,20 +118,108 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
     }
   }
 
-  // market_event_risk: raw table (risk_score, analyst_warning) is internal-only per RLS
-  // (migrations/002_rls.sql -- analysts are meant to consume event risk through
-  // market_event_risk_analyst_view, which drops risk_score). adminDb bypasses this
-  // deliberately, same as before this function was extracted.
-  const { data: eventRisks } = marketIds.length > 0
-    ? await adminDb
-        .from('market_event_risk')
-        .select(`
-          market_id, risk_score, analyst_warning, event_risk_status,
-          event:event_id ( event_name, impact, event_time_uk, currency, forecast, previous, actual )
-        `)
-        .in('market_id', marketIds)
-        .eq('event_risk_status', 'HIGH_RISK')
-    : { data: [] }
+  const priceHistoryFetchStart = new Date(Date.now() - 20 * 86400000).toISOString().slice(0, 10)
+
+  // Wave 2 -- all seven of these depend only on marketIds (resolved just above) and/or
+  // analystId, never on each other, so they all run together too. Collapses 7 sequential
+  // round-trips into 1.
+  const [
+    { data: eventRisks },
+    { data: regimeRows },
+    { data: priorDayRows },
+    { data: priceHistoryRows },
+    { data: intradayRows },
+    { data: marketHistoryRows },
+    { data: profileRows },
+  ] = await Promise.all([
+    // market_event_risk: raw table (risk_score, analyst_warning) is internal-only per RLS
+    // (migrations/002_rls.sql -- analysts are meant to consume event risk through
+    // market_event_risk_analyst_view, which drops risk_score). adminDb bypasses this
+    // deliberately, same as before this function was extracted.
+    marketIds.length > 0
+      ? adminDb
+          .from('market_event_risk')
+          .select(`
+            market_id, risk_score, analyst_warning, event_risk_status,
+            event:event_id ( event_name, impact, event_time_uk, currency, forecast, previous, actual )
+          `)
+          .in('market_id', marketIds)
+          .eq('event_risk_status', 'HIGH_RISK')
+      : Promise.resolve({ data: [] as any[] }),
+    // market_regime_state is internal-only per RLS (ADMIN/MANAGER/RESEARCH) -- adminDb
+    // required. No date window here: the regime batch job doesn't write a row for every
+    // market every day, so a recent-window filter was silently dropping markets whose last
+    // real update happened to fall just outside it. Ordering by captured_at desc + taking
+    // the first two rows per market (below) always gets the true latest reading regardless
+    // of how old it is.
+    marketIds.length > 0
+      ? adminDb
+          .from('market_regime_state')
+          .select('market_id, trend_state, volatility_state, regime_confidence, derived_from, captured_at')
+          .in('market_id', marketIds)
+          .order('captured_at', { ascending: false })
+      : Promise.resolve({ data: [] as any[] }),
+    // market_state_daily RLS grants any authenticated read -- session client is sufficient.
+    marketIds.length > 0
+      ? supabase
+          .from('market_state_daily')
+          .select('market_id, date, open, high, low, close, atr14, atr20')
+          .in('market_id', marketIds)
+          .lt('date', today)
+          .gte('date', sevenDaysAgo)
+          .order('date', { ascending: false })
+      : Promise.resolve({ data: [] as any[] }),
+    // Last 10 TRADING days of OHLC for the trade context chart. Fetched over a wider
+    // 20-calendar-day cutoff and sliced to the last 10 rows per market below, rather than
+    // gte'ing "10 days ago" directly: a pure 10-calendar-day cutoff would return fewer than
+    // 10 trading days across a week that includes a weekend or holiday.
+    marketIds.length > 0
+      ? supabase
+          .from('market_state_daily')
+          .select('market_id, date, open, high, low, close')
+          .in('market_id', marketIds)
+          .gte('date', priceHistoryFetchStart)
+          .order('date', { ascending: true })
+      : Promise.resolve({ data: [] as any[] }),
+    // market_state_intraday is internal-only per RLS -- adminDb. Session anchors
+    // (session_high/session_low/previous_close) for the zone calc, plus current price.
+    marketIds.length > 0
+      ? adminDb
+          .from('market_state_intraday')
+          .select('market_id, current_price, session_high, session_low, previous_close, captured_at')
+          .in('market_id', marketIds)
+          .order('captured_at', { ascending: false })
+      : Promise.resolve({ data: [] as any[] }),
+    // Analyst's own trade history for the "Historical Edge" tiers. entry_zone is selected for
+    // the zone-scoped tier, but is not currently populated on any production row -- the zone
+    // tier is wired up and will activate automatically once that data exists, and falls
+    // through to market+direction until then.
+    marketIds.length > 0
+      ? supabase
+          .from('actual_trades')
+          .select('market_id, direction, entry_zone, result_r, triggered')
+          .eq('analyst_id', analystId)
+          .in('market_id', marketIds)
+          .eq('triggered', true)
+          .not('result_r', 'is', null)
+      : Promise.resolve({ data: [] as any[] }),
+    // analyst_profiles.zone is null on every production row today -- this table only ever
+    // supplies the market+direction tier in practice. The zone tier above
+    // (actual_trades.entry_zone) is the only place a genuine zone-scoped edge could come
+    // from, and is likewise unpopulated on every row today; wired up to activate
+    // automatically the moment either data source starts carrying real zone values.
+    //
+    // Fetched as an ARRAY per (market, direction), not a single row: generateAnalystProfiles.ts
+    // writes one row PER REGIME (profile_data.regime = TRENDING_UP/TRENDING_DOWN/RANGE/MIXED)
+    // whenever regime-specific data exists, and only falls back to a single regime-agnostic
+    // row when it doesn't -- so "this analyst's overall record for market+direction" has to be
+    // computed by blending across whichever rows exist, not read off one row directly.
+    adminDb
+      .from('analyst_profiles')
+      .select('market_id, direction, profile_data')
+      .eq('analyst_id', analystId)
+      .in('market_id', marketIds.length > 0 ? marketIds : ['']),
+  ])
 
   // risk_score is a fixed categorical value keyed off event_risk_status, not a
   // continuous per-event score (verified live: WATCH rows are always 0.5,
@@ -126,20 +253,6 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
     items.sort((a, b) => a.eventTimeUk.localeCompare(b.eventTimeUk))
   }
 
-  // market_regime_state is internal-only per RLS (ADMIN/MANAGER/RESEARCH) -- adminDb
-  // required. No date window here: the regime batch job doesn't write a row for every
-  // market every day, so a recent-window filter was silently dropping markets whose last
-  // real update happened to fall just outside it. Ordering by captured_at desc + taking
-  // the first two rows per market (below) always gets the true latest reading regardless
-  // of how old it is.
-  const { data: regimeRows } = marketIds.length > 0
-    ? await adminDb
-        .from('market_regime_state')
-        .select('market_id, trend_state, volatility_state, regime_confidence, derived_from, captured_at')
-        .in('market_id', marketIds)
-        .order('captured_at', { ascending: false })
-    : { data: [] }
-
   const regimeByMarket = new Map<string, RegimeInfo>()
   {
     const seenCountByMarket = new Map<string, number>()
@@ -167,35 +280,10 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
     }
   }
 
-  // market_state_daily RLS grants any authenticated read -- session client is sufficient.
-  const { data: priorDayRows } = marketIds.length > 0
-    ? await supabase
-        .from('market_state_daily')
-        .select('market_id, date, open, high, low, close, atr14, atr20')
-        .in('market_id', marketIds)
-        .lt('date', today)
-        .gte('date', sevenDaysAgo)
-        .order('date', { ascending: false })
-    : { data: [] }
-
   const priorDayByMarket = new Map<string, any>()
   for (const row of (priorDayRows ?? []) as any[]) {
     if (!priorDayByMarket.has(row.market_id)) priorDayByMarket.set(row.market_id, row)
   }
-
-  // Last 10 TRADING days of OHLC for the trade context chart. Fetched over a wider
-  // 20-calendar-day cutoff and sliced to the last 10 rows per market below, rather than
-  // gte'ing "10 days ago" directly: a pure 10-calendar-day cutoff would return fewer than
-  // 10 trading days across a week that includes a weekend or holiday.
-  const priceHistoryFetchStart = new Date(Date.now() - 20 * 86400000).toISOString().slice(0, 10)
-  const { data: priceHistoryRows } = marketIds.length > 0
-    ? await supabase
-        .from('market_state_daily')
-        .select('market_id, date, open, high, low, close')
-        .in('market_id', marketIds)
-        .gte('date', priceHistoryFetchStart)
-        .order('date', { ascending: true })
-    : { data: [] }
 
   const priceHistoryByMarketRaw = new Map<string, PriceBar[]>()
   for (const row of (priceHistoryRows ?? []) as any[]) {
@@ -209,16 +297,6 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
   for (const [marketId, bars] of priceHistoryByMarketRaw) {
     priceHistoryByMarket.set(marketId, bars.slice(-CHART_TRADING_DAYS))
   }
-
-  // market_state_intraday is internal-only per RLS -- adminDb. Session anchors
-  // (session_high/session_low/previous_close) for the zone calc, plus current price.
-  const { data: intradayRows } = marketIds.length > 0
-    ? await adminDb
-        .from('market_state_intraday')
-        .select('market_id, current_price, session_high, session_low, previous_close, captured_at')
-        .in('market_id', marketIds)
-        .order('captured_at', { ascending: false })
-    : { data: [] }
 
   const currentPriceByMarket = new Map<string, number>()
   const intradayByMarket = new Map<string, any>()
@@ -248,20 +326,6 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
     return null
   }
 
-  // Analyst's own trade history for the "Historical Edge" tiers. entry_zone is selected for
-  // the zone-scoped tier, but is not currently populated on any production row -- the zone
-  // tier is wired up and will activate automatically once that data exists, and falls
-  // through to market+direction until then.
-  const { data: marketHistoryRows } = marketIds.length > 0
-    ? await supabase
-        .from('actual_trades')
-        .select('market_id, direction, entry_zone, result_r, triggered')
-        .eq('analyst_id', analystId)
-        .in('market_id', marketIds)
-        .eq('triggered', true)
-        .not('result_r', 'is', null)
-    : { data: [] }
-
   type Agg = { trades: number; wins: number; totalR: number }
   const byZone = new Map<string, Agg>()
   const byMarket = new Map<string, Agg>()
@@ -278,23 +342,6 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
     if (t.direction && t.entry_zone) bump(byZone, `${t.market_id}::${t.direction}::${t.entry_zone}`, resultR)
   }
 
-  // analyst_profiles.zone is null on every production row today -- this table only ever
-  // supplies the market+direction tier in practice. The zone tier above
-  // (actual_trades.entry_zone) is the only place a genuine zone-scoped edge could come
-  // from, and is likewise unpopulated on every row today; wired up to activate
-  // automatically the moment either data source starts carrying real zone values.
-  //
-  // Fetched as an ARRAY per (market, direction), not a single row: generateAnalystProfiles.ts
-  // writes one row PER REGIME (profile_data.regime = TRENDING_UP/TRENDING_DOWN/RANGE/MIXED)
-  // whenever regime-specific data exists, and only falls back to a single regime-agnostic
-  // row when it doesn't -- so "this analyst's overall record for market+direction" has to be
-  // computed by blending across whichever rows exist, not read off one row directly.
-  const { data: profileRows } = await adminDb
-    .from('analyst_profiles')
-    .select('market_id, direction, profile_data')
-    .eq('analyst_id', analystId)
-    .in('market_id', marketIds.length > 0 ? marketIds : [''])
-
   const profilesByMarketDirection = new Map<string, any[]>()
   for (const p of (profileRows ?? []) as any[]) {
     if (!p.direction || !p.profile_data) continue
@@ -302,17 +349,6 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
     if (!profilesByMarketDirection.has(key)) profilesByMarketDirection.set(key, [])
     profilesByMarketDirection.get(key)!.push(p.profile_data)
   }
-
-  // This analyst's FULL profile set, every market (not scoped to marketIds) --
-  // needed for the tiered evidence system's REGIME tier, which deliberately
-  // rolls up across every market in the same asset class, not just today's
-  // recommended ones. asset_class comes from the market:market_id FK embed
-  // rather than a separate markets query. Mirrors
-  // intelligence-engine/src/services/analystScoringService.ts's own tiers.
-  const { data: allAnalystProfileRowsRaw } = await adminDb
-    .from('analyst_profiles')
-    .select('market_id, direction, profile_data, market:market_id ( asset_class )')
-    .eq('analyst_id', analystId)
 
   const allProfilesForTier: TierProfile[] = []
   for (const p of (allAnalystProfileRowsRaw ?? []) as any[]) {
@@ -397,14 +433,6 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
     }
     return null
   }
-
-  // Yesterday's trades, for the top-tile summary and the per-market "Your trade" line.
-  const { data: yesterdayTrades } = await supabase
-    .from('actual_trades')
-    .select('market_id, direction, result_r, triggered')
-    .eq('analyst_id', analystId)
-    .gte('published_at', yesterday + 'T00:00:00Z')
-    .lt('published_at', today + 'T00:00:00Z')
 
   const ytrades = (yesterdayTrades ?? []) as any[]
   const closedYesterday = ytrades.filter(t => t.result_r !== null)
@@ -543,17 +571,10 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
     return b.priorityScore - a.priorityScore
   })
 
-  // Section 4 selection funnel, "N with recommendations generated" -- total opportunities
-  // for today across every analyst/session, via adminDb (opportunities RLS scopes ANALYST
-  // to only their own assigned rows, migrations/002_rls.sql). Every opportunity gets exactly
-  // one recommendation_version at generation (runEngineSession.ts), so this count doubles as
-  // "recommendations generated." The upstream "N markets analysed" count has no DB home at
-  // all (SESSION_MARKETS is hardcoded engine config, never persisted) -- deliberately not
-  // queried here; the funnel UI shows that row as unavailable rather than a fabricated number.
-  const { count: recommendationsGeneratedToday } = await adminDb
-    .from('opportunities')
-    .select('opportunity_id', { count: 'exact', head: true })
-    .eq('date', today)
+  // Note on recommendationsGeneratedToday (fetched in wave 1 above): the upstream "N markets
+  // analysed" count has no DB home at all (SESSION_MARKETS is hardcoded engine config, never
+  // persisted) -- deliberately not queried; the funnel UI shows that row as unavailable
+  // rather than a fabricated number.
 
   return {
     rows,

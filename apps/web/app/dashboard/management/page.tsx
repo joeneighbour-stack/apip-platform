@@ -190,16 +190,35 @@ export default async function ManagementWorkspacePage() {
   // row count with or without it.
   //
   // Reuses the same adminDb declared above (allTrades/allReviews) -- same RLS reasoning.
-  const { data: coachingAlignment, error: alignmentError } = await adminDb
-    .from('post_trade_reviews')
-    .select(`
-      direction_alignment, alignment_score,
-      trade:trade_id!inner ( result_r, analyst_id )
-    `)
-    .limit(1000) // 372 reviews today -- headroom against future growth, not a real cap
-
-  if (alignmentError) {
-    console.error('coaching alignment query failed:', alignmentError)
+  //
+  // Paginated -- this used to be a single `.limit(1000)` with no `.order()`, flagged by
+  // the Phase 6 performance audit (docs/qa/performance-audit.md, Check 5) as a silent-
+  // truncation risk once total reviews passed 1000 (372 at the time), and with no
+  // deterministic ordering even below that. Same .range() + explicit .order() pattern as
+  // every other full-history fetch in this file (allTrades/allReviews/allDisputes above)
+  // and in lib/shadowBreakdown.ts -- ordering by review_id purely for pagination
+  // determinism, not because it carries any meaning here.
+  const coachingAlignment: any[] = []
+  {
+    const PAGE_SIZE = 1000
+    let page = 0
+    let hasMore = true
+    while (hasMore) {
+      const { data, error } = await adminDb
+        .from('post_trade_reviews')
+        .select(`
+          direction_alignment, alignment_score,
+          trade:trade_id!inner ( result_r, analyst_id )
+        `)
+        .order('review_id', { ascending: true })
+        .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
+      if (error) { console.error('coaching alignment query failed:', error); break }
+      if (!data?.length) { hasMore = false } else {
+        coachingAlignment.push(...data)
+        hasMore = data.length === PAGE_SIZE
+        page++
+      }
+    }
   }
 
   // Aggregate per analyst
