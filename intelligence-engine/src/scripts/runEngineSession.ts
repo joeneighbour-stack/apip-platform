@@ -987,6 +987,14 @@ async function main() {
             session,
           })
 
+          // APAC engine runs at 13:05 UTC, hours before APAC-session analysts actually
+          // publish -- monitoring the shadow trade immediately would measure market
+          // movement between generation and publication as if it were the trade itself.
+          // See migrations/053_shadow_trades_monitor_from.sql.
+          const monitorFrom = session === 'APAC'
+            ? new Date(new Date(generatedAt).toISOString().slice(0, 10) + 'T15:00:00Z').toISOString()
+            : null
+
           const { data: shadowRow, error: shadowError } = await db.from('shadow_trades').insert({
             shadow_trade_id: shadowTrade.shadowTradeId,
             opportunity_id: shadowTrade.opportunityId,
@@ -1005,6 +1013,7 @@ async function main() {
             expires_at: computeExpiresAt(session, market.asset_class ?? null, new Date(generatedAt)).toISOString(),
             price_provider: 'FINNHUB_OANDA',
             price_resolution: '5MIN',
+            monitor_from: monitorFrom,
           }).select('shadow_trade_id').single()
 
           if (!shadowError && shadowRow) {

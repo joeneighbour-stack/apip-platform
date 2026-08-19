@@ -59,6 +59,7 @@ interface ShadowTrade {
   price_resolution: string
   created_at: string
   generated_at: string
+  monitor_from: string | null
 }
 
 interface ShadowOutcome {
@@ -186,7 +187,7 @@ async function main() {
       shadow_trade_id, opportunity_id, recommendation_version_id,
       direction, entry, stop, target, rr, session,
       entry_mode, generated_price, expires_at,
-      price_provider, price_resolution, created_at, generated_at,
+      price_provider, price_resolution, created_at, generated_at, monitor_from,
       opportunities!inner (
         market_id,
         markets!inner ( symbol, price_data_symbol, asset_class, price_data_provider )
@@ -205,7 +206,12 @@ async function main() {
 
   const activeTrades = (trades ?? []).filter(t => {
     const outcome = t.shadow_trade_outcomes?.[0]
-    return outcome && ['NOT_TRIGGERED', 'TRIGGERED'].includes(outcome.trade_outcome_status)
+    if (!outcome || !['NOT_TRIGGERED', 'TRIGGERED'].includes(outcome.trade_outcome_status)) return false
+    // APAC trades are generated hours before analysts actually publish (see migrations/
+    // 053_shadow_trades_monitor_from.sql) -- ignore until monitor_from so this doesn't
+    // measure market movement between generation and publication as if it were the trade.
+    if (t.monitor_from && new Date(t.monitor_from) > now) return false
+    return true
   })
 
   console.log(`Active trades: ${activeTrades.length}`)

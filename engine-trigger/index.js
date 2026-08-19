@@ -55,15 +55,18 @@ cron.schedule('43 8 * * 1-5', () => triggerWorkflow('snapshot-us'))
 // engine-us: 08:48
 cron.schedule('48 8 * * 1-5', () => triggerWorkflow('engine-us'))
 
-// snapshot-apac: 05:30 Mon-Thu -- ahead of the Asian market close, not after it
-// (the old 12:23 slot landed once APAC trading had already wound down for the
-// day). Mon-Thu only, Friday intentionally skipped -- matches engine-apac's
-// belt-and-suspenders Friday guard in engine-daily.yml for manual triggers.
-cron.schedule('30 5 * * 1-4', () => triggerWorkflow('snapshot-apac'))
+// snapshot-apac: 13:00 UTC (14:00 UK) Mon-Thu -- fresh prices ahead of engine-apac
+// below. Moved from the old 05:30 UTC slot: APAC analysts actually publish
+// ~15:00-18:00 UTC, so a 05:30 run was 9-13 hours stale by publish time (see the
+// trade-linking window fix and migrations/053_shadow_trades_monitor_from.sql,
+// both written to cover that same gap). Mon-Thu only, Friday intentionally
+// skipped -- matches engine-apac's belt-and-suspenders Friday guard in
+// engine-daily.yml for manual triggers.
+cron.schedule('0 13 * * 1-4', () => triggerWorkflow('snapshot-apac'))
 
-// engine-apac: 05:35 Mon-Thu -- same before-close reasoning and Mon-Thu-only
-// scope as snapshot-apac above.
-cron.schedule('35 5 * * 1-4', () => triggerWorkflow('engine-apac'))
+// engine-apac: 13:05 UTC (14:05 UK) Mon-Thu -- same afternoon-publishing
+// reasoning and Mon-Thu-only scope as snapshot-apac above.
+cron.schedule('5 13 * * 1-4', () => triggerWorkflow('engine-apac'))
 
 // populate-daily evening: 21:58
 cron.schedule('58 21 * * 1-5', () => triggerWorkflow('populate-daily'))
@@ -103,8 +106,8 @@ console.log('  04:43 snapshot-european')
 console.log('  04:48 engine-european')
 console.log('  08:43 snapshot-us')
 console.log('  08:48 engine-us')
-console.log('  05:30 snapshot-apac (Mon-Thu)')
-console.log('  05:35 engine-apac (Mon-Thu)')
+console.log('  13:00 snapshot-apac (Mon-Thu)')
+console.log('  13:05 engine-apac (Mon-Thu)')
 console.log('  21:58 populate-daily (evening)')
 console.log('  22:13 derive-regime (evening)')
 console.log('  22:28 post-trade-reviews')
