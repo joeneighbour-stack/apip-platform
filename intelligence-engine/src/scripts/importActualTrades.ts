@@ -490,44 +490,52 @@ async function main() {
     console.log('\nLinking new trades to recommendation_versions...')
     let linked = 0
 
-    // Find recently inserted unlinked trades from this batch
+    // All unlinked platform-era trades, not just the ones this batch just inserted --
+    // a trade can be inserted by one run and only become linkable on a later run (e.g.
+    // its matching coaching_recommendations row lands after this trade did), so scoping
+    // to import_batch_id was silently skipping those forever. .limit(500) is a safety
+    // cap, not an expected steady-state size -- trades that link successfully leave this
+    // set and don't reappear on the next run.
     const { data: newTrades } = await db
       .from('actual_trades')
       .select('trade_id, analyst_id, market_id, direction, published_at')
-      .eq('import_batch_id', batchId!)
+      .is('opportunity_id', null)
       .is('recommendation_version_id', null)
       .eq('historical_backfill', false)
-      .gte('published_at', '2026-07-01') // only platform-era trades
+      .eq('source_system', 'ACUITY_PERFORMANCE_API')
+      .gte('published_at', LIVE_API_START) // platform-era trades only -- same floor as the dedup logic above
+      .limit(500)
 
     for (const trade of (newTrades ?? [])) {
-      // Find coaching recommendation shown within 4 hours before trade publication
+      // Find coaching recommendation(s) shown before trade publication. Window widened
+      // from 4 to 14 hours to cover APAC (rec ~05:35 UTC, trade published ~15:00-18:00
+      // UTC -- a 9-13 hour gap) alongside EUROPEAN (~2-4h) and US (~5-9h).
       const pubTime = new Date(trade.published_at)
-      const windowStart = new Date(pubTime.getTime() - 4 * 60 * 60 * 1000).toISOString()
+      const windowStart = new Date(pubTime.getTime() - 14 * 60 * 60 * 1000).toISOString()
 
-      const { data: coaching } = await db
+      // Multiple candidates, not just the single most recent one: at a 14-hour window an
+      // analyst covering several markets in a session can easily have a MORE recent
+      // coaching_recommendations row for a DIFFERENT market than the one just traded --
+      // taking only the latest and bailing if its market doesn't match (the old 4-hour-
+      // window behaviour) would silently drop a real match sitting earlier in the window.
+      // opportunity:opportunity_id embeds market_id directly, so this stays one query
+      // instead of a second round-trip per candidate.
+      const { data: candidates } = await db
         .from('coaching_recommendations')
-        .select('recommendation_id, active_recommendation_version_id, opportunity_id')
+        .select('recommendation_id, active_recommendation_version_id, opportunity_id, opportunity:opportunity_id ( market_id )')
         .eq('analyst_id', trade.analyst_id)
         .gte('shown_at', windowStart)
         .lte('shown_at', trade.published_at)
         .order('shown_at', { ascending: false })
-        .limit(1)
-        .single()
+        .limit(20)
+
+      // Direction is deliberately not checked -- an analyst trading opposite to the
+      // coaching recommendation should still link, not be silently dropped: that
+      // divergence is exactly what direction_alignment in generatePostTradeReviews.ts
+      // scores afterwards, by comparing this opportunity's direction against the trade's own.
+      const coaching = (candidates ?? []).find((c: any) => c.opportunity?.market_id === trade.market_id)
 
       if (!coaching) continue
-
-      // Verify market matches via opportunity. Direction is deliberately not checked --
-      // an analyst trading opposite to the coaching recommendation should still link,
-      // not be silently dropped: that divergence is exactly what direction_alignment
-      // in generatePostTradeReviews.ts scores afterwards, by comparing this
-      // opportunity's direction against the trade's own.
-      const { data: opp } = await db
-        .from('opportunities')
-        .select('market_id')
-        .eq('opportunity_id', coaching.opportunity_id)
-        .single()
-
-      if (!opp || opp.market_id !== trade.market_id) continue
 
       await db.from('actual_trades')
         .update({
