@@ -54,13 +54,16 @@ describe('createShadowTrade', () => {
     expect(createShadowTrade(baseInput({ templateSource: 'unknown' })).shadowTrade.templateSource).toBe('unknown');
   });
 
-  it('links the shadow trade to its recommendation and opportunity via FK fields, not duplicated market/session/direction data', () => {
+  it('links the shadow trade to its recommendation and opportunity via FK fields; carries session/direction (real shadow_trades columns) but not market or recommendation-only fields', () => {
     const { shadowTrade } = createShadowTrade(baseInput());
     expect(shadowTrade.recommendationVersionId).toBe('rv-1');
     expect(shadowTrade.opportunityId).toBe('2026-01-15_EURUSD_EUROPEAN_v1');
+    // session/direction are real shadow_trades columns (ShadowTradeOutput,
+    // shadowTradeService.ts) -- unlike market, they're not duplicated data, they're
+    // passed through from the input onto the persisted row.
+    expect(shadowTrade.session).toBe('EUROPEAN');
+    expect(shadowTrade.direction).toBe('BUY');
     expect(shadowTrade).not.toHaveProperty('market');
-    expect(shadowTrade).not.toHaveProperty('session');
-    expect(shadowTrade).not.toHaveProperty('direction');
     expect(shadowTrade).not.toHaveProperty('triggerProbability');
     expect(shadowTrade).not.toHaveProperty('expectedR');
   });
