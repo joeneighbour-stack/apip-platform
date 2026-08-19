@@ -5,24 +5,24 @@
 // Contract: APIP_INTELLIGENCE_ENGINE_ARCHITECTURE_V1.2.md Section 3.6
 // ============================================================================
 //
-// V2 STOP/TARGET CONSTRUCTION (canonical V1 coaching logic):
+// V3 REDESIGN (regime-conditional zone, band-boundary target, band-exterior stop):
 //
-// Stop and target distances are derived from ATR-normalised distributions
-// computed from historical actual_trades where ATR data is available.
-// The analyst sees RANGES (q25–q75) expressed as distances.
-// The hidden shadow trade uses MEDIAN-derived exact prices.
+// Zone selection is now regime-conditional (selectEntryZone()), not derived from
+// historical ATR-multiplier profiles or the caller's own preferredEntryZone --
+// this service now OWNS zone selection and returns it, rather than accepting it
+// as an input. Entry price is the edge of the selected zone nearest the outer
+// band (zone low for BUY, zone high for SELL), not the zone midpoint, to
+// maximise room to target. Target is the outer band boundary itself (always
+// inside the band by construction); stop is placed just outside the OPPOSITE
+// band boundary, offset by a volatility-scaled buffer. A 2:1 RR floor still
+// applies: if the natural band-boundary target doesn't reach 2:1, it's expanded
+// (capped at 1.5x ATR20 from entry, to prevent unrealistic targets).
 //
-// Profile hierarchy (most specific wins):
-//   1. analyst + market + direction + entry_zone
-//   2. analyst + direction + entry_zone
-//   3. team + direction + entry_zone
-//   4. default template (baked-in from validated historical distributions)
-//
-// Default template computed from 6,996 ATR-joinable backfill trades:
-//   stop_atr:   q25~0.37, median~0.47, q75~0.57  (consistent across zones)
-//   target_atr: q25~1.03, median~1.32, q75~1.57  (varies slightly by zone)
-//   All zones achieve >2:1 RR at median -- 2:1 floor is safety net only.
-//
+// Zone selection (regime-conditional):
+//   BUY:  TRENDING_UP -> ZONE_2 (trend may not pull back to the extreme)
+//         TRENDING_DOWN / RANGE / MIXED -> ZONE_1 (favourable low-risk entry)
+//   SELL: TRENDING_UP / RANGE / MIXED -> ZONE_4 (favourable high-risk entry)
+//         TRENDING_DOWN -> ZONE_3 (trend may not rally back to the extreme)
 // ============================================================================
 
 import type { AtrZone, Direction } from '../types/domain.js';
@@ -40,50 +40,52 @@ export interface AtrProfile {
 export interface EntryOptimizerInput {
   marketState: MarketStateOutput;
   direction: Direction;
-  preferredZone: AtrZone;
   minimumRr: number;
-  // Optional: provide a profile for analyst/market/zone-specific distributions.
-  // If omitted, the default template is used.
+  trendState: string | null;      // drives regime-conditional zone selection
+  volatilityState: string | null; // drives the stop's volatility buffer
+  // Kept for interface compatibility -- still used for zone preference in
+  // allocation scoring (analystScoringService.ts). Not consumed here: stop/
+  // target geometry is now purely band-boundary + volatility-buffer derived,
+  // not ATR-multiplier-profile derived.
   atrProfile?: AtrProfile;
 }
 
 export interface EntryOptimizerOutput {
-  entryRangeLow: number;   // full preferred zone low
-  entryRangeHigh: number;  // full preferred zone high
-  entryMid: number;        // midpoint -- used for shadow trade entry
-  // Analyst-facing ranges (expressed as distances from entryMid)
-  riskRangeLow: number;    // stop_atr_q25 × ATR (distance)
-  riskRangeHigh: number;   // stop_atr_q75 × ATR (distance)
-  targetRangeLow: number;  // target_atr_q25 × ATR (distance)
-  targetRangeHigh: number; // target_atr_q75 × ATR (distance)
-  // Hidden shadow trade exact prices
-  stop: number;            // entryMid ± stop_atr_median × ATR
-  target: number;          // entryMid ± target_atr_median × ATR (2:1 floor applied)
-  rr: number;              // planned RR of shadow trade
+  preferredZone: AtrZone;   // computed from regime -- see selectEntryZone()
+  entryRangeLow: number;    // zone low (analyst-facing display)
+  entryRangeHigh: number;   // zone high (analyst-facing display)
+  entryMid: number;         // zone midpoint (display only)
+  entryPrice: number;       // zone low (BUY) or zone high (SELL) -- shadow trade entry
+  riskRangeLow: number;     // stop price (exact)
+  riskRangeHigh: number;    // stop price + small buffer for display
+  targetRangeLow: number;   // target price - small buffer for display
+  targetRangeHigh: number;  // target price (exact)
+  stop: number;             // exact stop price
+  target: number;           // exact target price
+  rr: number;               // actual RR achieved
 }
 
-// ── Default ATR profile (baked-in from validated historical distributions) ──
-// Computed from 6,996 ATR-joinable backfill trades across all zones/directions.
-// Zone-specific values used where available; fallback to overall median.
-const DEFAULT_PROFILES: Record<string, AtrProfile> = {
-  'ZONE_1:BUY':    { stopAtrQ25: 0.387, stopAtrMedian: 0.479, stopAtrQ75: 0.583, targetAtrQ25: 1.162, targetAtrMedian: 1.390, targetAtrQ75: 1.607 },
-  'ZONE_1:SELL':   { stopAtrQ25: 0.356, stopAtrMedian: 0.469, stopAtrQ75: 0.545, targetAtrQ25: 1.160, targetAtrMedian: 1.358, targetAtrQ75: 1.546 },
-  'ZONE_2:BUY':    { stopAtrQ25: 0.382, stopAtrMedian: 0.469, stopAtrQ75: 0.568, targetAtrQ25: 1.049, targetAtrMedian: 1.305, targetAtrQ75: 1.567 },
-  'ZONE_2:SELL':   { stopAtrQ25: 0.367, stopAtrMedian: 0.465, stopAtrQ75: 0.552, targetAtrQ25: 1.033, targetAtrMedian: 1.319, targetAtrQ75: 1.524 },
-  'ZONE_3:BUY':    { stopAtrQ25: 0.365, stopAtrMedian: 0.469, stopAtrQ75: 0.579, targetAtrQ25: 1.029, targetAtrMedian: 1.301, targetAtrQ75: 1.603 },
-  'ZONE_3:SELL':   { stopAtrQ25: 0.348, stopAtrMedian: 0.464, stopAtrQ75: 0.539, targetAtrQ25: 1.080, targetAtrMedian: 1.276, targetAtrQ75: 1.518 },
-  'ZONE_4:BUY':    { stopAtrQ25: 0.402, stopAtrMedian: 0.491, stopAtrQ75: 0.576, targetAtrQ25: 1.113, targetAtrMedian: 1.287, targetAtrQ75: 1.539 },
-  'ZONE_4:SELL':   { stopAtrQ25: 0.359, stopAtrMedian: 0.461, stopAtrQ75: 0.546, targetAtrQ25: 1.104, targetAtrMedian: 1.343, targetAtrQ75: 1.538 },
-  'TOO_DEEP:BUY':  { stopAtrQ25: 0.394, stopAtrMedian: 0.480, stopAtrQ75: 0.579, targetAtrQ25: 1.103, targetAtrMedian: 1.396, targetAtrQ75: 1.611 },
-  'TOO_DEEP:SELL': { stopAtrQ25: 0.367, stopAtrMedian: 0.450, stopAtrQ75: 0.529, targetAtrQ25: 1.105, targetAtrMedian: 1.293, targetAtrQ75: 1.536 },
-  'TOO_HIGH:BUY':  { stopAtrQ25: 0.379, stopAtrMedian: 0.462, stopAtrQ75: 0.571, targetAtrQ25: 1.094, targetAtrMedian: 1.261, targetAtrQ75: 1.500 },
-  'TOO_HIGH:SELL': { stopAtrQ25: 0.363, stopAtrMedian: 0.454, stopAtrQ75: 0.540, targetAtrQ25: 1.099, targetAtrMedian: 1.269, targetAtrQ75: 1.627 },
-}
-
-// Overall fallback if zone/direction key not found
-const FALLBACK_PROFILE: AtrProfile = {
-  stopAtrQ25: 0.370, stopAtrMedian: 0.469, stopAtrQ75: 0.560,
-  targetAtrQ25: 1.050, targetAtrMedian: 1.310, targetAtrQ75: 1.560,
+/**
+ * Regime-conditional entry zone. Direction does not alter zone geometry
+ * (marketStateService.ts), but it does alter which zone is preferred for entry:
+ * BUY wants the cheap (low) side of the band, SELL wants the expensive (high)
+ * side -- except when trending, where the extreme zone (1 or 4) may never be
+ * reached, so the adjacent middle zone (2 or 3) is preferred instead.
+ */
+export function selectEntryZone(
+  direction: Direction,
+  trendState: string | null,
+): AtrZone {
+  const trend = trendState ?? 'RANGE';
+  if (direction === 'BUY') {
+    if (trend === 'TRENDING_UP') return 'ZONE_2';
+    if (trend === 'TRENDING_DOWN') return 'ZONE_1';
+    return 'ZONE_1'; // MIXED or RANGE
+  } else {
+    if (trend === 'TRENDING_UP') return 'ZONE_4';
+    if (trend === 'TRENDING_DOWN') return 'ZONE_3';
+    return 'ZONE_4'; // MIXED or RANGE
+  }
 }
 
 /**
@@ -107,85 +109,87 @@ export function zoneBounds(marketState: MarketStateOutput, zone: AtrZone): [numb
   }
 }
 
-interface EntryRange { entryRangeLow: number; entryRangeHigh: number; entryMid: number; }
-
-function optimiseEntryRange(marketState: MarketStateOutput, preferredZone: AtrZone): EntryRange {
-  const [low, high] = zoneBounds(marketState, preferredZone);
-  // Notebook checks notna(low) and notna(high) INDEPENDENTLY for the two
-  // range fields -- not a combined check -- so it's possible in principle
-  // for one side to be real while the other is NaN. Replicated exactly
-  // rather than simplified to a single combined guard.
-  const entryRangeLow = !Number.isNaN(low) ? Math.min(low, high) : NaN;
-  const entryRangeHigh = !Number.isNaN(high) ? Math.max(low, high) : NaN;
-  const entryMid = !Number.isNaN(low) && !Number.isNaN(high) ? (low + high) / 2 : NaN;
-  return { entryRangeLow, entryRangeHigh, entryMid };
-}
-
 /**
- * Constructs stop/target using ATR-normalised historical distributions.
- *
- * Analyst sees:
- *   risk_range  = [stopAtrQ25 × ATR, stopAtrQ75 × ATR]   (distances)
- *   target_range = [targetAtrQ25 × ATR, targetAtrQ75 × ATR] (distances)
- *
- * Shadow trade uses median-derived exact prices:
- *   stop   = entryMid ± stopAtrMedian × ATR
- *   target = entryMid ± targetAtrMedian × ATR
- *   2:1 RR floor: if target_distance < 2.0 × stop_distance, expand target only
+ * Volatility-scaled buffer placing the stop just outside the band, rather than
+ * a fixed distance regardless of conditions -- a quiet market gets a tight
+ * buffer, an extreme one gets more room before the stop is considered hit.
  */
-function constructStopTarget(
-  atr14: number | null,
-  direction: Direction,
-  entryMid: number,
-  minimumRr: number,
-  profile: AtrProfile,
-): {
-  riskRangeLow: number; riskRangeHigh: number;
-  targetRangeLow: number; targetRangeHigh: number;
-  stop: number; target: number; rr: number;
-} {
-  const atr = atr14 ?? NaN;
-  if (Number.isNaN(atr) || Number.isNaN(entryMid) || atr <= 0) {
-    return {
-      riskRangeLow: NaN, riskRangeHigh: NaN,
-      targetRangeLow: NaN, targetRangeHigh: NaN,
-      stop: NaN, target: NaN, rr: NaN,
-    }
+function volatilityBuffer(volatilityState: string | null, atr20: number): number {
+  switch (volatilityState) {
+    case 'LOW_VOL':     return 0.05 * atr20;
+    case 'NORMAL_VOL':  return 0.10 * atr20;
+    case 'HIGH_VOL':    return 0.15 * atr20;
+    case 'EXTREME_VOL': return 0.20 * atr20;
+    default:            return 0.10 * atr20;
   }
-
-  // Analyst-facing ranges (distances, always positive)
-  const riskRangeLow  = profile.stopAtrQ25   * atr
-  const riskRangeHigh = profile.stopAtrQ75   * atr
-  const targetRangeLow  = profile.targetAtrQ25 * atr
-  const targetRangeHigh = profile.targetAtrQ75 * atr
-
-  // Shadow trade exact prices using median
-  const stopDistance   = profile.stopAtrMedian   * atr
-  let targetDistance   = profile.targetAtrMedian * atr
-
-  // 2:1 RR floor: keep stop unchanged, expand target if needed
-  if (targetDistance < minimumRr * stopDistance) {
-    targetDistance = minimumRr * stopDistance
-  }
-
-  const stop   = direction === 'BUY' ? entryMid - stopDistance   : entryMid + stopDistance
-  const target = direction === 'BUY' ? entryMid + targetDistance : entryMid - targetDistance
-
-  const rr = stopDistance > 0 ? targetDistance / stopDistance : NaN
-
-  return { riskRangeLow, riskRangeHigh, targetRangeLow, targetRangeHigh, stop, target, rr }
 }
 
 export function buildEntryOptimizer(input: EntryOptimizerInput): EntryOptimizerOutput {
-  const { marketState, direction, preferredZone, minimumRr, atrProfile } = input
+  const { marketState, direction, minimumRr, trendState, volatilityState } = input;
 
-  const range = optimiseEntryRange(marketState, preferredZone)
+  const preferredZone = selectEntryZone(direction, trendState);
+  const [zoneLow, zoneHigh] = zoneBounds(marketState, preferredZone);
 
-  // Profile hierarchy: caller-provided > zone+direction default > fallback
-  const profileKey = `${preferredZone}:${direction}`
-  const profile = atrProfile ?? DEFAULT_PROFILES[profileKey] ?? FALLBACK_PROFILE
+  const entryRangeLow = !Number.isNaN(zoneLow) ? Math.min(zoneLow, zoneHigh) : NaN;
+  const entryRangeHigh = !Number.isNaN(zoneHigh) ? Math.max(zoneLow, zoneHigh) : NaN;
+  const entryMid = !Number.isNaN(zoneLow) && !Number.isNaN(zoneHigh) ? (zoneLow + zoneHigh) / 2 : NaN;
+  // BUY enters at the zone low, SELL at the zone high -- the edge nearest the
+  // outer band, maximising the distance available to the (in-band) target.
+  const entryPrice = direction === 'BUY' ? entryRangeLow : entryRangeHigh;
 
-  const stopTarget = constructStopTarget(marketState.atr14, direction, range.entryMid, minimumRr, profile)
+  const atr20 = marketState.atr20 ?? marketState.atr14 ?? 0;
+  const lowerBand = marketState.lowerBand;
+  const upperBand = marketState.upperBand;
 
-  return { ...range, ...stopTarget }
+  if (
+    Number.isNaN(entryPrice) || lowerBand == null || upperBand == null ||
+    !Number.isFinite(atr20) || atr20 <= 0
+  ) {
+    return {
+      preferredZone, entryRangeLow, entryRangeHigh, entryMid, entryPrice,
+      riskRangeLow: NaN, riskRangeHigh: NaN, targetRangeLow: NaN, targetRangeHigh: NaN,
+      stop: NaN, target: NaN, rr: NaN,
+    };
+  }
+
+  // Target: always the outer band boundary.
+  let target = direction === 'BUY' ? upperBand : lowerBand;
+
+  // Stop: always outside the OPPOSITE band boundary, offset by a
+  // volatility-scaled buffer.
+  const buffer = volatilityBuffer(volatilityState, atr20);
+  const stop = direction === 'BUY' ? lowerBand - buffer : upperBand + buffer;
+
+  // 2:1 RR floor: if the natural (band-boundary) target doesn't reach it,
+  // expand toward/beyond the band boundary -- capped at 1.5x ATR20 from entry
+  // so the floor can never demand an unrealistic target.
+  const stopDistance = Math.abs(entryPrice - stop);
+  const targetDistance = Math.abs(target - entryPrice);
+  const minimumTargetDistance = minimumRr * stopDistance;
+
+  if (targetDistance < minimumTargetDistance) {
+    const expandedTarget = direction === 'BUY'
+      ? entryPrice + minimumTargetDistance
+      : entryPrice - minimumTargetDistance;
+    const maxTarget = direction === 'BUY'
+      ? entryPrice + 1.5 * atr20
+      : entryPrice - 1.5 * atr20;
+    target = direction === 'BUY'
+      ? Math.min(expandedTarget, maxTarget)
+      : Math.max(expandedTarget, maxTarget);
+  }
+
+  const finalTargetDistance = Math.abs(target - entryPrice);
+  const rr = stopDistance > 0 ? finalTargetDistance / stopDistance : NaN;
+
+  return {
+    preferredZone, entryRangeLow, entryRangeHigh, entryMid, entryPrice,
+    // No display-buffer value is specified anywhere in the redesign brief, and
+    // recommendationService.ts's new risk/target text (Fix 3) reads `stop`/
+    // `target` directly rather than these range fields -- degenerate ranges
+    // (equal to the exact price) rather than an invented buffer magnitude.
+    riskRangeLow: stop, riskRangeHigh: stop,
+    targetRangeLow: target, targetRangeHigh: target,
+    stop, target, rr,
+  };
 }

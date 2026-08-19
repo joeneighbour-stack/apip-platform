@@ -57,6 +57,7 @@ export interface CoachingInput {
   direction: Direction;
   currentZone: AtrZone | null;
   preferredEntryZone: AtrZone;
+  trendState: string | null; // drives the zone-selection rationale in generateCoachingNote()
   analystAction: 'ENTER_NOW' | 'WAIT_FOR_PREFERRED_ZONE';
   entryRangeLow: number;
   entryRangeHigh: number;
@@ -113,6 +114,26 @@ function describePreferredZone(zone: string | null): string {
   }
 }
 
+// Explains why this zone (rather than the range extreme) was preferred, given
+// the market's regime -- mirrors entryOptimizerService.ts's selectEntryZone():
+// a trend-aligned trade (BUY in an uptrend, SELL in a downtrend) prefers the
+// middle zone since price may not pull back to the extreme; every other case
+// (ranging, mixed, or counter-trend) prefers the extreme zone for the most
+// favourable, lowest-risk entry.
+function describeZoneSelectionRationale(zone: AtrZone, direction: Direction, trendState: string | null): string {
+  const trendAligned =
+    (direction === 'BUY' && trendState === 'TRENDING_UP') ||
+    (direction === 'SELL' && trendState === 'TRENDING_DOWN')
+  if (trendAligned) {
+    return zone === 'ZONE_2'
+      ? ' Zone 2 is preferred rather than the range extreme: with the market trending, price may not pull back as far as the low of the range.'
+      : ' Zone 3 is preferred rather than the range extreme: with the market trending, price may not rally back as far as the high of the range.'
+  }
+  return direction === 'BUY'
+    ? ' Zone 1 is preferred: in ranging or mixed conditions (or when the trend runs counter to this trade), the lower end of the range offers the most favourable, lowest-risk entry.'
+    : ' Zone 4 is preferred: in ranging or mixed conditions (or when the trend runs counter to this trade), the upper end of the range offers the most favourable, lowest-risk entry.'
+}
+
 export function generateCoachingNote(input: CoachingInput): string {
   const currentZoneDesc = describeZone(input.currentZone)
   const preferredZoneDesc = describePreferredZone(input.preferredEntryZone)
@@ -143,6 +164,8 @@ export function generateCoachingNote(input: CoachingInput): string {
       `with a suggested entry region of ${entryLow} to ${entryHigh}. ` +
       `Estimated trigger probability ${triggerPct}%, expected opportunity ${input.expectedR.toFixed(2)}R.`
   }
+
+  text += describeZoneSelectionRationale(input.preferredEntryZone, input.direction, input.trendState)
 
   if (input.recommendationValidityStatus !== 'VALID' &&
       input.recommendationValidityStatus !== 'ENTRY_ALREADY_PASSED' &&

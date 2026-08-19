@@ -4,13 +4,19 @@
 // ============================================================================
 // Generates post_trade_reviews for actual_trades that have a linked
 // recommendation_version_id. Scores direction, entry, stop, and target
-// alignment against the coaching recommendation shown before the trade.
+// alignment against the recommendation shown before the trade.
 //
-// Alignment scoring (0-4):
-//   Direction: 1 pt if trade direction matches coaching direction
-//   Entry:     1 pt if trade entry within or near suggested range (≤0.5 ATR20)
-//   Stop:      1 pt if trade stop within or near suggested risk_range
-//   Target:    1 pt if trade target within or near suggested target_range
+// Alignment scoring (0-4), recalibrated for the band-boundary redesign
+// (entryOptimizerService.ts): stop/target alignment is no longer checked
+// against coaching text ranges -- it's checked directly against the market's
+// band boundaries at generation time (persisted in
+// recommendation_versions.regime_tags.lowerBand/upperBand, see
+// runEngineSession.ts), the actual source of truth those levels were built
+// from.
+//   Direction: 1 pt if trade direction matches the recommendation's direction
+//   Entry:     1 pt if trade entry falls within the recommendation's zone
+//   Stop:      1 pt if trade stop sits outside the band (as designed)
+//   Target:    1 pt if trade target sits within the band, beyond entry
 //
 // Run:
 //   npx tsx src/scripts/generatePostTradeReviews.ts --dry-run
@@ -22,21 +28,31 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
-// ── Range parsing ────────────────────────────────────────────────────────────
+// ── Zone / band alignment ────────────────────────────────────────────────────
 
-/**
- * Parses a range string like "1.0815–1.0835" (en-dash) into [low, high].
- * Returns null if the string cannot be parsed.
- */
-function parseRange(range: string | null | undefined): [number, number] | null {
-  if (!range) return null
-  // Support en-dash (U+2013) and hyphen-minus
-  const parts = range.split(/[\u2013\-]/)
-  if (parts.length !== 2) return null
-  const low  = parseFloat(parts[0]!.trim())
-  const high = parseFloat(parts[1]!.trim())
-  if (Number.isNaN(low) || Number.isNaN(high)) return null
-  return [low, high]
+// Recomputes a zone's [low, high] bounds from the band boundaries persisted at
+// generation time (recommendation_versions.regime_tags.lowerBand/upperBand).
+// Bands are always split into 4 even zones (marketStateService.ts's
+// calculateAtrZones, ZONE_COUNT=4 in runEngineSession.ts), so the split can be
+// reconstructed here without the individual zone1Top/zone2Top/zone3Top
+// fields, which aren't persisted per-recommendation.
+function zoneBoundsFromBand(lowerBand: number, upperBand: number, zone: string): [number, number] {
+  const step = (upperBand - lowerBand) / 4
+  switch (zone) {
+    case 'TOO_DEEP':
+    case 'ZONE_1': return [lowerBand, lowerBand + step]
+    case 'ZONE_2': return [lowerBand + step, lowerBand + 2 * step]
+    case 'ZONE_3': return [lowerBand + 2 * step, lowerBand + 3 * step]
+    case 'TOO_HIGH':
+    case 'ZONE_4': return [lowerBand + 3 * step, upperBand]
+    default: return [NaN, NaN]
+  }
+}
+
+function isWithinZone(entry: number, zone: string, lowerBand: number, upperBand: number): boolean {
+  const [lo, hi] = zoneBoundsFromBand(lowerBand, upperBand, zone)
+  if (Number.isNaN(lo) || Number.isNaN(hi)) return false
+  return entry >= lo && entry <= hi
 }
 
 // ── Alignment scoring ────────────────────────────────────────────────────────
@@ -48,30 +64,36 @@ function scoreDirectionAlignment(
   return { alignment: match ? 'Aligned' : 'Different', score: match ? 1 : 0 }
 }
 
-function scoreRangeAlignment(
-  value: number | null,
-  rangeLow: number,
-  rangeHigh: number,
-  atr20: number | null,
-  label: string,
+function scoreEntryZoneAlignment(
+  entry: number | null, zone: string | null, lowerBand: number | null, upperBand: number | null,
 ): { alignment: string; score: number } {
-  if (value === null || value === 0) return { alignment: 'Unknown', score: 0 }
+  if (entry === null || !zone || lowerBand === null || upperBand === null) return { alignment: 'Unknown', score: 0 }
+  return isWithinZone(entry, zone, lowerBand, upperBand)
+    ? { alignment: 'High', score: 1 }
+    : { alignment: 'Low', score: 0 }
+}
 
-  // Within the suggested range
-  if (value >= rangeLow && value <= rangeHigh) {
-    return { alignment: 'High', score: 1 }
-  }
+// direction here is the ACTUAL trade's own direction, not necessarily the
+// recommendation's -- this checks whether the trade's own stop is coherent
+// with band-exterior placement for the direction it was actually taken in,
+// independent of whether it followed the recommended direction (that's
+// scored separately by scoreDirectionAlignment).
+function scoreStopAlignment(
+  stop: number | null, direction: string, lowerBand: number | null, upperBand: number | null,
+): { alignment: string; score: number } {
+  if (stop === null || lowerBand === null || upperBand === null) return { alignment: 'Unknown', score: 0 }
+  const aligned = direction.toUpperCase() === 'BUY' ? stop < lowerBand : stop > upperBand
+  return aligned ? { alignment: 'High', score: 1 } : { alignment: 'Low', score: 0 }
+}
 
-  if (!atr20 || atr20 === 0) {
-    return { alignment: 'Low', score: 0 }
-  }
-
-  // Distance from nearest boundary in ATR20 units
-  const distance = value < rangeLow ? rangeLow - value : value - rangeHigh
-  const distanceAtr = distance / atr20
-
-  if (distanceAtr <= 0.5) return { alignment: 'High', score: 1 }
-  return { alignment: 'Low', score: 0 }
+function scoreTargetAlignment(
+  target: number | null, entry: number | null, direction: string, lowerBand: number | null, upperBand: number | null,
+): { alignment: string; score: number } {
+  if (target === null || entry === null || lowerBand === null || upperBand === null) return { alignment: 'Unknown', score: 0 }
+  const aligned = direction.toUpperCase() === 'BUY'
+    ? target <= upperBand && target > entry
+    : target >= lowerBand && target < entry
+  return aligned ? { alignment: 'High', score: 1 } : { alignment: 'Low', score: 0 }
 }
 
 // ── Review text ───────────────────────────────────────────────────────────────
@@ -169,7 +191,8 @@ async function main() {
         recommendation_version_id,
         entry_range_low,
         entry_range_high,
-        opportunity_id
+        opportunity_id,
+        regime_tags
       )
     `)
     .not('recommendation_version_id', 'is', null)
@@ -189,39 +212,17 @@ async function main() {
   console.log(`Linked: ${linkedTrades.length}, Reviewed: ${reviewedTradeIds.size}, To review: ${unreviewed.length}`)
   if (unreviewed.length === 0) { console.log('All reviewed.'); return }
 
-  // Load ATR20 for each market
-  const marketIds = [...new Set(unreviewed.map(t => (t.market as any)?.market_id).filter(Boolean))]
-  const { data: atrRows } = await db
-    .from('market_state_daily')
-    .select('market_id, atr20, date')
-    .in('market_id', marketIds)
-    .order('date', { ascending: false })
-  const atr20ByMarketId = new Map<string, number>()
-  for (const row of (atrRows ?? [])) {
-    if (!atr20ByMarketId.has(row.market_id) && row.atr20) {
-      atr20ByMarketId.set(row.market_id, Number(row.atr20))
-    }
-  }
-
-  // Load coaching recommendations for stop/target ranges and direction
   const oppIds = unreviewed
     .map(t => (t.recommendation_version as any)?.opportunity_id)
     .filter(Boolean)
 
-  const { data: coachingRows } = await db
-    .from('coaching_recommendations')
-    .select('opportunity_id, risk_range, target_range')
-    .in('opportunity_id', oppIds)
-  const coachingByOppId = new Map(
-    (coachingRows ?? []).map(c => [c.opportunity_id, c])
-  )
-
-  // Load direction from opportunities
+  // Load direction and recommended zone from opportunities
   const { data: oppRows } = await db
     .from('opportunities')
-    .select('opportunity_id, direction')
+    .select('opportunity_id, direction, preferred_entry_zone')
     .in('opportunity_id', oppIds)
   const directionByOppId = new Map((oppRows ?? []).map(o => [o.opportunity_id, o.direction]))
+  const zoneByOppId = new Map((oppRows ?? []).map(o => [o.opportunity_id, o.preferred_entry_zone]))
 
   let created = 0, skipped = 0
 
@@ -230,16 +231,15 @@ async function main() {
     const market  = trade.market as any
     if (!rv?.entry_range_low || !rv?.entry_range_high || !trade.entry) { skipped++; continue }
 
-    const coaching        = coachingByOppId.get(rv.opportunity_id)
     const coachingDir     = directionByOppId.get(rv.opportunity_id) ?? trade.direction
-    const atr20           = atr20ByMarketId.get(market?.market_id) ?? null
-    const riskRange       = parseRange(coaching?.risk_range)
-    const targetRange     = parseRange(coaching?.target_range)
+    const recommendedZone = zoneByOppId.get(rv.opportunity_id) ?? null
+    const lowerBand        = rv.regime_tags?.lowerBand != null ? Number(rv.regime_tags.lowerBand) : null
+    const upperBand        = rv.regime_tags?.upperBand != null ? Number(rv.regime_tags.upperBand) : null
 
     const { alignment: dirAlignment,    score: dirScore }    = scoreDirectionAlignment(trade.direction, coachingDir)
-    const { alignment: entryAlignment,  score: entryScore }  = scoreRangeAlignment(Number(trade.entry),  Number(rv.entry_range_low), Number(rv.entry_range_high), atr20, 'entry')
-    const { alignment: stopAlignment,   score: stopScore }   = riskRange   ? scoreRangeAlignment(trade.stop   ? Number(trade.stop)   : null, riskRange[0],   riskRange[1],   atr20, 'stop')   : { alignment: 'Unknown', score: 0 }
-    const { alignment: targetAlignment, score: targetScore } = targetRange ? scoreRangeAlignment(trade.target ? Number(trade.target) : null, targetRange[0], targetRange[1], atr20, 'target') : { alignment: 'Unknown', score: 0 }
+    const { alignment: entryAlignment,  score: entryScore }  = scoreEntryZoneAlignment(Number(trade.entry), recommendedZone, lowerBand, upperBand)
+    const { alignment: stopAlignment,   score: stopScore }   = scoreStopAlignment(trade.stop ? Number(trade.stop) : null, trade.direction, lowerBand, upperBand)
+    const { alignment: targetAlignment, score: targetScore } = scoreTargetAlignment(trade.target ? Number(trade.target) : null, Number(trade.entry), trade.direction, lowerBand, upperBand)
 
     const alignmentScore = dirScore + entryScore + stopScore + targetScore
 

@@ -139,7 +139,7 @@ describe('buildRecommendation', () => {
 
   it('passes regimeTags through from a live RegimeSnapshot (market_regime_state shape, not MarketRegimeService)', () => {
     const { recommendationVersion } = buildRecommendation(baseInput({
-      marketRegime: { trendState: 'TRENDING_DOWN', regimeConfidence: 'MEDIUM', regimeTags: ['TRENDING_DOWN', 'LOW_VOL'] },
+      marketRegime: { trendState: 'TRENDING_DOWN', regimeConfidence: 'MEDIUM', regimeTags: ['TRENDING_DOWN', 'LOW_VOL'], volatilityState: 'LOW_VOL' },
     }));
     expect(recommendationVersion.regimeTags).toEqual(['TRENDING_DOWN', 'LOW_VOL']);
   });

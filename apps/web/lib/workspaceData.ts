@@ -1,6 +1,6 @@
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import {
-  entryDistanceLanguage, parseGuidanceRange, atrDistanceFromEntry, marketCurrencies, computeZoneBoundaries, trendLabelFull,
+  entryDistanceLanguage, parseGuidancePrice, atrDistanceFromEntry, marketCurrencies, computeZoneBoundaries, trendLabelFull,
   selectEvidenceTier, type EvidenceTier, type TierProfile,
 } from '@/lib/workspaceUtils'
 import type { WorkspaceRow, RegimeInfo, EventRiskItem, HistoricalEdge, PriceBar } from '@/components/analyst/workspace/types'
@@ -463,10 +463,17 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
     const priorDay = marketId ? priorDayByMarket.get(marketId) : null
     const atr14 = priorDay?.atr14 != null ? Number(priorDay.atr14) : null
 
-    const riskParsed = parseGuidanceRange(rec.risk_range)
-    const targetParsed = parseGuidanceRange(rec.target_range)
-    const riskMid = riskParsed ? (riskParsed[0] + riskParsed[1]) / 2 : null
-    const targetMid = targetParsed ? (targetParsed[0] + targetParsed[1]) / 2 : null
+    // risk_range/target_range now hold a single exact price ("Stop: X" / "Target: X",
+    // see recommendationService.ts), not a q25-q75 range -- parseGuidancePrice() reads
+    // that value directly (falling back to the pre-redesign range midpoint for older
+    // rows). Wrapped as a degenerate [value, value] "range" below so
+    // atrDistanceFromEntry()'s near-edge-distance signature stays unchanged.
+    const riskPrice = parseGuidancePrice(rec.risk_range)
+    const targetPrice = parseGuidancePrice(rec.target_range)
+    const riskParsed: [number, number] | null = riskPrice != null ? [riskPrice, riskPrice] : null
+    const targetParsed: [number, number] | null = targetPrice != null ? [targetPrice, targetPrice] : null
+    const riskMid = riskPrice
+    const targetMid = targetPrice
 
     // Live intraday price is the real "current price"; yesterday's close is the fallback
     // for markets/sessions without a fresh intraday snapshot -- the zone ladder labels

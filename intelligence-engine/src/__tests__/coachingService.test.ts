@@ -9,7 +9,7 @@ function baseInput(overrides: Partial<CoachingInput> = {}): CoachingInput {
     recommendationId: 'rec-uuid-1', activeRecommendationVersionId: 'rv-uuid-1',
     opportunityId: 'opp-uuid-1', analystId: 'analyst-uuid-1',
     market: 'EURUSD', direction: 'BUY', currentZone: 'ZONE_2',
-    preferredEntryZone: 'ZONE_2', analystAction: 'ENTER_NOW',
+    preferredEntryZone: 'ZONE_2', trendState: null, analystAction: 'ENTER_NOW',
     entryRangeLow: 1.0875, entryRangeHigh: 1.09,
     riskRange: '1.0815\u20131.0835', targetRange: '1.0965\u20131.0985',
     triggerProbability: 0.65, expectedR: 1.30,

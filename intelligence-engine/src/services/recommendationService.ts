@@ -53,12 +53,13 @@ import { atrProfileMapKey } from './analystAtrProfileService.js';
 import { estimateTriggerProbability } from './triggerProbabilityService.js';
 import { calculateExpectedR } from './expectedRService.js';
 import { assessCondition } from './recommendationLifecycleService.js';
-import { formatGuidanceRange } from './guidanceRangeFormatter.js';
+import { formatMarketPrice } from './guidanceRangeFormatter.js';
 export interface RecommendationInputTrade extends HistoricalTradeForProfiling, AnalystHistoricalTrade {}
 export interface RegimeSnapshot {
   trendState: string | null;
   regimeConfidence: string | null;
   regimeTags: string[];
+  volatilityState: string | null;
 }
 export interface BuildRecommendationInput {
   recommendationVersionId: string;
@@ -82,9 +83,10 @@ export interface BuildRecommendationInput {
   // Every analyst's ATR profile, preloaded once by the caller (runEngineSession.ts) and
   // keyed by atrProfileMapKey(analystId, direction, zone) -- this function is pure/no-I/O,
   // so it can't fetch a single profile itself, and direction/zone aren't known to the
-  // caller until selectBestTemplate() resolves them below, so the caller can't pre-narrow
-  // the lookup either. Undefined/no match falls back to entryOptimizerService.ts's own
-  // DEFAULT_PROFILES, same as today.
+  // caller until the entry optimizer resolves them below, so the caller can't pre-narrow
+  // the lookup either. No longer consumed by stop/target geometry (band-boundary logic
+  // replaced the ATR-multiplier profiles); kept only for the analystAtrProfileUsed
+  // diagnostics/adoption-tracking field and for allocation scoring elsewhere.
   atrProfileMap?: Map<string, AtrProfile>;
   // Each analyst's most recent triggered_rate KPI (executive_kpis), preloaded once by
   // the caller (runEngineSession.ts) -- same preload-and-pass pattern as atrProfileMap
@@ -131,6 +133,7 @@ export interface RecommendationVersionOutput {
 }
 export interface HiddenExecutionLevels {
   entryMid: number;
+  entryPrice: number;
   stop: number;
   target: number;
   rr: number;
@@ -154,9 +157,9 @@ export interface RecommendationDiagnostics {
   // RecommendationDiagnostics.
   rawTriggerProbability: number;
   // True when an analyst-specific ATR profile (analyst_atr_profiles,
-  // migrations/046) was found and used for this recommendation's stop/target
-  // geometry; false when it fell back to entryOptimizerService.ts's team-wide
-  // DEFAULT_PROFILES. Tracks adoption of the analyst-specific geometry.
+  // migrations/046) was found for this analyst+direction+zone combination.
+  // No longer consumed by stop/target geometry (band-boundary logic replaced
+  // the ATR-multiplier profiles) -- tracks adoption for allocation scoring.
   analystAtrProfileUsed: boolean;
 }
 export interface BuildRecommendationOutput {
@@ -176,18 +179,27 @@ export function buildRecommendation(input: BuildRecommendationInput): BuildRecom
   // Pass preferredDirection constraint -- derived from regime/zone in caller
   const template = selectBestTemplate(market, templates, preferredDirection);
   const direction = template.direction;
-  const zone = template.preferredEntryZone;
+  // Zone is now regime-conditional, computed by the entry optimizer itself
+  // (selectEntryZone()) rather than sourced from the template's historical
+  // preferredEntryZone. This must run before selectBestAnalyst() below, since
+  // analyst selection needs the zone.
+  const entryStopTarget = buildEntryOptimizer({
+    marketState, direction, minimumRr,
+    trendState: marketRegime?.trendState ?? null,
+    volatilityState: marketRegime?.volatilityState ?? null,
+  });
+  const zone = entryStopTarget.preferredZone;
   const analystProfiles: AnalystProfile[] = buildAnalystProfiles(trades);
   const profile = selectBestAnalyst(market, direction, zone, analystProfiles, activeAnalysts, session);
   // Analyst-specific ATR profile, if the caller preloaded one and this exact
   // analyst+direction+zone combination has one -- direction/zone are only known
   // now (post template/analyst selection), which is why this lookup happens here
-  // rather than being passed in pre-resolved. undefined (no match, or no map at
-  // all) falls through to buildEntryOptimizer()'s own DEFAULT_PROFILES.
+  // rather than being passed in pre-resolved. No longer feeds stop/target
+  // geometry (band-boundary logic replaced the ATR-multiplier profiles);
+  // resolved here purely for the analystAtrProfileUsed diagnostics field.
   const atrProfile = profile.assignedAnalyst
     ? atrProfileMap?.get(atrProfileMapKey(profile.assignedAnalyst, direction, zone))
     : undefined;
-  const entryStopTarget = buildEntryOptimizer({ marketState, direction, preferredZone: zone, minimumRr, atrProfile });
   const analystBaseRate = profile.assignedAnalyst
     ? analystTriggerRateMap?.get(profile.assignedAnalyst) ?? fallbackTriggerProbability
     : fallbackTriggerProbability;
@@ -218,20 +230,8 @@ export function buildRecommendation(input: BuildRecommendationInput): BuildRecom
     atr14: marketState.atr14,
     staleAtrThreshold, forceRecalcAtrThreshold,
   });
-  const riskRange = formatGuidanceRange({
-    entryMid: entryStopTarget.entryMid,
-    distanceLow: entryStopTarget.riskRangeLow,
-    distanceHigh: entryStopTarget.riskRangeHigh,
-    direction, type: 'risk',
-    displayPrecision: marketDisplayPrecision,
-  });
-  const targetRange = formatGuidanceRange({
-    entryMid: entryStopTarget.entryMid,
-    distanceLow: entryStopTarget.targetRangeLow,
-    distanceHigh: entryStopTarget.targetRangeHigh,
-    direction, type: 'target',
-    displayPrecision: marketDisplayPrecision,
-  });
+  const riskRange = `Stop: ${formatMarketPrice(entryStopTarget.stop, marketDisplayPrecision)}`;
+  const targetRange = `Target: ${formatMarketPrice(entryStopTarget.target, marketDisplayPrecision)}`;
   const opportunity: OpportunityOutput = {
     opportunityId, market, session, date: dateOnly, direction,
     currentZone: marketState.currentZone, preferredEntryZone: zone, analystAction,
@@ -249,7 +249,8 @@ export function buildRecommendation(input: BuildRecommendationInput): BuildRecom
     volatilityWarning: condition.volatilityWarning, atrMoveSinceGeneration: condition.atrMoveSinceGeneration,
   };
   const hiddenExecutionLevels: HiddenExecutionLevels = {
-    entryMid: entryStopTarget.entryMid, stop: entryStopTarget.stop, target: entryStopTarget.target, rr: entryStopTarget.rr,
+    entryMid: entryStopTarget.entryMid, entryPrice: entryStopTarget.entryPrice,
+    stop: entryStopTarget.stop, target: entryStopTarget.target, rr: entryStopTarget.rr,
   };
   const diagnostics: RecommendationDiagnostics = {
     templateSource: template.templateSource, templateAvgR: template.templateAvgR, templateWinRate: template.templateWinRate,

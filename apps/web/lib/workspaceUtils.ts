@@ -318,7 +318,11 @@ export function directionalPersistenceLabel(persistence: number | null): string 
   return `${upDays} up / ${downDays} down in last ${lookback} days`
 }
 
-/** Parses a formatGuidanceRange() output ("1.2290–1.2310") into [low, high] numbers. */
+/** Parses a formatGuidanceRange() output ("1.2290–1.2310") into [low, high] numbers.
+ *  Pre-redesign format -- recommendation_versions.risk_range/target_range now hold
+ *  a single band-boundary price ("Stop: 1.2290" / "Target: 1.2310", see
+ *  recommendationService.ts's buildRecommendation()), so this only still matches
+ *  older, already-generated rows. New rows are parsed by parseGuidancePrice() below. */
 export function parseGuidanceRange(range: string | null | undefined): [number, number] | null {
   if (!range) return null
   const parts = range.split('–')
@@ -327,6 +331,20 @@ export function parseGuidanceRange(range: string | null | undefined): [number, n
   const high = Number(parts[1])
   if (Number.isNaN(low) || Number.isNaN(high)) return null
   return [low, high]
+}
+
+/** Parses "Stop: 1.2290" / "Target: 1.2310" (recommendationService.ts's new
+ *  single-value risk_range/target_range format) into the exact price. Falls back
+ *  to parseGuidanceRange()'s midpoint for older rows generated before the redesign. */
+export function parseGuidancePrice(range: string | null | undefined): number | null {
+  if (!range) return null
+  const match = range.match(/-?\d+(\.\d+)?/)
+  if (match) {
+    const value = Number(match[0])
+    if (!Number.isNaN(value)) return value
+  }
+  const legacyRange = parseGuidanceRange(range)
+  return legacyRange ? (legacyRange[0] + legacyRange[1]) / 2 : null
 }
 
 /** Distance from entryMid to the near edge of a guidance range, in ATR units.
@@ -687,36 +705,60 @@ export type DirectionAlignment = 'TREND_ALIGNED' | 'COUNTER_TREND' | 'NEUTRAL' |
  * fallback allocation path with no AnalystScore) falls through to the
  * original tier-only REGIME wording.
  */
+// Explains why the entry zone the engine picked was picked, given the
+// market's regime -- mirrors entryOptimizerService.ts's selectEntryZone():
+// a trend-aligned trade (BUY in an uptrend, SELL in a downtrend) prefers the
+// middle zone since price may not pull back to the extreme; every other case
+// (ranging, mixed, or counter-trend) prefers the range extreme for the most
+// favourable, lowest-risk entry. Returns '' when direction is unknown, so
+// callers can skip the connector clause entirely.
+function zoneSelectionRationale(direction: 'BUY' | 'SELL' | null, trendState: string | null): string {
+  if (!direction) return ''
+  const trendAligned =
+    (direction === 'BUY' && trendState === 'TRENDING_UP') ||
+    (direction === 'SELL' && trendState === 'TRENDING_DOWN')
+  if (trendAligned) {
+    return direction === 'BUY'
+      ? 'with the market trending, entry is set nearer the middle of the range (Zone 2) rather than the extreme, since price may not pull back that far'
+      : 'with the market trending, entry is set nearer the middle of the range (Zone 3) rather than the extreme, since price may not rally back that far'
+  }
+  return direction === 'BUY'
+    ? 'in ranging or mixed conditions, entry is set at the lower end of the range (Zone 1) to maximise room to target'
+    : 'in ranging or mixed conditions, entry is set at the upper end of the range (Zone 4) to maximise room to target'
+}
+
 export function evidenceTierClause(
   tier: EvidenceTier, direction: 'BUY' | 'SELL' | null, assetClass: string | null, marketSymbol: string,
   directionAlignment?: DirectionAlignment | null, trendState?: string | null,
 ): string {
   const dirWord = direction ?? ''
+  const rationale = zoneSelectionRationale(direction, trendState ?? null)
+  const withRationale = (clause: string) => rationale ? `${clause} — ${rationale}` : clause
   switch (tier.tier) {
     case 'MARKET':
-      return `Based on your ${tier.tradeCount} trades on ${marketSymbol} in these conditions, `
-        + `you've achieved ${formatPercent(tier.winRate)} win rate and ${formatR(tier.avgR)} expectancy`
+      return withRationale(`Based on your ${tier.tradeCount} trades on ${marketSymbol} in these conditions, `
+        + `you've achieved ${formatPercent(tier.winRate)} win rate and ${formatR(tier.avgR)} expectancy`)
     case 'REGIME': {
       const marketCount = tier.marketCount ?? 0
       if (directionAlignment === 'TREND_ALIGNED') {
-        return `Based on your ${tier.tradeCount} ${dirWord} setups in comparable ${assetClass ?? ''} conditions `
-          + `— trend supports this direction`
+        return withRationale(`Based on your ${tier.tradeCount} ${dirWord} setups in comparable ${assetClass ?? ''} conditions `
+          + `— trend supports this direction`)
       }
       if (directionAlignment === 'NEUTRAL') {
-        return `Based on your ${tier.tradeCount} ${dirWord} setups in ranging ${assetClass ?? ''} conditions `
-          + `— no strong trend bias either way`
+        return withRationale(`Based on your ${tier.tradeCount} ${dirWord} setups in ranging ${assetClass ?? ''} conditions `
+          + `— no strong trend bias either way`)
       }
       if (directionAlignment === 'COUNTER_TREND') {
-        return `Your ${dirWord} results in ${trendStateWord(trendState ?? null)} conditions (${formatR(tier.avgR)} across ${tier.tradeCount} trades) `
+        return withRationale(`Your ${dirWord} results in ${trendStateWord(trendState ?? null)} conditions (${formatR(tier.avgR)} across ${tier.tradeCount} trades) `
           + `represent the strongest available edge on this market today. This is a counter-trend setup `
-          + `— the trend works against the direction but your historical results support the setup`
+          + `— the trend works against the direction but your historical results support the setup`)
       }
-      return `Based on your ${tier.tradeCount} ${dirWord} setups in comparable ${assetClass ?? ''} conditions `
-        + `across ${marketCount} market${marketCount === 1 ? '' : 's'}, you've achieved ${formatPercent(tier.winRate)} win rate and ${formatR(tier.avgR)} expectancy`
+      return withRationale(`Based on your ${tier.tradeCount} ${dirWord} setups in comparable ${assetClass ?? ''} conditions `
+        + `across ${marketCount} market${marketCount === 1 ? '' : 's'}, you've achieved ${formatPercent(tier.winRate)} win rate and ${formatR(tier.avgR)} expectancy`)
     }
     case 'DIRECTION':
-      return `Based on your overall ${dirWord} track record (${tier.tradeCount} trades), `
-        + `you've achieved ${formatPercent(tier.winRate)} win rate and ${formatR(tier.avgR)} expectancy`
+      return withRationale(`Based on your overall ${dirWord} track record (${tier.tradeCount} trades), `
+        + `you've achieved ${formatPercent(tier.winRate)} win rate and ${formatR(tier.avgR)} expectancy`)
     default:
       return 'This market is new territory for you — no historical pattern available'
   }

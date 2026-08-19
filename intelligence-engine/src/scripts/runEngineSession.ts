@@ -423,10 +423,12 @@ async function main() {
     }
 
     // Load all analyst ATR profiles once (analyst_atr_profiles, migrations/046) so
-    // buildRecommendation()'s per-market entryOptimizerService.ts call can look up an
-    // analyst-specific stop/target distribution instead of the team-wide DEFAULT_PROFILES,
-    // without a DB round trip per market. Keyed the same way analystAtrProfileService.ts's
-    // getAnalystAtrProfile() would look one up individually, via atrProfileMapKey().
+    // buildRecommendation() can look up whether this analyst has a profile for this
+    // market/direction/zone without a DB round trip per market -- no longer feeds
+    // stop/target geometry (band-boundary logic replaced the ATR-multiplier profiles),
+    // kept for the analystAtrProfileUsed diagnostics/adoption-tracking field. Keyed the
+    // same way analystAtrProfileService.ts's getAnalystAtrProfile() would look one up
+    // individually, via atrProfileMapKey().
     const { data: atrProfileRows } = await db.from('analyst_atr_profiles').select('*')
     const atrProfileMap = new Map<string, AtrProfile>()
     for (const row of (atrProfileRows ?? [])) {
@@ -693,6 +695,7 @@ async function main() {
         trendState: regime.trend_state ?? null,
         regimeConfidence: regime.regime_confidence ?? null,
         regimeTags: regime.regime_tags ?? [],
+        volatilityState: regime.volatility_state ?? null,
       } : null
 
       // Step 5 Step C: the assigned analyst's own trades when we already know
@@ -752,7 +755,7 @@ async function main() {
 
         generatedItems.push({
           market, marketState: marketStateWithZone, opp, rv, hidden, diagnostics,
-          rvId, validityOverride, triggerProbability,
+          rvId, validityOverride, triggerProbability, trendState,
           preAssignedAnalystId: assignedAnalystId, // null => deferred to fallback allocation (Step 4)
           analystScore: bestScore, // null when the fallback path was used
         })
@@ -834,7 +837,7 @@ async function main() {
       }
 
       for (const item of generatedItems) {
-        const { market, marketState, opp, rv, hidden, diagnostics, validityOverride, triggerProbability } = item
+        const { market, marketState, opp, rv, hidden, diagnostics, validityOverride, triggerProbability, trendState } = item
         const allocation = allocationByRvId.get(item.rvId)
         if (!allocation) {
           console.log(`  ⚠ ${market.symbol}: no analyst could be assigned -- skipping recommendation`)
@@ -889,6 +892,13 @@ async function main() {
           // always returns diagnostics regardless of which path assigned the analyst.
           // Was writing direction_alignment (snake_case) while every reader queries
           // regime_tags->>'directionAlignment' (camelCase) -- silently always null.
+          //
+          // lowerBand/upperBand: the band boundaries this recommendation's target/
+          // stop were computed against. Nothing else persists these per-recommendation
+          // (marketState itself is never written to a table), and generatePostTradeReviews.ts's
+          // alignment scoring (Fix 5) needs them at review time to check whether the
+          // trade's actual stop/target landed outside/inside the band that was live
+          // at generation -- reusing this existing jsonb column avoids a new migration.
           regime_tags: {
             ...(item.analystScore ? {
               directionAlignment: (item.analystScore as AnalystScore).directionAlignment,
@@ -901,6 +911,8 @@ async function main() {
             profileSource: diagnostics.profileSource,
             rawTriggerProbability: diagnostics.rawTriggerProbability,
             analystAtrProfileUsed: diagnostics.analystAtrProfileUsed ?? false,
+            lowerBand: marketState.lowerBand,
+            upperBand: marketState.upperBand,
           },
         }, { onConflict: 'recommendation_version_id' }).select('recommendation_version_id').single()
 
@@ -937,6 +949,7 @@ async function main() {
             direction: item.opp.direction,
             currentZone: marketState.currentZone ?? item.marketState.currentZone,
             preferredEntryZone: rv.zoneAtGeneration!,
+            trendState,
             analystAction: opp.analystAction,
             entryRangeLow: rv.entryRangeLow ?? 0,
             entryRangeHigh: rv.entryRangeHigh ?? 0,
@@ -978,7 +991,7 @@ async function main() {
             createdAt: generatedAt,
             recommendationVersionId: rvRow.recommendation_version_id,
             opportunityId: oppRow.opportunity_id,
-            entry: hidden.entryMid,
+            entry: hidden.entryPrice,
             stop: hidden.stop,
             target: hidden.target,
             rr: hidden.rr,
