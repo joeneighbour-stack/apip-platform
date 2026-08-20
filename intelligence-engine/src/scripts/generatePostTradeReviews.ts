@@ -236,6 +236,14 @@ async function main() {
     const lowerBand        = rv.regime_tags?.lowerBand != null ? Number(rv.regime_tags.lowerBand) : null
     const upperBand        = rv.regime_tags?.upperBand != null ? Number(rv.regime_tags.upperBand) : null
 
+    // Band boundaries are only persisted on recommendations generated under the
+    // band-boundary redesign (recommendation_versions.regime_tags.lowerBand/upperBand,
+    // see runEngineSession.ts) -- older rows have no band data at all, and entry/stop/
+    // target alignment can't be scored without it. Skip cleanly rather than persisting
+    // an all-Unknown review; only trades linked to a post-redesign recommendation
+    // generate a review.
+    if (lowerBand === null || upperBand === null) { skipped++; continue }
+
     const { alignment: dirAlignment,    score: dirScore }    = scoreDirectionAlignment(trade.direction, coachingDir)
     const { alignment: entryAlignment,  score: entryScore }  = scoreEntryZoneAlignment(Number(trade.entry), recommendedZone, lowerBand, upperBand)
     const { alignment: stopAlignment,   score: stopScore }   = scoreStopAlignment(trade.stop ? Number(trade.stop) : null, trade.direction, lowerBand, upperBand)
