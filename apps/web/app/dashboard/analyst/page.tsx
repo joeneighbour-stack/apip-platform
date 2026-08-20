@@ -121,12 +121,26 @@ export default async function AnalystWorkspacePage() {
         <section className="space-y-2">
           <h2 className="text-sm font-medium">Today&apos;s Coverage Plan</h2>
           <div className="rounded-lg border border-border bg-card p-4 space-y-1.5">
-            {SESSION_ORDER.filter(s => coverageBySession.has(s)).map(session => (
-              <p key={session} className="text-sm">
-                <span className="font-medium">{SESSION_LABELS[session]}:</span>{' '}
-                <span className="text-muted-foreground">{coverageBySession.get(session)!.join(', ')}</span>
-              </p>
-            ))}
+            {SESSION_ORDER.filter(s => coverageBySession.has(s)).map(session => {
+              const hasRecommendations = rows.some(r => r.session === session)
+              const sessionTime = session === 'APAC' ? '14:05 UK' : session === 'US' ? '09:49 UK' : null
+
+              return (
+                <div key={session} className="space-y-0.5">
+                  <p className="text-sm">
+                    <span className="font-medium">{SESSION_LABELS[session]}:</span>{' '}
+                    <span className="text-muted-foreground">
+                      {coverageBySession.get(session)!.join(', ')}
+                    </span>
+                  </p>
+                  {!hasRecommendations && sessionTime && (
+                    <p className="text-xs text-muted-foreground/60">
+                      Full details available from {sessionTime}
+                    </p>
+                  )}
+                </div>
+              )
+            })}
           </div>
         </section>
       )}
