@@ -44,7 +44,7 @@ export default async function AnalystWorkspacePage() {
     )
   }
 
-  const { rows, marketsToday, marketsWithEventRisk, yesterdayR, closedYesterdayCount, recommendationsGeneratedToday } = await getWorkspaceData(user.analystId)
+  const { rows, marketsToday, recommendationsReady, marketsWithEventRisk, yesterdayR, closedYesterdayCount, recommendationsGeneratedToday } = await getWorkspaceData(user.analystId)
 
   // Day-start coverage forecast (preallocateDay.ts, written 04:20 UTC -- before
   // any session's real engine run). Advisory, not authoritative: today's actual
@@ -85,7 +85,9 @@ export default async function AnalystWorkspacePage() {
         <div className="flex gap-3 flex-wrap justify-end">
           <div className="rounded-lg border border-border bg-card px-4 py-3 text-center min-w-[80px]">
             <p className="text-2xl font-semibold">{marketsToday}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">Markets today</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {recommendationsReady} of {marketsToday} ready
+            </p>
           </div>
           {marketsWithEventRisk > 0 && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-center min-w-[80px]">
