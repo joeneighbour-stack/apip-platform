@@ -50,8 +50,8 @@ describe('selectEntryZone', () => {
 // (step = (upperBand - lowerBand) / 4) = 0.005.
 describe('buildEntryOptimizer', () => {
   it('stop sits exactly one zone width outside the OPPOSITE band boundary, for both directions', () => {
-    const buy = buildEntryOptimizer({ marketState: marketState(), direction: 'BUY', minimumRr: 2.0, trendState: 'RANGE' });
-    const sell = buildEntryOptimizer({ marketState: marketState(), direction: 'SELL', minimumRr: 2.0, trendState: 'RANGE' });
+    const buy = buildEntryOptimizer({ marketState: marketState(), direction: 'BUY', minimumRr: 2.0, trendState: 'RANGE', sessionHigh: null, sessionLow: null });
+    const sell = buildEntryOptimizer({ marketState: marketState(), direction: 'SELL', minimumRr: 2.0, trendState: 'RANGE', sessionHigh: null, sessionLow: null });
     expect(buy.stop).toBeCloseTo(1.08 - 0.005, 10); // lowerBand - step
     expect(sell.stop).toBeCloseTo(1.10 + 0.005, 10); // upperBand + step
   });
@@ -59,6 +59,7 @@ describe('buildEntryOptimizer', () => {
   it('BUY + RANGE: selects ZONE_1, entry at the band edge -- natural RR is exactly 4:1 (band width = 4x zone width), so target is untouched', () => {
     const result = buildEntryOptimizer({
       marketState: marketState(), direction: 'BUY', minimumRr: 2.0, trendState: 'RANGE',
+      sessionHigh: null, sessionLow: null,
     });
     expect(result.preferredZone).toBe('ZONE_1');
     expect(result.entryPrice).toBeCloseTo(1.08, 10); // zone low = lowerBand itself
@@ -70,6 +71,7 @@ describe('buildEntryOptimizer', () => {
   it('SELL + RANGE: selects ZONE_4, entry at the band edge -- same 4:1 natural RR, mirrored', () => {
     const result = buildEntryOptimizer({
       marketState: marketState(), direction: 'SELL', minimumRr: 2.0, trendState: 'RANGE',
+      sessionHigh: null, sessionLow: null,
     });
     expect(result.preferredZone).toBe('ZONE_4');
     expect(result.entryPrice).toBeCloseTo(1.10, 10); // zone high = upperBand itself
@@ -83,6 +85,7 @@ describe('buildEntryOptimizer', () => {
   it('BUY + TRENDING_UP: selects ZONE_2 -- natural RR here is only 3:2 (below the 2:1 floor), so target expands to exactly minimumRr x stop distance', () => {
     const result = buildEntryOptimizer({
       marketState: marketState(), direction: 'BUY', minimumRr: 2.0, trendState: 'TRENDING_UP',
+      sessionHigh: null, sessionLow: null,
     });
     expect(result.preferredZone).toBe('ZONE_2');
     expect(result.entryRangeLow).toBeCloseTo(1.085, 10);
@@ -98,6 +101,7 @@ describe('buildEntryOptimizer', () => {
   it('SELL + TRENDING_DOWN: selects ZONE_3 -- same expansion, mirrored', () => {
     const result = buildEntryOptimizer({
       marketState: marketState(), direction: 'SELL', minimumRr: 2.0, trendState: 'TRENDING_DOWN',
+      sessionHigh: null, sessionLow: null,
     });
     expect(result.preferredZone).toBe('ZONE_3');
     expect(result.entryPrice).toBeCloseTo(1.095, 10); // SELL enters at zone high
@@ -109,6 +113,7 @@ describe('buildEntryOptimizer', () => {
   it('no longer caps the expanded target -- the RR floor can push arbitrarily far now that the old 1.5xATR20 cap is gone', () => {
     const result = buildEntryOptimizer({
       marketState: marketState(), direction: 'BUY', minimumRr: 100, trendState: 'TRENDING_UP',
+      sessionHigh: null, sessionLow: null,
     });
     // entryPrice = 1.085, stopDistance = 0.01 (same geometry as the ZONE_2 test above)
     expect(result.target).toBeCloseTo(1.085 + 100 * 0.01, 10);
@@ -118,7 +123,7 @@ describe('buildEntryOptimizer', () => {
   it('produces NaN stop/target/rr when the band boundaries are missing', () => {
     const result = buildEntryOptimizer({
       marketState: marketState({ lowerBand: null as unknown as number }), direction: 'BUY', minimumRr: 2.0,
-      trendState: 'RANGE',
+      trendState: 'RANGE', sessionHigh: null, sessionLow: null,
     });
     expect(Number.isNaN(result.stop)).toBe(true);
     expect(Number.isNaN(result.target)).toBe(true);
@@ -128,13 +133,50 @@ describe('buildEntryOptimizer', () => {
   it('atr14/atr20 no longer affect stop/target at all -- geometry is purely band-boundary/zone-width derived now', () => {
     const withAtr = buildEntryOptimizer({
       marketState: marketState(), direction: 'BUY', minimumRr: 2.0, trendState: 'RANGE',
+      sessionHigh: null, sessionLow: null,
     });
     const withoutAtr = buildEntryOptimizer({
       marketState: marketState({ atr14: null, atr20: null }), direction: 'BUY', minimumRr: 2.0, trendState: 'RANGE',
+      sessionHigh: null, sessionLow: null,
     });
     expect(Number.isNaN(withoutAtr.stop)).toBe(false);
     expect(withoutAtr.stop).toBeCloseTo(withAtr.stop, 10);
     expect(withoutAtr.target).toBeCloseTo(withAtr.target, 10);
     expect(withoutAtr.rr).toBeCloseTo(withAtr.rr, 10);
+  });
+
+  // Default marketState(): atr20 = atr14 = 0.02, so the 1.5x threshold is 0.03.
+  describe('bandReliable', () => {
+    it('true when the intraday session range is within 1.5x ATR20', () => {
+      const result = buildEntryOptimizer({
+        marketState: marketState(), direction: 'BUY', minimumRr: 2.0, trendState: 'RANGE',
+        sessionHigh: 1.09, sessionLow: 1.08, // range 0.01 <= 0.03
+      });
+      expect(result.bandReliable).toBe(true);
+    });
+
+    it('false when the intraday session range exceeds 1.5x ATR20', () => {
+      const result = buildEntryOptimizer({
+        marketState: marketState(), direction: 'BUY', minimumRr: 2.0, trendState: 'RANGE',
+        sessionHigh: 1.10, sessionLow: 1.05, // range 0.05 > 0.03
+      });
+      expect(result.bandReliable).toBe(false);
+    });
+
+    it('defaults to true when session data is missing (range reads as 0)', () => {
+      const result = buildEntryOptimizer({
+        marketState: marketState(), direction: 'BUY', minimumRr: 2.0, trendState: 'RANGE',
+        sessionHigh: null, sessionLow: null,
+      });
+      expect(result.bandReliable).toBe(true);
+    });
+
+    it('false when atr20/atr14 are both unavailable, regardless of session range', () => {
+      const result = buildEntryOptimizer({
+        marketState: marketState({ atr14: null, atr20: null }), direction: 'BUY', minimumRr: 2.0, trendState: 'RANGE',
+        sessionHigh: 1.09, sessionLow: 1.08,
+      });
+      expect(result.bandReliable).toBe(false);
+    });
   });
 });

@@ -68,6 +68,12 @@ export interface BuildRecommendationInput {
   session: SessionType;
   marketState: MarketStateOutput;
   marketRegime: RegimeSnapshot | null;
+  // Raw intraday session extremes (market_state_intraday.session_high/session_low),
+  // passed straight through to buildEntryOptimizer()'s bandReliable check -- see
+  // entryOptimizerService.ts's EntryOptimizerInput comment for why marketState's own
+  // band fields can't stand in for these.
+  sessionHigh: number | null;
+  sessionLow: number | null;
   eventRisks: MarketEventRiskOutput[];
   trades: RecommendationInputTrade[];
   activeAnalysts: ActiveAnalyst[];
@@ -170,7 +176,8 @@ export interface BuildRecommendationOutput {
 }
 export function buildRecommendation(input: BuildRecommendationInput): BuildRecommendationOutput {
   const {
-    recommendationVersionId, generatedAt, market, session, marketState, marketRegime, eventRisks,
+    recommendationVersionId, generatedAt, market, session, marketState, marketRegime,
+    sessionHigh, sessionLow, eventRisks,
     trades, activeAnalysts, minimumRr, fallbackTriggerProbability,
     staleAtrThreshold, forceRecalcAtrThreshold, parameterSnapshot, parameterSnapshotHash,
     marketDisplayPrecision, preferredDirection, atrProfileMap, analystTriggerRateMap,
@@ -186,6 +193,7 @@ export function buildRecommendation(input: BuildRecommendationInput): BuildRecom
   const entryStopTarget = buildEntryOptimizer({
     marketState, direction, minimumRr,
     trendState: marketRegime?.trendState ?? null,
+    sessionHigh, sessionLow,
   });
   const zone = entryStopTarget.preferredZone;
   const analystProfiles: AnalystProfile[] = buildAnalystProfiles(trades);

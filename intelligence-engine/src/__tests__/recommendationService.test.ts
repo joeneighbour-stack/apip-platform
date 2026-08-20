@@ -25,7 +25,8 @@ function baseInput(overrides: Partial<BuildRecommendationInput> = {}): BuildReco
   return {
     recommendationVersionId: 'rv-test-1', generatedAt: '2026-01-15T08:00:00Z',
     market: 'EURUSD', session: 'EUROPEAN',
-    marketState: marketState(), marketRegime: null, eventRisks: [],
+    marketState: marketState(), marketRegime: null,
+    sessionHigh: null, sessionLow: null, eventRisks: [],
     trades, activeAnalysts: analysts,
     minimumRr: 2.0, minTriggerSample: 10, fallbackTriggerProbability: 0.5,
     staleAtrThreshold: 0.25, forceRecalcAtrThreshold: 0.50,

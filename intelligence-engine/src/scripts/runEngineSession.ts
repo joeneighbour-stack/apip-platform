@@ -224,7 +224,7 @@ async function main() {
 
   const sessionMarkets = SESSION_MARKETS[session as string] ?? []
   let opportunitiesCreated = 0, recommendationsCreated = 0
-  let coachingCreated = 0, shadowTradesCreated = 0
+  let coachingCreated = 0, shadowTradesCreated = 0, shadowTradesSkippedUnreliableBand = 0
 
   try {
     // ── Step 1: Load market state ────────────────────────────────────────────
@@ -714,6 +714,8 @@ async function main() {
           session,
           marketState: marketStateWithZone,
           marketRegime: regimeSnapshot,
+          sessionHigh: intraday.session_high != null ? Number(intraday.session_high) : null,
+          sessionLow: intraday.session_low != null ? Number(intraday.session_low) : null,
           eventRisks: [],
           trades,
           activeAnalysts: eligibleAnalysts,
@@ -982,6 +984,22 @@ async function main() {
           console.log(`  ${market.symbol} coaching: ${(err as Error).message}`)
         }
 
+        // Band reliability guard: once the intraday session range already exceeds
+        // 1.5x ATR20, price has moved more than a full ATR since session open, so the
+        // zone boundaries this recommendation's stop/target were built from are stale
+        // by the time the engine runs -- not a fair benchmark for a shadow trade. The
+        // opportunity/recommendation/coaching row above are still written regardless
+        // (still valid, analyst-facing signal); only shadow trade generation is skipped.
+        const sessionRange = (intraday.session_high ?? 0) - (intraday.session_low ?? 0)
+        const atr20 = marketState.atr20 ?? marketState.atr14 ?? 0
+        const bandReliable = atr20 > 0 && sessionRange <= atr20 * 1.5
+
+        if (!bandReliable) {
+          console.log(`  ${market.symbol}: skipping shadow trade -- intraday range (${sessionRange.toFixed(5)}) exceeds 1.5x ATR20 (${(atr20 * 1.5).toFixed(5)})`)
+          shadowTradesSkippedUnreliableBand++
+          continue
+        }
+
         try {
           const shadowId = randomUUID()
           const shadowOutcomeId = randomUUID()
@@ -1063,6 +1081,7 @@ async function main() {
       await completeStep(db, stepId4, 'SUCCESS', {
         opportunities: opportunitiesCreated, recommendations: recommendationsCreated,
         coaching: coachingCreated, shadow_trades: shadowTradesCreated,
+        shadow_trades_skipped_unreliable_band: shadowTradesSkippedUnreliableBand,
       })
 
       await db.from('engine_runs').update({
@@ -1079,6 +1098,7 @@ async function main() {
       console.log(`Recommendations: ${recommendationsCreated}`)
       console.log(`Coaching recs:   ${coachingCreated}`)
       console.log(`Shadow trades:   ${shadowTradesCreated}`)
+      console.log(`  skipped (unreliable band): ${shadowTradesSkippedUnreliableBand}`)
     }
 
   } catch (err) {

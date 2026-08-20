@@ -43,6 +43,13 @@ export interface EntryOptimizerInput {
   direction: Direction;
   minimumRr: number;
   trendState: string | null; // drives regime-conditional zone selection
+  // Raw intraday session extremes (market_state_intraday.session_high/session_low) --
+  // NOT the same as marketState.lowerBand/upperBand, which are ATR-anchored band
+  // boundaries, not the actual session range. Needed only for the bandReliable check
+  // below; null when no intraday snapshot exists (bandReliable then reads true, same
+  // as the zero-range default when both are 0).
+  sessionHigh: number | null;
+  sessionLow: number | null;
   // Kept for interface compatibility -- still used for zone preference in
   // allocation scoring (analystScoringService.ts). Not consumed here: stop/
   // target geometry is now purely band-boundary/zone-width derived, not
@@ -63,6 +70,13 @@ export interface EntryOptimizerOutput {
   stop: number;             // exact stop price
   target: number;           // exact target price
   rr: number;               // actual RR achieved
+  // false when the intraday session range (sessionHigh - sessionLow) already exceeds
+  // 1.5x ATR20 -- price has moved more than a full ATR since session open, so the
+  // band boundaries this zone/stop/target were built from are stale by generation
+  // time. A warning flag only: this service still returns its best-effort geometry
+  // either way, callers decide what to do with an unreliable band (runEngineSession.ts
+  // skips shadow trade generation on it).
+  bandReliable: boolean;
 }
 
 /**
@@ -110,7 +124,7 @@ export function zoneBounds(marketState: MarketStateOutput, zone: AtrZone): [numb
 }
 
 export function buildEntryOptimizer(input: EntryOptimizerInput): EntryOptimizerOutput {
-  const { marketState, direction, minimumRr, trendState } = input;
+  const { marketState, direction, minimumRr, trendState, sessionHigh, sessionLow } = input;
 
   const preferredZone = selectEntryZone(direction, trendState);
   const [zoneLow, zoneHigh] = zoneBounds(marketState, preferredZone);
@@ -122,6 +136,14 @@ export function buildEntryOptimizer(input: EntryOptimizerInput): EntryOptimizerO
   // outer band, maximising the distance available to the (in-band) target.
   const entryPrice = direction === 'BUY' ? entryRangeLow : entryRangeHigh;
 
+  // Band reliability: once the intraday session range already exceeds 1.5x ATR20,
+  // price has moved more than a full ATR since session open, so the band boundaries
+  // above are stale by generation time. Same 1.5x tolerance and computation as
+  // runEngineSession.ts's own shadow-trade-generation guard.
+  const sessionRange = (sessionHigh ?? 0) - (sessionLow ?? 0);
+  const atr20 = marketState.atr20 ?? marketState.atr14 ?? 0;
+  const bandReliable = atr20 > 0 && sessionRange <= atr20 * 1.5;
+
   const lowerBand = marketState.lowerBand;
   const upperBand = marketState.upperBand;
 
@@ -129,7 +151,7 @@ export function buildEntryOptimizer(input: EntryOptimizerInput): EntryOptimizerO
     return {
       preferredZone, entryRangeLow, entryRangeHigh, entryMid, entryPrice,
       riskRangeLow: NaN, riskRangeHigh: NaN, targetRangeLow: NaN, targetRangeHigh: NaN,
-      stop: NaN, target: NaN, rr: NaN,
+      stop: NaN, target: NaN, rr: NaN, bandReliable,
     };
   }
 
@@ -164,6 +186,6 @@ export function buildEntryOptimizer(input: EntryOptimizerInput): EntryOptimizerO
     // (equal to the exact price) rather than an invented buffer magnitude.
     riskRangeLow: stop, riskRangeHigh: stop,
     targetRangeLow: target, targetRangeHigh: target,
-    stop, target, rr,
+    stop, target, rr, bandReliable,
   };
 }
