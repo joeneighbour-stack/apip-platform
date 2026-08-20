@@ -30,7 +30,18 @@ export default async function ManagementAnalystWorkspacePage({ params }: PagePro
 
   if (!analyst) notFound()
 
-  const { rows, marketsToday, marketsWithEventRisk, yesterdayR, closedYesterdayCount, recommendationsGeneratedToday } = await getWorkspaceData(analystId)
+  const { rows, recommendationsReady, marketsWithEventRisk, yesterdayR, closedYesterdayCount, recommendationsGeneratedToday } = await getWorkspaceData(analystId)
+
+  // Total markets allocated today (daily_coverage_plan, preallocateDay.ts's 04:20 UTC
+  // day-start forecast), mirroring the analyst's own /dashboard/analyst page -- see that
+  // page's comment for why this lives here rather than in getWorkspaceData().
+  const today = new Date().toISOString().slice(0, 10)
+  const { data: coveragePlan } = await supabase
+    .from('daily_coverage_plan')
+    .select('market_id')
+    .eq('date', today)
+    .eq('analyst_id', analystId)
+  const marketsToday = coveragePlan?.length ?? recommendationsReady
 
   return (
     <div className="space-y-6">
@@ -51,7 +62,9 @@ export default async function ManagementAnalystWorkspacePage({ params }: PagePro
       <div className="flex gap-3 flex-wrap justify-end">
         <div className="rounded-lg border border-border bg-card px-4 py-3 text-center min-w-[80px]">
           <p className="text-2xl font-semibold">{marketsToday}</p>
-          <p className="text-xs text-muted-foreground mt-0.5">Markets today</p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {recommendationsReady} of {marketsToday} ready
+          </p>
         </div>
         {marketsWithEventRisk > 0 && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-center min-w-[80px]">

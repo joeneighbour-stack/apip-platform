@@ -13,14 +13,12 @@ const CHART_TRADING_DAYS = 10
 
 export interface WorkspaceData {
   rows: WorkspaceRow[]
-  // Total markets allocated to this analyst today, from daily_coverage_plan
-  // (preallocateDay.ts's 04:20 UTC day-start forecast) -- the analyst's full
-  // planned coverage, not just however many recommendations have generated so
-  // far. Falls back to recommendationsReady when no plan row exists yet (e.g.
-  // before 04:20 UTC, or a day preallocateDay.ts didn't run for).
-  marketsToday: number
   // How many of today's allocated markets actually have a recommendation
-  // generated and shown so far -- what marketsToday used to mean on its own.
+  // generated and shown so far. Total allocated markets (daily_coverage_plan)
+  // is NOT sourced here -- each caller already runs its own daily_coverage_plan
+  // query for its own display purposes (analyst/page.tsx's grouped-by-session
+  // list, management's mirror), so it derives that count locally from the same
+  // query rather than this function fetching it a second time.
   recommendationsReady: number
   marketsWithEventRisk: number
   yesterdayR: number
@@ -60,7 +58,6 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
     { data: allAnalystProfileRowsRaw },
     { data: yesterdayTrades },
     { count: recommendationsGeneratedToday },
-    { data: coveragePlan },
   ] = await Promise.all([
     adminDb
       .from('coaching_recommendations')
@@ -106,19 +103,6 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
     adminDb
       .from('opportunities')
       .select('opportunity_id', { count: 'exact', head: true })
-      .eq('date', today),
-    // daily_coverage_plan: this analyst's full day-start allocation (preallocateDay.ts,
-    // 04:20 UTC), independent of whether each session's real engine run has generated a
-    // recommendation for it yet. RLS grants ANALYST self-select (current_analyst_id())
-    // and MANAGER/ADMIN broad select (migrations/049_daily_coverage_plan.sql), same
-    // self-or-manager shape as actual_trades/market_state_daily above, so the session
-    // client is sufficient here too -- no adminDb needed. One row per (market, session):
-    // a market allocated across two sessions to this analyst counts twice, matching
-    // "how many coverage slots" rather than "how many distinct markets."
-    supabase
-      .from('daily_coverage_plan')
-      .select('market_id, session')
-      .eq('analyst_id', analystId)
       .eq('date', today),
   ])
 
@@ -607,7 +591,6 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
 
   return {
     rows,
-    marketsToday: coveragePlan?.length ?? recommendations.length,
     recommendationsReady: recommendations.length,
     marketsWithEventRisk,
     yesterdayR,

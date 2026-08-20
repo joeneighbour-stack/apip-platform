@@ -44,7 +44,7 @@ export default async function AnalystWorkspacePage() {
     )
   }
 
-  const { rows, marketsToday, recommendationsReady, marketsWithEventRisk, yesterdayR, closedYesterdayCount, recommendationsGeneratedToday } = await getWorkspaceData(user.analystId)
+  const { rows, recommendationsReady, marketsWithEventRisk, yesterdayR, closedYesterdayCount, recommendationsGeneratedToday } = await getWorkspaceData(user.analystId)
 
   // Day-start coverage forecast (preallocateDay.ts, written 04:20 UTC -- before
   // any session's real engine run). Advisory, not authoritative: today's actual
@@ -54,6 +54,11 @@ export default async function AnalystWorkspacePage() {
   // available rather than only pre-recommendations, since a market can be in
   // the day's plan for a session that hasn't run yet even after another
   // session's real recommendations already exist.
+  //
+  // Single query doubles as the source for both the grouped-by-session list
+  // below AND the header tile's marketsToday count (total allocated markets,
+  // one row per market+session) -- getWorkspaceData() no longer runs its own
+  // separate daily_coverage_plan query for the count.
   const supabase = await createClient()
   const today = new Date().toISOString().slice(0, 10)
   const { data: coveragePlan } = await supabase
@@ -62,6 +67,10 @@ export default async function AnalystWorkspacePage() {
     .eq('date', today)
     .eq('analyst_id', user.analystId)
     .order('session')
+
+  // Falls back to recommendationsReady when no plan row exists yet (e.g. before
+  // 04:20 UTC, or a day preallocateDay.ts didn't run for).
+  const marketsToday = coveragePlan?.length ?? recommendationsReady
 
   const coverageBySession = new Map<string, string[]>()
   for (const row of (coveragePlan ?? []) as any[]) {
