@@ -16,27 +16,44 @@ export default async function ShadowMonitoringPage() {
   // analyst-vs-shadow breakdown numbers.
   const { shadowStartDate, analysts: breakdownAnalysts, rows: breakdownRows } = await getShadowBreakdownData()
 
-  // Shadow outcomes -- all resolved outcomes for like-for-like comparison
-  const { data: shadowOutcomes } = await supabase
-    .from('shadow_trade_outcomes')
-    .select(`
-      shadow_outcome_id,
-      trade_outcome_status,
-      result_r,
-      outcome_timestamp,
-      shadow_trade:shadow_trade_id (
-        shadow_trade_id,
-        entry, stop, target, rr,
-        direction, session,
-        template_source,
-        generated_at,
-        opportunity:opportunity_id (
-          date,
-          market:market_id ( symbol, asset_class, display_precision, market_id )
-        )
-      )
-    `)
-    .order('shadow_outcome_id', { ascending: false })
+  // Shadow outcomes -- all resolved outcomes for like-for-like comparison. Paginated,
+  // same reasoning/pattern as rawActualTrades/rawActualPublications below and
+  // shadowBreakdown.ts's own shadow fetch: PostgREST caps responses at 1000 rows
+  // regardless of .limit(), and this table has already grown past that.
+  const shadowOutcomes: any[] = []
+  {
+    const PAGE_SIZE = 1000
+    let page = 0
+    let hasMore = true
+    while (hasMore) {
+      const { data } = await supabase
+        .from('shadow_trade_outcomes')
+        .select(`
+          shadow_outcome_id,
+          trade_outcome_status,
+          result_r,
+          outcome_timestamp,
+          shadow_trade:shadow_trade_id (
+            shadow_trade_id,
+            entry, stop, target, rr,
+            direction, session,
+            template_source,
+            generated_at,
+            opportunity:opportunity_id (
+              date,
+              market:market_id ( symbol, asset_class, display_precision, market_id )
+            )
+          )
+        `)
+        .order('shadow_outcome_id', { ascending: false })
+        .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
+      if (!data?.length) { hasMore = false } else {
+        shadowOutcomes.push(...data)
+        hasMore = data.length === PAGE_SIZE
+        page++
+      }
+    }
+  }
 
   // Fetch ALL actual trades (both source systems) from shadowStartDate to now, paginated --
   // PostgREST caps responses at 1000 rows regardless of .limit(), and .range() pagination is
@@ -118,7 +135,7 @@ export default async function ShadowMonitoringPage() {
   }
 
   // Sort shadow by date desc
-  const sorted = (shadowOutcomes ?? []).sort((a, b) => {
+  const sorted = shadowOutcomes.sort((a, b) => {
     const dateA = (a.shadow_trade as any)?.opportunity?.date ?? ''
     const dateB = (b.shadow_trade as any)?.opportunity?.date ?? ''
     return dateB.localeCompare(dateA)
