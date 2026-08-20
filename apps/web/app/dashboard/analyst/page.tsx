@@ -1,6 +1,6 @@
 import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { CoverageStrip } from '@/components/analyst/workspace/CoverageStrip'
 import { getWorkspaceData } from '@/lib/workspaceData'
 
@@ -78,8 +78,15 @@ export default async function AnalystWorkspacePage() {
 
   // Other analysts out today, so this analyst knows why their own coverage might be
   // wider than usual (unfilled markets get redistributed by the analyst-first scoring
-  // in runEngineSession.ts / the workload-balanced fallback allocation).
-  const { data: todayAbsences } = await supabase
+  // in runEngineSession.ts / the workload-balanced fallback allocation). adminDb
+  // required: migrations/058_analyst_availability_rls.sql scopes ANALYST to
+  // analyst_id = current_analyst_id() only, which the .neq() below would otherwise
+  // filter down to nothing -- there's no "team sees names only" RLS tier, so this
+  // deliberately bypasses RLS the same way coaching_recommendations does elsewhere in
+  // this workspace (see workspaceData.ts's file header comment) rather than exposing
+  // team-wide availability rows to the ANALYST role at the database layer.
+  const adminDb = createAdminClient()
+  const { data: todayAbsences } = await adminDb
     .from('analyst_availability')
     .select('analyst:analyst_id(display_name), reason')
     .eq('date', today)
