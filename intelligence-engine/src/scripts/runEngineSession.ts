@@ -1003,9 +1003,13 @@ async function main() {
           // APAC engine runs at 13:05 UTC, hours before APAC-session analysts actually
           // publish -- monitoring the shadow trade immediately would measure market
           // movement between generation and publication as if it were the trade itself.
-          // See migrations/053_shadow_trades_monitor_from.sql.
+          // See migrations/053_shadow_trades_monitor_from.sql. Same reasoning for US:
+          // engine-us runs at 08:48 UTC, well before US-session analysts actually
+          // publish -- gated until 12:00 UTC (13:00 UK) instead.
           const monitorFrom = session === 'APAC'
             ? new Date(new Date(generatedAt).toISOString().slice(0, 10) + 'T15:00:00Z').toISOString()
+            : session === 'US'
+            ? new Date(new Date(generatedAt).toISOString().slice(0, 10) + 'T12:00:00Z').toISOString()
             : null
 
           const { data: shadowRow, error: shadowError } = await db.from('shadow_trades').insert({
