@@ -30,18 +30,23 @@ export default async function ManagementAnalystWorkspacePage({ params }: PagePro
 
   if (!analyst) notFound()
 
-  const { rows, recommendationsReady, marketsWithEventRisk, yesterdayR, closedYesterdayCount, recommendationsGeneratedToday } = await getWorkspaceData(analystId)
+  const { rows, recommendationsReady, opportunitiesCount, marketsWithEventRisk, yesterdayR, closedYesterdayCount, recommendationsGeneratedToday } = await getWorkspaceData(analystId)
 
-  // Total markets allocated today (daily_coverage_plan, preallocateDay.ts's 04:20 UTC
-  // day-start forecast), mirroring the analyst's own /dashboard/analyst page -- see that
-  // page's comment for why this lives here rather than in getWorkspaceData().
+  // Total markets allocated today, mirroring the analyst's own /dashboard/analyst page
+  // -- see that page's comment for the full reasoning. opportunitiesCount (from
+  // getWorkspaceData()) is the real engine allocation and takes priority once at least
+  // one session has run today; daily_coverage_plan (preallocateDay.ts's 04:20 UTC
+  // day-start forecast) is advisory and only used as a fallback before that, or as a
+  // last resort however many recommendations have generated so far.
   const today = new Date().toISOString().slice(0, 10)
   const { data: coveragePlan } = await supabase
     .from('daily_coverage_plan')
     .select('market_id')
     .eq('date', today)
     .eq('analyst_id', analystId)
-  const marketsToday = coveragePlan?.length ?? recommendationsReady
+  const marketsToday = (opportunitiesCount ?? 0) > 0
+    ? opportunitiesCount!
+    : coveragePlan?.length ?? recommendationsReady
 
   return (
     <div className="space-y-6">
