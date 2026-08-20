@@ -25,7 +25,7 @@ export async function POST(req: Request) {
   const { data, error } = await supabase
     .from('analyst_availability')
     .insert(rows)
-    .select('availability_id, date, session, status')
+    .select('availability_id, date, session, status, reason')
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ created: data })

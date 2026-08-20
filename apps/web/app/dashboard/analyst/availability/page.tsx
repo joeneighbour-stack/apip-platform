@@ -12,7 +12,7 @@ export default async function AnalystAvailabilityPage() {
 
   const { data: absences } = await supabase
     .from('analyst_availability')
-    .select('availability_id, date, session, status')
+    .select('availability_id, date, session, status, reason')
     .eq('analyst_id', user.analystId)
     .gte('date', new Date().toISOString().slice(0, 10))
     .order('date', { ascending: true })

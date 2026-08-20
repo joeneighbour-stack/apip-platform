@@ -1,12 +1,13 @@
 'use client'
 
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 
 interface Absence {
   availability_id: string
   date: string
   session: string | null
   status: string
+  reason: string | null
 }
 
 interface Props {
@@ -171,23 +172,32 @@ export function AbsenceBooking({ analystId, existingAbsences }: Props) {
               </thead>
               <tbody className="divide-y divide-border">
                 {absences.map(a => (
-                  <tr key={a.availability_id}>
-                    <td className="px-4 py-2.5">{formatDate(a.date)}</td>
-                    <td className="px-4 py-2.5 text-muted-foreground">{a.session ?? 'All sessions'}</td>
-                    <td className="px-4 py-2.5">
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLOURS[a.status] ?? ''}`}>
-                        {a.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2.5 text-right">
-                      {a.status === 'PENDING' && (
-                        <button onClick={() => handleCancel(a.availability_id)}
-                          className="text-xs text-muted-foreground hover:text-red-600 transition-colors">
-                          Cancel
-                        </button>
-                      )}
-                    </td>
-                  </tr>
+                  <Fragment key={a.availability_id}>
+                    <tr>
+                      <td className="px-4 py-2.5">{formatDate(a.date)}</td>
+                      <td className="px-4 py-2.5 text-muted-foreground">{a.session ?? 'All sessions'}</td>
+                      <td className="px-4 py-2.5">
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLOURS[a.status] ?? ''}`}>
+                          {a.status}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        {a.status === 'PENDING' && (
+                          <button onClick={() => handleCancel(a.availability_id)}
+                            className="text-xs text-muted-foreground hover:text-red-600 transition-colors">
+                            Cancel
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                    {a.reason && (
+                      <tr>
+                        <td colSpan={4} className="px-4 pb-2.5">
+                          <p className="text-xs text-muted-foreground">{a.reason}</p>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
