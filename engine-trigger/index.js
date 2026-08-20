@@ -77,6 +77,22 @@ cron.schedule('13 22 * * 1-5', () => triggerWorkflow('derive-regime'))
 // post-trade reviews: 22:28
 cron.schedule('28 22 * * 1-5', () => triggerWorkflow('generate-post-trade-reviews'))
 
+// Shadow breakdown cache warm -- every 15 minutes, 05:00-21:00 UTC (matches
+// shadow-monitor.yml's own 5-21 UTC trading-hours window for the same reasoning: no
+// point warming a cache whose data source, monitorShadowTrades.ts, only runs in that
+// window too). getShadowBreakdownData()'s cache has a 10-minute TTL
+// (lib/shadowBreakdown.ts) -- warming every 15 minutes keeps the row at most ~5 minutes
+// past its own TTL before the next warm call, rather than riding out a full day on
+// whichever manager's page load happens to trigger the recompute. Direct fetch rather
+// than triggerWorkflow(): this hits the Railway app's own API route, not a GitHub
+// Actions workflow, so it doesn't go through the dispatch mechanism every other
+// schedule in this file uses.
+cron.schedule('*/15 5-21 * * 1-5', () => {
+  fetch('https://apip-platform-production.up.railway.app/api/shadow/warm-cache', {
+    headers: { 'x-warm-cache-secret': process.env.ANALYTICS_WARM_CACHE_SECRET }
+  }).catch(err => console.error('Shadow cache warm failed:', err))
+})
+
 // ── Weekly Monday jobs (mirrors engine-daily.yml's remaining on.schedule entries) ──
 // generate-profiles: Monday 04:58 UTC
 cron.schedule('58 4 * * 1', () => triggerWorkflow('generate-profiles'))
@@ -111,6 +127,7 @@ console.log('  13:05 engine-apac (Mon-Thu)')
 console.log('  21:58 populate-daily (evening)')
 console.log('  22:13 derive-regime (evening)')
 console.log('  22:28 post-trade-reviews')
+console.log('  05:00-21:00 every 15 min: shadow cache warm')
 console.log('  Monday only:')
 console.log('  04:58 generate-profiles')
 console.log('  05:15 derive-regime (weekly)')
