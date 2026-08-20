@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
+import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams, usePathname } from 'next/navigation'
 import {
   type MetricsTrade, type MetricsPublication,
@@ -17,15 +18,20 @@ import type { DefaultAnalyticsView } from '@/lib/analyticsCache'
 import { AnalyticsFilters } from './AnalyticsFilters'
 import { UniverseSummary } from './UniverseSummary'
 import { PerformanceKpiStrip } from './PerformanceKpiStrip'
-import { CumulativePerformanceChart } from './CumulativePerformanceChart'
-import { DrawdownChart } from './DrawdownChart'
+import { CumulativePerformanceChart, DrawdownChart, ContributionChart, TradeStatistics } from './LazyCharts'
 import { RollingPerformanceTable } from './RollingPerformanceTable'
 import { MonthlyPerformanceMatrix } from './MonthlyPerformanceMatrix'
 import { AttributionTable } from './AttributionTable'
-import { ContributionChart } from './ContributionChart'
-import { TradeStatistics } from './TradeStatistics'
 import { BestPerformers } from './BestPerformers'
-import { ReportBuilder } from './ReportBuilder'
+
+// ReportBuilder mounts report/PerformanceReport.tsx, which pulls in a second copy of
+// the four recharts components above -- dynamic-importing it here keeps that whole
+// subtree (recharts included) out of the initial bundle, since it only ever renders
+// after the user clicks "Generate Report" (reportOpen below). ssr:false is safe: this
+// file is already a Client Component, and ReportBuilder has no server-rendered role.
+const ReportBuilder = dynamic(() => import('./ReportBuilder').then(m => ({ default: m.ReportBuilder })), {
+  ssr: false,
+})
 
 interface Analyst { analyst_id: string; display_name: string; active: boolean }
 interface Market { market_id: string; symbol: string; asset_class: string }

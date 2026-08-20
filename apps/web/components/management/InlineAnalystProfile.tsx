@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
-import { KpiSummary } from '@/components/analyst/KpiSummary'
+import { KpiSummary } from '@/components/analyst/LazyCharts'
 
 interface Kpi {
   kpi_name: string

@@ -1,7 +1,7 @@
 import { getCurrentUser } from '@/lib/auth'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { TeamPerformanceGrid } from '@/components/management/TeamPerformanceGrid'
+import { TeamPerformanceGrid } from '@/components/management/LazyCharts'
 import { getShadowBreakdownData } from '@/lib/shadowBreakdown'
 
 export default async function ManagementPerformancePage() {

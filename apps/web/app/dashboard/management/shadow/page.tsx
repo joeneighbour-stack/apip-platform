@@ -1,7 +1,7 @@
 import { getCurrentUser } from '@/lib/auth'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { ShadowMonitoringPanel } from '@/components/management/ShadowMonitoringPanel'
+import { ShadowMonitoringPanel } from '@/components/management/LazyCharts'
 import { AnalystShadowBreakdown } from '@/components/management/AnalystShadowBreakdown'
 import { getShadowBreakdownData } from '@/lib/shadowBreakdown'
 

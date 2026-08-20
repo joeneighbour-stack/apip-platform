@@ -1,7 +1,6 @@
 import { notFound } from 'next/navigation'
 import { getAnalystProfileData } from '@/lib/analystProfile'
-import { KpiSummary } from './KpiSummary'
-import { PerformanceBreakdown } from './PerformanceBreakdown'
+import { KpiSummary, PerformanceBreakdown } from './LazyCharts'
 import { CompliancePanel } from './CompliancePanel'
 
 interface Props {
