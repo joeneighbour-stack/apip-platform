@@ -121,7 +121,7 @@ export default async function ManagementPerformancePage() {
   // actualTrades/actualPublications are re-fetched here (rather than returned from
   // getShadowBreakdownData) mirroring shadow/page.tsx's exact fetch + preferApiPerDay dedupe,
   // since ShadowSinceLaunchStats needs the raw trade/publication rows, not the breakdown rows.
-  const { shadowStartDate, analysts: shadowBreakdownAnalysts, rows: shadowBreakdownRows } = await getShadowBreakdownData()
+  const { shadowStartDate, analysts: shadowBreakdownAnalysts, rows: shadowBreakdownRows } = await getShadowBreakdownData(adminDb)
 
   const rawSinceLaunchTrades: any[] = []
   {

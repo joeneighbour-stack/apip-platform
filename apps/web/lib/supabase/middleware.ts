@@ -31,10 +31,10 @@ export async function updateSession(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
 
   // Redirect unauthenticated users to login, except on public routes.
-  // /api/analytics/warm-cache is called by a scheduled GitHub Actions job with no user
-  // session at all -- it authenticates itself via a shared secret header (checked in the
-  // route handler), so it must be exempted here or this redirect would block it before
-  // the route ever runs.
+  // /api/analytics/warm-cache and /api/shadow/warm-cache are called by a scheduled job with
+  // no user session at all -- each authenticates itself via a shared secret header (checked
+  // in the route handler), so both must be exempted here or this redirect would block them
+  // before the route ever runs.
   // /forgot-password and /reset-password must be public for the same reason /login is:
   // a user hitting either one is by definition not authenticated yet. /reset-password in
   // particular is reached via the emailed recovery link with the session token in the URL
@@ -45,7 +45,8 @@ export async function updateSession(request: NextRequest) {
   const isPublicPath = request.nextUrl.pathname.startsWith('/login') ||
     request.nextUrl.pathname.startsWith('/forgot-password') ||
     request.nextUrl.pathname.startsWith('/reset-password') ||
-    request.nextUrl.pathname === '/api/analytics/warm-cache'
+    request.nextUrl.pathname === '/api/analytics/warm-cache' ||
+    request.nextUrl.pathname === '/api/shadow/warm-cache'
   if (!user && !isPublicPath) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'

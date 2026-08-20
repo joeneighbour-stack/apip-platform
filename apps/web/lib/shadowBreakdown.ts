@@ -1,4 +1,4 @@
-import { createClient, createAdminClient } from '@/lib/supabase/server'
+import type { SupabaseClient } from '@supabase/supabase-js'
 
 export interface ShadowBreakdownRow {
   analystId: string
@@ -26,6 +26,57 @@ export interface ShadowBreakdownData {
   rows: ShadowBreakdownRow[]
 }
 
+// Cached in analytics_cache (migrations/050_analytics_cache.sql), same table
+// getCachedDefaultAnalyticsView() (lib/analyticsCache.ts) already uses for the Analytics
+// page's default view -- this is genuinely expensive (three paginated fetches: shadow_trade_
+// outcomes, analyst_publications, actual_trades, each potentially thousands of rows) and was
+// re-run from scratch on every load of either page that calls it. Unlike the default analytics
+// view's cache entry (no TTL -- freshness maintained entirely by an external warm-cache
+// schedule), this one has a real TTL check in-process: shadow trade outcomes change continuously
+// throughout the day (monitorShadowTrades.ts runs every 5 minutes) rather than once or twice a
+// day, so a purely external warm cycle would need to be as frequent as the TTL to keep up
+// anyway -- simpler to check staleness here and let whichever request happens to miss pay for
+// the recompute, same as this table's row getting warmed proactively by the new
+// /api/shadow/warm-cache endpoint below.
+const SHADOW_CACHE_KEY = 'shadow_breakdown'
+const SHADOW_CACHE_TTL_MINUTES = 10
+
+// adminDb is a parameter, not created internally, so this can be called from a context with
+// no user session at all -- specifically /api/shadow/warm-cache, which authenticates via a
+// shared secret header rather than a cookie-based session, and previously would have silently
+// gotten an empty/anonymous read from the shadow_trades earliest-date query if this still
+// created its own session client internally the way the pre-cache version did.
+export async function getShadowBreakdownData(adminDb: SupabaseClient): Promise<ShadowBreakdownData> {
+  // analytics_cache's actual columns (migrations/050_analytics_cache.sql) are cache_key,
+  // payload, computed_at, trade_count -- there is no updated_at column. computed_at is the
+  // same column getCachedDefaultAnalyticsView() already reads/writes for its own cache_key,
+  // so this reuses that existing convention rather than adding a second, redundant
+  // "when was this row written" column that only this cache_key would use.
+  const { data: cached } = await adminDb
+    .from('analytics_cache')
+    .select('payload, computed_at')
+    .eq('cache_key', SHADOW_CACHE_KEY)
+    .single()
+
+  if (cached) {
+    const ageMinutes = (Date.now() - new Date(cached.computed_at).getTime()) / 60000
+    if (ageMinutes < SHADOW_CACHE_TTL_MINUTES) {
+      return cached.payload as ShadowBreakdownData
+    }
+  }
+
+  const freshData = await fetchShadowBreakdownData(adminDb)
+
+  await adminDb.from('analytics_cache').upsert({
+    cache_key: SHADOW_CACHE_KEY,
+    payload: freshData as any,
+    computed_at: new Date().toISOString(),
+    trade_count: freshData.rows.length,
+  }, { onConflict: 'cache_key' })
+
+  return freshData
+}
+
 // Per-analyst comparison, scoped to each analyst's own coverage: for every market+date THIS
 // analyst published on, is there a shadow trade for the same market+date? Direction is
 // deliberately NOT part of the match key -- the comparison question is "did the shadow
@@ -37,12 +88,9 @@ export interface ShadowBreakdownData {
 // Shared by the Shadow Monitoring page (AnalystShadowBreakdown in its own section) and Team
 // Performance (the same component, replacing the old simplified shadow summary) -- same
 // query, same computation, so both pages show identical numbers for "the same" comparison.
-export async function getShadowBreakdownData(): Promise<ShadowBreakdownData> {
-  const supabase = await createClient()
-  const adminDb = createAdminClient()
-
+async function fetchShadowBreakdownData(adminDb: SupabaseClient): Promise<ShadowBreakdownData> {
   const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-  const { data: earliestShadowTrade } = await supabase
+  const { data: earliestShadowTrade } = await adminDb
     .from('shadow_trades')
     .select('generated_at')
     .order('generated_at', { ascending: true })

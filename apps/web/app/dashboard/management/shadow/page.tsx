@@ -14,7 +14,7 @@ export default async function ShadowMonitoringPage() {
 
   // Shared with Team Performance so both pages agree on the "since launch" floor and the
   // analyst-vs-shadow breakdown numbers.
-  const { shadowStartDate, analysts: breakdownAnalysts, rows: breakdownRows } = await getShadowBreakdownData()
+  const { shadowStartDate, analysts: breakdownAnalysts, rows: breakdownRows } = await getShadowBreakdownData(adminDb)
 
   // Shadow outcomes -- all resolved outcomes for like-for-like comparison. Paginated,
   // same reasoning/pattern as rawActualTrades/rawActualPublications below and
