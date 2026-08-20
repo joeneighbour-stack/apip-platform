@@ -20,6 +20,14 @@ export interface WorkspaceData {
   // list, management's mirror), so it derives that count locally from the same
   // query rather than this function fetching it a second time.
   recommendationsReady: number
+  // Total opportunities actually allocated to this analyst today, across all
+  // sessions -- the real engine allocation (opportunities.assigned_analyst_id,
+  // written by each session's runEngineSession.ts run), not the advisory
+  // daily_coverage_plan forecast. null before any session has run today (no
+  // opportunities exist yet), in which case callers fall back to the coverage
+  // plan. This is the authoritative source for "how many markets is this
+  // analyst covering today" once at least one session has generated.
+  opportunitiesCount: number | null
   marketsWithEventRisk: number
   yesterdayR: number
   closedYesterdayCount: number
@@ -58,6 +66,7 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
     { data: allAnalystProfileRowsRaw },
     { data: yesterdayTrades },
     { count: recommendationsGeneratedToday },
+    { count: opportunitiesCount },
   ] = await Promise.all([
     adminDb
       .from('coaching_recommendations')
@@ -103,6 +112,19 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
     adminDb
       .from('opportunities')
       .select('opportunity_id', { count: 'exact', head: true })
+      .eq('date', today),
+    // This analyst's own real allocation today, across all sessions -- authoritative
+    // over daily_coverage_plan (advisory only, see migrations/049_daily_coverage_plan.sql)
+    // once a session's engine run has actually written opportunities rows.
+    // opportunities RLS grants ANALYST self-select and MANAGER access to their managed
+    // analysts (migrations/002_rls.sql), matching the self-or-manager shape already used
+    // for actual_trades/market_state_daily above, so the session client is sufficient --
+    // no adminDb needed. Scoped by analystId + today only, independent of
+    // allRecs/marketIds.
+    supabase
+      .from('opportunities')
+      .select('*', { count: 'exact', head: true })
+      .eq('assigned_analyst_id', analystId)
       .eq('date', today),
   ])
 
@@ -592,6 +614,7 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
   return {
     rows,
     recommendationsReady: recommendations.length,
+    opportunitiesCount,
     marketsWithEventRisk,
     yesterdayR,
     closedYesterdayCount: closedYesterday.length,

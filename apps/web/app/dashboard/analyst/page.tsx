@@ -44,21 +44,15 @@ export default async function AnalystWorkspacePage() {
     )
   }
 
-  const { rows, recommendationsReady, marketsWithEventRisk, yesterdayR, closedYesterdayCount, recommendationsGeneratedToday } = await getWorkspaceData(user.analystId)
+  const { rows, recommendationsReady, opportunitiesCount, marketsWithEventRisk, yesterdayR, closedYesterdayCount, recommendationsGeneratedToday } = await getWorkspaceData(user.analystId)
 
   // Day-start coverage forecast (preallocateDay.ts, written 04:20 UTC -- before
-  // any session's real engine run). Advisory, not authoritative: today's actual
-  // recommendations (rows/CoverageStrip below) come from each session's own live
-  // run and can genuinely differ once real intraday data exists -- see
-  // migrations/049_daily_coverage_plan.sql's comment for why. Shown whenever
-  // available rather than only pre-recommendations, since a market can be in
-  // the day's plan for a session that hasn't run yet even after another
-  // session's real recommendations already exist.
-  //
-  // Single query doubles as the source for both the grouped-by-session list
-  // below AND the header tile's marketsToday count (total allocated markets,
-  // one row per market+session) -- getWorkspaceData() no longer runs its own
-  // separate daily_coverage_plan query for the count.
+  // any session's real engine run). Advisory only -- opportunities.assigned_analyst_id
+  // (opportunitiesCount, from getWorkspaceData()) is the authoritative real engine
+  // allocation once at least one session has run today; this query's row list still
+  // drives the grouped-by-session display below regardless, since that's useful for
+  // seeing APAC/US markets before their engine runs even when EUROPEAN's real
+  // allocation already exists -- see migrations/049_daily_coverage_plan.sql's comment.
   const supabase = await createClient()
   const today = new Date().toISOString().slice(0, 10)
   const { data: coveragePlan } = await supabase
@@ -68,9 +62,11 @@ export default async function AnalystWorkspacePage() {
     .eq('analyst_id', user.analystId)
     .order('session')
 
-  // Falls back to recommendationsReady when no plan row exists yet (e.g. before
-  // 04:20 UTC, or a day preallocateDay.ts didn't run for).
-  const marketsToday = coveragePlan?.length ?? recommendationsReady
+  // Use actual engine allocation when available, fall back to the advisory plan
+  // (and, failing that, to however many recommendations have generated so far).
+  const marketsToday = (opportunitiesCount ?? 0) > 0
+    ? opportunitiesCount!
+    : coveragePlan?.length ?? recommendationsReady
 
   const coverageBySession = new Map<string, string[]>()
   for (const row of (coveragePlan ?? []) as any[]) {
