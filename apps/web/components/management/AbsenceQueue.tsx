@@ -7,6 +7,7 @@ interface AbsenceRequest {
   date: string
   session: string | null
   status: string
+  reason: string | null
   analyst: { display_name: string; analyst_id: string } | null
 }
 
@@ -68,7 +69,12 @@ export function AbsenceQueue({ requests }: Props) {
               <tbody className="divide-y divide-amber-100">
                 {pending.map(req => (
                   <tr key={req.availability_id}>
-                    <td className="px-4 py-2.5 font-medium">{req.analyst?.display_name ?? '—'}</td>
+                    <td className="px-4 py-2.5 font-medium">
+                      {req.analyst?.display_name ?? '—'}
+                      {req.reason && (
+                        <p className="text-xs text-muted-foreground mt-0.5 font-normal">{req.reason}</p>
+                      )}
+                    </td>
                     <td className="px-4 py-2.5 text-muted-foreground">{formatDate(req.date)}</td>
                     <td className="px-4 py-2.5 text-muted-foreground">{req.session ?? 'All sessions'}</td>
                     <td className="px-4 py-2.5 text-right">
@@ -113,7 +119,12 @@ export function AbsenceQueue({ requests }: Props) {
               <tbody className="divide-y divide-border">
                 {upcoming.map(req => (
                   <tr key={req.availability_id}>
-                    <td className="px-4 py-2.5 font-medium">{req.analyst?.display_name ?? '—'}</td>
+                    <td className="px-4 py-2.5 font-medium">
+                      {req.analyst?.display_name ?? '—'}
+                      {req.reason && (
+                        <p className="text-xs text-muted-foreground mt-0.5 font-normal">{req.reason}</p>
+                      )}
+                    </td>
                     <td className="px-4 py-2.5 text-muted-foreground">{formatDate(req.date)}</td>
                     <td className="px-4 py-2.5 text-muted-foreground">{req.session ?? 'All sessions'}</td>
                   </tr>

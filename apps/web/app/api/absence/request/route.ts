@@ -6,7 +6,7 @@ export async function POST(req: Request) {
   const user = await getCurrentUser()
   if (user.role !== 'ANALYST') return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
-  const { analystId, dates, session } = await req.json()
+  const { analystId, dates, session, reason } = await req.json()
   if (!analystId || !dates?.length) return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
   if (analystId !== user.analystId) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
@@ -19,6 +19,7 @@ export async function POST(req: Request) {
     available: false,
     status: 'PENDING',
     requested_by: user.appUserId,
+    reason: typeof reason === 'string' ? reason.trim() || null : null,
   }))
 
   const { data, error } = await supabase

@@ -27,6 +27,7 @@ export function AbsenceBooking({ analystId, existingAbsences }: Props) {
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
   const [session, setSession] = useState('All sessions')
+  const [reason, setReason] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
 
@@ -71,6 +72,7 @@ export function AbsenceBooking({ analystId, existingAbsences }: Props) {
           analystId,
           dates,
           session: session === 'All sessions' ? null : session,
+          reason: reason.trim() || null,
         }),
       })
 
@@ -85,6 +87,7 @@ export function AbsenceBooking({ analystId, existingAbsences }: Props) {
       setFromDate('')
       setToDate('')
       setSession('All sessions')
+      setReason('')
     } catch {
       setError('Network error — please try again')
     } finally {
@@ -131,6 +134,14 @@ export function AbsenceBooking({ analystId, existingAbsences }: Props) {
             </select>
           </div>
         </div>
+
+        <textarea
+          value={reason}
+          onChange={e => setReason(e.target.value)}
+          placeholder="Reason (optional)"
+          className="w-full text-sm border border-border rounded-md px-3 py-2 resize-none"
+          rows={2}
+        />
 
         {error && <p className="text-xs text-red-600">{error}</p>}
 

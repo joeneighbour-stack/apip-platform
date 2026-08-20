@@ -68,7 +68,7 @@ export default async function ManagementWorkspacePage() {
   const { data: absenceRequests } = await supabase
     .from('analyst_availability')
     .select(`
-      availability_id, date, session, status,
+      availability_id, date, session, status, reason,
       analyst:analyst_id ( analyst_id, display_name )
     `)
     .in('status', ['PENDING', 'APPROVED'])

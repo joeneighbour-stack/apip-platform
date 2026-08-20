@@ -130,12 +130,15 @@ export default async function AnalystWorkspacePage() {
 
       {/* Team absences today */}
       {todayAbsences && todayAbsences.length > 0 && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-          <p className="text-xs font-medium text-amber-800">
-            Absent today:{' '}
-            {(todayAbsences as any[]).map(a => a.analyst?.display_name).filter(Boolean).join(', ')}
-          </p>
-          <p className="text-xs text-amber-700 mt-0.5">
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-1">
+          <p className="text-xs font-medium text-amber-800">Absent today</p>
+          {(todayAbsences as any[]).map((a, i) => (
+            <p key={i} className="text-xs text-amber-700">
+              {a.analyst?.display_name}
+              {a.reason ? ` — ${a.reason}` : ''}
+            </p>
+          ))}
+          <p className="text-xs text-amber-600 mt-1">
             Markets may be redistributed across the team.
           </p>
         </div>
