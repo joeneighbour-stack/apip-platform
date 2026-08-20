@@ -35,7 +35,16 @@ export async function updateSession(request: NextRequest) {
   // session at all -- it authenticates itself via a shared secret header (checked in the
   // route handler), so it must be exempted here or this redirect would block it before
   // the route ever runs.
+  // /forgot-password and /reset-password must be public for the same reason /login is:
+  // a user hitting either one is by definition not authenticated yet. /reset-password in
+  // particular is reached via the emailed recovery link with the session token in the URL
+  // fragment (never sent to the server) -- the client-side Supabase SDK only exchanges it
+  // for a session *after* the page loads, so this middleware's server-side getUser() check
+  // would never see a session on the first request and would bounce the user to /login
+  // before that exchange could ever happen.
   const isPublicPath = request.nextUrl.pathname.startsWith('/login') ||
+    request.nextUrl.pathname.startsWith('/forgot-password') ||
+    request.nextUrl.pathname.startsWith('/reset-password') ||
     request.nextUrl.pathname === '/api/analytics/warm-cache'
   if (!user && !isPublicPath) {
     const url = request.nextUrl.clone()
