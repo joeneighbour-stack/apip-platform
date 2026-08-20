@@ -14,16 +14,18 @@ export default async function AnalystPerformancePage() {
 
   // Only the caller's own analyst record is needed -- the analyst filter is locked and
   // hidden on this view, so there's no reason to hand the client the full roster.
-  const { data: analystRow } = await supabase
+  const { data: analystRow, error: analystRowError } = await supabase
     .from('analysts')
     .select('analyst_id, display_name, active')
     .eq('analyst_id', user.analystId)
     .single()
+  if (analystRowError) console.error('[AnalystPerformancePage] Failed to fetch analyst:', analystRowError.message)
 
-  const { data: markets } = await supabase
+  const { data: markets, error: marketsError } = await supabase
     .from('markets')
     .select('market_id, symbol, asset_class')
     .order('asset_class, symbol')
+  if (marketsError) console.error('[AnalystPerformancePage] Failed to fetch markets:', marketsError.message)
 
   return (
     <div className="space-y-6">

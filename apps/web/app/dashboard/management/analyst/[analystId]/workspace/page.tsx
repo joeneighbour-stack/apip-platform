@@ -21,11 +21,16 @@ export default async function ManagementAnalystWorkspacePage({ params }: PagePro
   const { analystId } = await params
   const supabase = await createClient()
 
-  const { data: analystRaw } = await supabase
+  const { data: analystRaw, error: analystRawError } = await supabase
     .from('analysts')
     .select('analyst_id, display_name, active')
     .eq('analyst_id', analystId)
     .single()
+  // PGRST116 ("no rows returned") just means analystId doesn't match any analyst -- the
+  // normal path into notFound() below, not a failure worth logging.
+  if (analystRawError && analystRawError.code !== 'PGRST116') {
+    console.error('[ManagementAnalystWorkspacePage] Failed to fetch analyst:', analystRawError.message)
+  }
   const analyst = analystRaw as { analyst_id: string; display_name: string; active: boolean } | null
 
   if (!analyst) notFound()
@@ -39,11 +44,12 @@ export default async function ManagementAnalystWorkspacePage({ params }: PagePro
   // day-start forecast) is advisory and only used as a fallback before that, or as a
   // last resort however many recommendations have generated so far.
   const today = new Date().toISOString().slice(0, 10)
-  const { data: coveragePlan } = await supabase
+  const { data: coveragePlan, error: coveragePlanError } = await supabase
     .from('daily_coverage_plan')
     .select('market_id')
     .eq('date', today)
     .eq('analyst_id', analystId)
+  if (coveragePlanError) console.error('[ManagementAnalystWorkspacePage] Failed to fetch daily_coverage_plan:', coveragePlanError.message)
   const marketsToday = (opportunitiesCount ?? 0) > 0
     ? opportunitiesCount!
     : coveragePlan?.length ?? recommendationsReady

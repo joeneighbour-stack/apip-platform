@@ -10,11 +10,16 @@ export default async function RootPage() {
     redirect('/login')
   }
 
-  const { data: appUser } = await supabase
+  const { data: appUser, error: appUserError } = await supabase
     .from('app_users')
     .select('role')
     .eq('auth_user_id', user.id)
     .single()
+  // PGRST116 ("no rows returned") just means this auth user has no app_users row yet --
+  // the normal path into the redirect below, not a failure worth logging.
+  if (appUserError && appUserError.code !== 'PGRST116') {
+    console.error('[RootPage] Failed to fetch app_users:', appUserError.message)
+  }
 
   if (!appUser) {
     redirect('/login')

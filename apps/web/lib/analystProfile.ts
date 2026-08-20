@@ -34,11 +34,16 @@ export async function getAnalystProfileData(
   // 2017, and "All Time Trades" / KPI History are meant to show the whole thing.
   const historyFloor = '2015-01-01'
 
-  const { data: analyst } = await supabase
+  const { data: analyst, error: analystError } = await supabase
     .from('analysts')
     .select('analyst_id, display_name, active')
     .eq('analyst_id', analystId)
     .single()
+  // PGRST116 ("no rows returned") just means analystId doesn't exist -- the normal path
+  // into the !analyst branch below, not a failure worth logging.
+  if (analystError && analystError.code !== 'PGRST116') {
+    console.error('[getAnalystProfileData] Failed to fetch analyst:', analystError.message)
+  }
 
   if (!analyst) {
     return {
@@ -49,12 +54,13 @@ export async function getAnalystProfileData(
   }
 
   // KPI trend (always fetched -- needed by both modes)
-  const { data: kpiTrend } = await supabase
+  const { data: kpiTrend, error: kpiTrendError } = await supabase
     .from('executive_kpis')
     .select('kpi_name, kpi_value, period_start, period_end')
     .eq('analyst_id', analystId)
     .gte('period_start', historyFloor)
     .order('period_start', { ascending: true })
+  if (kpiTrendError) console.error('[getAnalystProfileData] Failed to fetch executive_kpis:', kpiTrendError.message)
 
   // The current, still-in-progress month's executive_kpis row is written by a weekly
   // batch job (calculateKpis.ts), so it can be missing entirely, or present but stale/
@@ -68,12 +74,13 @@ export async function getAnalystProfileData(
   // view. max_drawdown (and alignment_rate, which has no live equivalent) are left
   // exactly as executive_kpis has them for the current month, present or not -- a
   // missing one doesn't block the others, it just reads as "--" downstream.
-  const { data: monthTradesRaw } = await supabase
+  const { data: monthTradesRaw, error: monthTradesError } = await supabase
     .from('actual_trades')
     .select('result_r, triggered, published_at, source_system')
     .eq('analyst_id', analystId)
     .in('source_system', ['ACUITY_PERFORMANCE_API', 'MANUAL_BACKFILL'])
     .gte('published_at', monthStart)
+  if (monthTradesError) console.error('[getAnalystProfileData] Failed to fetch month actual_trades:', monthTradesError.message)
 
   const monthTrades = (monthTradesRaw as any[]) ?? []
   const monthTriggered = monthTrades.filter((t: any) => t.triggered && t.result_r !== null)
@@ -84,12 +91,13 @@ export async function getAnalystProfileData(
   // analyst_publications has no ANALYST self-select RLS policy (only ADMIN/RESEARCH and
   // MANAGER-scoped -- migrations/018_publication_rls.sql), same reason
   // /api/analytics/publications uses the service-role client for ANALYST callers.
-  const { data: monthPubs } = await adminDb
+  const { data: monthPubs, error: monthPubsError } = await adminDb
     .from('analyst_publications')
     .select('reconciliation_status')
     .eq('analyst_id', analystId)
     .eq('source_system', 'ACUITY_PERFORMANCE_API')
     .gte('published_at', monthStart)
+  if (monthPubsError) console.error('[getAnalystProfileData] Failed to fetch month analyst_publications:', monthPubsError.message)
 
   const pubTotal = (monthPubs ?? []).length
   const apiTriggered = monthTriggered.filter((t: any) => t.source_system === 'ACUITY_PERFORMANCE_API')
@@ -136,7 +144,7 @@ export async function getAnalystProfileData(
     let page = 0
     let hasMore = true
     while (hasMore) {
-      const { data: batch } = await supabase
+      const { data: batch, error } = await supabase
         .from('actual_trades')
         .select(`
           trade_id, direction, result_r, triggered,
@@ -148,7 +156,10 @@ export async function getAnalystProfileData(
         .order('published_at', { ascending: false })
         .order('trade_id', { ascending: false })
         .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
-      if (!batch?.length) { hasMore = false } else {
+      if (error) {
+        console.error('[getAnalystProfileData] Failed to fetch allTrades:', error.message)
+        hasMore = false
+      } else if (!batch?.length) { hasMore = false } else {
         allTrades.push(...batch)
         hasMore = batch.length === PAGE_SIZE
         page++
@@ -160,14 +171,15 @@ export async function getAnalystProfileData(
   // trade_id (FK to actual_trades), so it's scoped to this analyst via the
   // trade_id list already fetched above, not a direct analyst_id filter.
   const allTradeIds = allTrades.map((t: any) => t.trade_id)
-  const { data: reviews } = allTradeIds.length > 0
+  const { data: reviews, error: reviewsError } = allTradeIds.length > 0
     ? await supabase
         .from('post_trade_reviews')
         .select('review_id, market, session, direction_alignment, entry_alignment, alignment_score, review_status, created_at')
         .in('trade_id', allTradeIds)
         .order('created_at', { ascending: false })
         .limit(50)
-    : { data: [] }
+    : { data: [], error: null }
+  if (reviewsError) console.error('[getAnalystProfileData] Failed to fetch post_trade_reviews:', reviewsError.message)
 
   return {
     analyst: analyst as any,

@@ -62,11 +62,11 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
   // resolves); the other three don't depend on allRecs either, so there's no reason to
   // make any of them wait on one another. Collapses 4 sequential round-trips into 1.
   const [
-    { data: allRecs },
-    { data: allAnalystProfileRowsRaw },
-    { data: yesterdayTrades },
-    { count: recommendationsGeneratedToday },
-    { count: opportunitiesCount },
+    { data: allRecs, error: allRecsError },
+    { data: allAnalystProfileRowsRaw, error: allAnalystProfileRowsError },
+    { data: yesterdayTrades, error: yesterdayTradesError },
+    { count: recommendationsGeneratedToday, error: recommendationsGeneratedTodayError },
+    { count: opportunitiesCount, error: opportunitiesCountError },
   ] = await Promise.all([
     adminDb
       .from('coaching_recommendations')
@@ -128,6 +128,14 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
       .eq('date', today),
   ])
 
+  if (allRecsError) console.error('[getWorkspaceData] Failed to fetch coaching_recommendations:', allRecsError.message)
+  if (allAnalystProfileRowsError) console.error('[getWorkspaceData] Failed to fetch analyst_profiles (full):', allAnalystProfileRowsError.message)
+  if (yesterdayTradesError) console.error('[getWorkspaceData] Failed to fetch yesterday actual_trades:', yesterdayTradesError.message)
+  if (recommendationsGeneratedTodayError) console.error('[getWorkspaceData] Failed to fetch opportunities count:', recommendationsGeneratedTodayError.message)
+  if (opportunitiesCountError) console.error('[getWorkspaceData] Failed to fetch assigned opportunities count:', opportunitiesCountError.message)
+  // No early return on any of these -- every downstream read already falls back to `?? []`/
+  // `?? 0`/`?? null`, so the page still renders (with degraded data) rather than failing outright.
+
   const seenSymbols = new Set<string>()
   const recommendations = (allRecs ?? []).filter((rec: any) => {
     const symbol = rec.opportunity?.market?.symbol
@@ -152,13 +160,13 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
   // analystId, never on each other, so they all run together too. Collapses 7 sequential
   // round-trips into 1.
   const [
-    { data: eventRisks },
-    { data: regimeRows },
-    { data: priorDayRows },
-    { data: priceHistoryRows },
-    { data: intradayRows },
-    { data: marketHistoryRows },
-    { data: profileRows },
+    { data: eventRisks, error: eventRisksError },
+    { data: regimeRows, error: regimeRowsError },
+    { data: priorDayRows, error: priorDayRowsError },
+    { data: priceHistoryRows, error: priceHistoryRowsError },
+    { data: intradayRows, error: intradayRowsError },
+    { data: marketHistoryRows, error: marketHistoryRowsError },
+    { data: profileRows, error: profileRowsError },
   ] = await Promise.all([
     // market_event_risk: raw table (risk_score, analyst_warning) is internal-only per RLS
     // (migrations/002_rls.sql -- analysts are meant to consume event risk through
@@ -173,7 +181,7 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
           `)
           .in('market_id', marketIds)
           .eq('event_risk_status', 'HIGH_RISK')
-      : Promise.resolve({ data: [] as any[] }),
+      : Promise.resolve({ data: [] as any[], error: null }),
     // market_regime_state is internal-only per RLS (ADMIN/MANAGER/RESEARCH) -- adminDb
     // required. No date window here: the regime batch job doesn't write a row for every
     // market every day, so a recent-window filter was silently dropping markets whose last
@@ -186,7 +194,7 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
           .select('market_id, trend_state, volatility_state, regime_confidence, derived_from, captured_at')
           .in('market_id', marketIds)
           .order('captured_at', { ascending: false })
-      : Promise.resolve({ data: [] as any[] }),
+      : Promise.resolve({ data: [] as any[], error: null }),
     // market_state_daily RLS grants any authenticated read -- session client is sufficient.
     marketIds.length > 0
       ? supabase
@@ -196,7 +204,7 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
           .lt('date', today)
           .gte('date', sevenDaysAgo)
           .order('date', { ascending: false })
-      : Promise.resolve({ data: [] as any[] }),
+      : Promise.resolve({ data: [] as any[], error: null }),
     // Last 10 TRADING days of OHLC for the trade context chart. Fetched over a wider
     // 20-calendar-day cutoff and sliced to the last 10 rows per market below, rather than
     // gte'ing "10 days ago" directly: a pure 10-calendar-day cutoff would return fewer than
@@ -208,7 +216,7 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
           .in('market_id', marketIds)
           .gte('date', priceHistoryFetchStart)
           .order('date', { ascending: true })
-      : Promise.resolve({ data: [] as any[] }),
+      : Promise.resolve({ data: [] as any[], error: null }),
     // market_state_intraday is internal-only per RLS -- adminDb. Session anchors
     // (session_high/session_low/previous_close) for the zone calc, plus current price.
     marketIds.length > 0
@@ -217,7 +225,7 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
           .select('market_id, current_price, session_high, session_low, previous_close, captured_at')
           .in('market_id', marketIds)
           .order('captured_at', { ascending: false })
-      : Promise.resolve({ data: [] as any[] }),
+      : Promise.resolve({ data: [] as any[], error: null }),
     // Analyst's own trade history for the "Historical Edge" tiers. entry_zone is selected for
     // the zone-scoped tier, but is not currently populated on any production row -- the zone
     // tier is wired up and will activate automatically once that data exists, and falls
@@ -230,7 +238,7 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
           .in('market_id', marketIds)
           .eq('triggered', true)
           .not('result_r', 'is', null)
-      : Promise.resolve({ data: [] as any[] }),
+      : Promise.resolve({ data: [] as any[], error: null }),
     // analyst_profiles.zone is null on every production row today -- this table only ever
     // supplies the market+direction tier in practice. The zone tier above
     // (actual_trades.entry_zone) is the only place a genuine zone-scoped edge could come
@@ -248,6 +256,15 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
       .eq('analyst_id', analystId)
       .in('market_id', marketIds.length > 0 ? marketIds : ['']),
   ])
+
+  if (eventRisksError) console.error('[getWorkspaceData] Failed to fetch market_event_risk:', eventRisksError.message)
+  if (regimeRowsError) console.error('[getWorkspaceData] Failed to fetch market_regime_state:', regimeRowsError.message)
+  if (priorDayRowsError) console.error('[getWorkspaceData] Failed to fetch market_state_daily (prior day):', priorDayRowsError.message)
+  if (priceHistoryRowsError) console.error('[getWorkspaceData] Failed to fetch market_state_daily (price history):', priceHistoryRowsError.message)
+  if (intradayRowsError) console.error('[getWorkspaceData] Failed to fetch market_state_intraday:', intradayRowsError.message)
+  if (marketHistoryRowsError) console.error('[getWorkspaceData] Failed to fetch actual_trades (market history):', marketHistoryRowsError.message)
+  if (profileRowsError) console.error('[getWorkspaceData] Failed to fetch analyst_profiles (scoped):', profileRowsError.message)
+  // No early return here either -- every reader below already falls back to `?? []`.
 
   // risk_score is a fixed categorical value keyed off event_risk_status, not a
   // continuous per-event score (verified live: WATCH rows are always 0.5,

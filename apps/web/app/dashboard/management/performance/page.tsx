@@ -21,25 +21,28 @@ export default async function ManagementPerformancePage() {
   const d36 = new Date(Date.UTC(year, month - 35, 1))
   const thirtyySixMonthsAgo = d36.toISOString().slice(0, 10)
 
-  const { data: analysts } = await supabase
+  const { data: analysts, error: analystsError } = await supabase
     .from('analysts')
     .select('analyst_id, display_name, active')
     .eq('active', true)
     .order('display_name')
+  if (analystsError) console.error('[ManagementPerformancePage] Failed to fetch analysts:', analystsError.message)
 
-  const { data: kpiData } = await supabase
+  const { data: kpiData, error: kpiDataError } = await supabase
     .from('executive_kpis')
     .select('analyst_id, kpi_name, kpi_value, period_start')
     .gte('period_start', thirtyySixMonthsAgo)
     .order('period_start', { ascending: true })
+  if (kpiDataError) console.error('[ManagementPerformancePage] Failed to fetch executive_kpis:', kpiDataError.message)
 
-  const { data: shadowOutcomes } = await supabase
+  const { data: shadowOutcomes, error: shadowOutcomesError } = await supabase
     .from('shadow_trade_outcomes')
     .select(`
       trade_outcome_status,
       result_r,
       shadow_trade:shadow_trade_id ( rr )
     `)
+  if (shadowOutcomesError) console.error('[ManagementPerformancePage] Failed to fetch shadow_trade_outcomes:', shadowOutcomesError.message)
 
   // Supabase/PostgREST caps responses at 1000 rows server-side regardless of .limit() --
   // paginate with .range() to fetch all trades in the window (~1200+ rows in a 30-day span).
@@ -54,14 +57,17 @@ export default async function ManagementPerformancePage() {
     let page = 0
     let hasMore = true
     while (hasMore) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('actual_trades')
         .select('result_r, triggered, published_at, analyst_id, source_system')
         .in('source_system', ['ACUITY_PERFORMANCE_API', 'MANUAL_BACKFILL'])
         .gte('published_at', thirtyDaysAgo)
         .order('trade_id', { ascending: true })
         .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
-      if (!data?.length) { hasMore = false } else {
+      if (error) {
+        console.error('[ManagementPerformancePage] Failed to fetch actual_trades (30-day):', error.message)
+        hasMore = false
+      } else if (!data?.length) { hasMore = false } else {
         actualTrades.push(...data)
         hasMore = data.length === PAGE_SIZE
         page++
@@ -79,19 +85,21 @@ export default async function ManagementPerformancePage() {
   lastFri.setUTCDate(lastMon.getUTCDate() + 4)
   const lwStart = lastMon.toISOString().slice(0, 10)
   const lwEnd = lastFri.toISOString().slice(0, 10)
-  const { data: lastWeekPubs } = await adminDb
+  const { data: lastWeekPubs, error: lastWeekPubsError } = await adminDb
     .from('analyst_publications')
     .select('analyst_id, reconciliation_status')
     .eq('source_system', 'ACUITY_PERFORMANCE_API')
     .gte('published_at', lwStart)
     .lte('published_at', lwEnd + 'T23:59:59Z')
+  if (lastWeekPubsError) console.error('[ManagementPerformancePage] Failed to fetch last week analyst_publications:', lastWeekPubsError.message)
 
   // Fetch this month's API publications for trigger rate denominator (month-to-date)
-  const { data: thisMonthPubs } = await adminDb
+  const { data: thisMonthPubs, error: thisMonthPubsError } = await adminDb
     .from('analyst_publications')
     .select('analyst_id, reconciliation_status')
     .eq('source_system', 'ACUITY_PERFORMANCE_API')
     .gte('published_at', monthStart)
+  if (thisMonthPubsError) console.error('[ManagementPerformancePage] Failed to fetch this month analyst_publications:', thisMonthPubsError.message)
 
   // Live 30-day shadow performance for the "Shadow System Performance" tiles + trend --
   // replaces the old executive_kpis(kpi_visibility='INTERNAL_ONLY') read, which showed the
@@ -101,13 +109,14 @@ export default async function ManagementPerformancePage() {
   // successfully -- adminDb since this is management-only data with no analyst-facing RLS
   // grant. Filtered to the last 30 days here in JS rather than via a nested-column DB
   // filter (shadow_trade.generated_at), since the full history is only a few hundred rows.
-  const { data: shadowOutcomesAll } = await adminDb
+  const { data: shadowOutcomesAll, error: shadowOutcomesAllError } = await adminDb
     .from('shadow_trade_outcomes')
     .select(`
       trade_outcome_status,
       result_r,
       shadow_trade:shadow_trade_id ( rr, generated_at )
     `)
+  if (shadowOutcomesAllError) console.error('[ManagementPerformancePage] Failed to fetch shadow_trade_outcomes (all):', shadowOutcomesAllError.message)
   const shadowOutcomesRecent = ((shadowOutcomesAll ?? []) as any[]).filter(o =>
     o.shadow_trade?.generated_at && o.shadow_trade.generated_at.slice(0, 10) >= thirtyDaysAgo
   )
@@ -129,14 +138,17 @@ export default async function ManagementPerformancePage() {
     let page = 0
     let hasMore = true
     while (hasMore) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('actual_trades')
         .select('result_r, triggered, published_at, analyst_id, source_system')
         .in('source_system', ['ACUITY_PERFORMANCE_API', 'MANUAL_BACKFILL'])
         .gte('published_at', shadowStartDate)
         .order('trade_id', { ascending: true })
         .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
-      if (!data?.length) { hasMore = false } else {
+      if (error) {
+        console.error('[ManagementPerformancePage] Failed to fetch actual_trades (since launch):', error.message)
+        hasMore = false
+      } else if (!data?.length) { hasMore = false } else {
         rawSinceLaunchTrades.push(...data)
         hasMore = data.length === PAGE_SIZE
         page++
@@ -163,7 +175,7 @@ export default async function ManagementPerformancePage() {
     let page = 0
     let hasMore = true
     while (hasMore) {
-      const { data } = await adminDb
+      const { data, error } = await adminDb
         .from('analyst_publications')
         .select('published_at, reconciliation_status')
         .eq('source_system', 'ACUITY_PERFORMANCE_API')
@@ -171,7 +183,10 @@ export default async function ManagementPerformancePage() {
         .order('published_at', { ascending: false })
         .order('publication_id', { ascending: false })
         .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
-      if (!data?.length) { hasMore = false } else {
+      if (error) {
+        console.error('[ManagementPerformancePage] Failed to fetch analyst_publications (since launch):', error.message)
+        hasMore = false
+      } else if (!data?.length) { hasMore = false } else {
         sinceLaunchActualPublications.push(...data)
         hasMore = data.length === PAGE_SIZE
         page++

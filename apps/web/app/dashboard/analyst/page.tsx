@@ -55,12 +55,13 @@ export default async function AnalystWorkspacePage() {
   // allocation already exists -- see migrations/049_daily_coverage_plan.sql's comment.
   const supabase = await createClient()
   const today = new Date().toISOString().slice(0, 10)
-  const { data: coveragePlan } = await supabase
+  const { data: coveragePlan, error: coveragePlanError } = await supabase
     .from('daily_coverage_plan')
     .select('market:market_id ( symbol, asset_class ), session')
     .eq('date', today)
     .eq('analyst_id', user.analystId)
     .order('session')
+  if (coveragePlanError) console.error('[AnalystWorkspacePage] Failed to fetch daily_coverage_plan:', coveragePlanError.message)
 
   // Use actual engine allocation when available, fall back to the advisory plan
   // (and, failing that, to however many recommendations have generated so far).
@@ -86,12 +87,13 @@ export default async function AnalystWorkspacePage() {
   // this workspace (see workspaceData.ts's file header comment) rather than exposing
   // team-wide availability rows to the ANALYST role at the database layer.
   const adminDb = createAdminClient()
-  const { data: todayAbsences } = await adminDb
+  const { data: todayAbsences, error: todayAbsencesError } = await adminDb
     .from('analyst_availability')
     .select('analyst:analyst_id(display_name), reason')
     .eq('date', today)
     .eq('available', false)
     .neq('analyst_id', user.analystId)
+  if (todayAbsencesError) console.error('[AnalystWorkspacePage] Failed to fetch analyst_availability:', todayAbsencesError.message)
 
   return (
     <div className="space-y-6">

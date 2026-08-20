@@ -10,12 +10,13 @@ export default async function AnalystAvailabilityPage() {
 
   const supabase = await createClient()
 
-  const { data: absences } = await supabase
+  const { data: absences, error: absencesError } = await supabase
     .from('analyst_availability')
     .select('availability_id, date, session, status, reason')
     .eq('analyst_id', user.analystId)
     .gte('date', new Date().toISOString().slice(0, 10))
     .order('date', { ascending: true })
+  if (absencesError) console.error('[AnalystAvailabilityPage] Failed to fetch analyst_availability:', absencesError.message)
 
   return (
     <div className="space-y-6">

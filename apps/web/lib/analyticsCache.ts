@@ -24,12 +24,15 @@ async function fetchAllTrades(): Promise<any[]> {
   const all: any[] = []
   let page = 0, hasMore = true
   while (hasMore) {
-    const { data } = await db.from('actual_trades').select(FIELDS)
+    const { data, error } = await db.from('actual_trades').select(FIELDS)
       .gte('published_at', SINCE_INCEPTION_FLOOR + 'T00:00:00Z')
       .order('published_at', { ascending: false })
       .order('trade_id', { ascending: false })
       .range(page * 1000, page * 1000 + 999)
-    if (!data?.length) { hasMore = false } else { all.push(...data); hasMore = data.length === 1000; page++ }
+    if (error) {
+      console.error('[analyticsCache] Failed to fetch actual_trades:', error.message)
+      hasMore = false
+    } else if (!data?.length) { hasMore = false } else { all.push(...data); hasMore = data.length === 1000; page++ }
     if (all.length >= 150_000) break
   }
   return all
@@ -40,14 +43,17 @@ async function fetchAllPublications(): Promise<any[]> {
   const all: any[] = []
   let page = 0, hasMore = true
   while (hasMore) {
-    const { data } = await db.from('analyst_publications')
+    const { data, error } = await db.from('analyst_publications')
       .select('analyst_id, market_id, published_at, reconciliation_status')
       .eq('source_system', 'ACUITY_PERFORMANCE_API')
       .gte('published_at', SINCE_INCEPTION_FLOOR + 'T00:00:00Z')
       .order('published_at', { ascending: false })
       .order('publication_id', { ascending: false })
       .range(page * 1000, page * 1000 + 999)
-    if (!data?.length) { hasMore = false } else { all.push(...data); hasMore = data.length === 1000; page++ }
+    if (error) {
+      console.error('[analyticsCache] Failed to fetch analyst_publications:', error.message)
+      hasMore = false
+    } else if (!data?.length) { hasMore = false } else { all.push(...data); hasMore = data.length === 1000; page++ }
     if (all.length >= 150_000) break
   }
   return all
@@ -63,6 +69,8 @@ async function computeDefaultAnalyticsView() {
     db.from('analysts').select('analyst_id, display_name, active').order('display_name'),
     db.from('markets').select('market_id, symbol, asset_class').order('asset_class, symbol'),
   ])
+  if (analystsRes.error) console.error('[analyticsCache] Failed to fetch analysts:', analystsRes.error.message)
+  if (marketsRes.error) console.error('[analyticsCache] Failed to fetch markets:', marketsRes.error.message)
   const analysts = (analystsRes.data as any[]) ?? []
   const markets = (marketsRes.data as any[]) ?? []
   const analystNameById = new Map(analysts.map(a => [a.analyst_id, a.display_name]))
@@ -152,11 +160,17 @@ export type DefaultAnalyticsView = Awaited<ReturnType<typeof computeDefaultAnaly
 export async function getCachedDefaultAnalyticsView(): Promise<DefaultAnalyticsView> {
   const db = createAdminClient()
 
-  const { data } = await db
+  const { data, error } = await db
     .from('analytics_cache')
     .select('payload, computed_at')
     .eq('cache_key', CACHE_KEY)
     .single()
+
+  // PGRST116 ("no rows returned") is the routine cache-miss case .single() always hits on
+  // the very first call -- not a real failure, so it's excluded from the error log below.
+  if (error && error.code !== 'PGRST116') {
+    console.error('[analyticsCache] Failed to read analytics_cache:', error.message)
+  }
 
   if (data) {
     console.log(`Analytics cache hit (computed ${data.computed_at})`)
@@ -165,18 +179,20 @@ export async function getCachedDefaultAnalyticsView(): Promise<DefaultAnalyticsV
 
   console.log('Analytics cache miss -- computing...')
   const result = await computeDefaultAnalyticsView()
-  await db.from('analytics_cache').upsert({
+  const { error: upsertError } = await db.from('analytics_cache').upsert({
     cache_key: CACHE_KEY,
     payload: result as any,
     computed_at: new Date().toISOString(),
     trade_count: result.tradeCount,
   })
+  if (upsertError) console.error('[analyticsCache] Failed to write analytics_cache:', upsertError.message)
   return result
 }
 
 export async function invalidateAnalyticsCache(): Promise<void> {
   const db = createAdminClient()
-  await db.from('analytics_cache').delete().eq('cache_key', CACHE_KEY)
+  const { error } = await db.from('analytics_cache').delete().eq('cache_key', CACHE_KEY)
+  if (error) console.error('[analyticsCache] Failed to invalidate analytics_cache:', error.message)
 }
 
 export { computeDefaultAnalyticsView }

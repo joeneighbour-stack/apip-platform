@@ -9,7 +9,7 @@ export default async function OpportunityCentrePage() {
   const isManager = ['MANAGER', 'ADMIN'].includes(user.role)
   const today = new Date().toISOString().split('T')[0]
 
-  const { data: opportunities } = await supabase
+  const { data: opportunities, error: opportunitiesError } = await supabase
     .from('opportunities')
     .select(`
       opportunity_id, direction, analyst_action,
@@ -21,11 +21,12 @@ export default async function OpportunityCentrePage() {
     `)
     .eq('date', today)
     .order('expected_r', { ascending: false })
+  if (opportunitiesError) console.error('[OpportunityCentrePage] Failed to fetch opportunities:', opportunitiesError.message)
 
   // For analyst view -- fetch their coaching recommendations to get ranges
   let coachingByOpportunity: Map<string, any> = new Map()
   if (!isManager && user.analystId) {
-    const { data: coaching } = await supabase
+    const { data: coaching, error: coachingError } = await supabase
       .from('coaching_recommendations')
       .select(`
         opportunity_id, entry_range_low, entry_range_high,
@@ -33,6 +34,7 @@ export default async function OpportunityCentrePage() {
         expected_r, coaching_note
       `)
       .eq('analyst_id', user.analystId)
+    if (coachingError) console.error('[OpportunityCentrePage] Failed to fetch coaching_recommendations:', coachingError.message)
     coachingByOpportunity = new Map(
       (coaching ?? []).map(c => [c.opportunity_id, c])
     )

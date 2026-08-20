@@ -10,15 +10,17 @@ export default async function PerformanceAnalyticsPage() {
 
   const supabase = await createClient()
 
-  const { data: analysts } = await supabase
+  const { data: analysts, error: analystsError } = await supabase
     .from('analysts')
     .select('analyst_id, display_name, active')
     .order('display_name')
+  if (analystsError) console.error('[PerformanceAnalyticsPage] Failed to fetch analysts:', analystsError.message)
 
-  const { data: markets } = await supabase
+  const { data: markets, error: marketsError } = await supabase
     .from('markets')
     .select('market_id, symbol, asset_class')
     .order('asset_class, symbol')
+  if (marketsError) console.error('[PerformanceAnalyticsPage] Failed to fetch markets:', marketsError.message)
 
   return (
     <div className="space-y-6">

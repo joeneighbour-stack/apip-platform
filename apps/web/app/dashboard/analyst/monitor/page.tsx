@@ -16,12 +16,13 @@ export default async function AnalystMonitorPage() {
   if (yesterday.getDay() === 6) yesterday.setDate(yesterday.getDate() - 1)
   const yesterdayStr = yesterday.toISOString().slice(0, 10)
 
-  const { data: yesterdayTrades } = await supabase
+  const { data: yesterdayTrades, error: yesterdayTradesError } = await supabase
     .from('actual_trades')
     .select('trade_id, result_r, triggered, direction, market:market_id ( symbol )')
     .eq('analyst_id', user.analystId)
     .gte('published_at', yesterdayStr + 'T00:00:00Z')
     .lt('published_at', yesterdayStr + 'T23:59:59Z')
+  if (yesterdayTradesError) console.error('[AnalystMonitorPage] Failed to fetch yesterday actual_trades:', yesterdayTradesError.message)
 
   const ytrades = (yesterdayTrades ?? []) as any[]
   const yTriggered = ytrades.filter(t => t.triggered === true)
@@ -34,7 +35,7 @@ export default async function AnalystMonitorPage() {
   // Last 30 days trades for trade log
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
-  const { data: recentTrades } = await supabase
+  const { data: recentTrades, error: recentTradesError } = await supabase
     .from('actual_trades')
     .select(`
       trade_id, direction, result_r, triggered,
@@ -44,15 +45,17 @@ export default async function AnalystMonitorPage() {
     .eq('analyst_id', user.analystId)
     .gte('published_at', thirtyDaysAgo + 'T00:00:00Z')
     .order('published_at', { ascending: false })
+  if (recentTradesError) console.error('[AnalystMonitorPage] Failed to fetch recent actual_trades:', recentTradesError.message)
 
   const tradeIds = (recentTrades ?? []).map((t: any) => t.trade_id)
 
-  const { data: tradeDetails } = tradeIds.length > 0
+  const { data: tradeDetails, error: tradeDetailsError } = tradeIds.length > 0
     ? await supabase
         .from('actual_trades')
         .select('trade_id, entry, stop, target, session')
         .in('trade_id', tradeIds)
-    : { data: [] }
+    : { data: [], error: null }
+  if (tradeDetailsError) console.error('[AnalystMonitorPage] Failed to fetch trade details:', tradeDetailsError.message)
 
   const detailsByTradeId = new Map((tradeDetails ?? []).map((t: any) => [t.trade_id, t]))
   const tradesWithDetails = (recentTrades ?? []).map((t: any) => ({
@@ -73,7 +76,7 @@ export default async function AnalystMonitorPage() {
   // on a plain `trade:trade_id(...)` embed returns EVERY post_trade_reviews row
   // (all analysts), just nulling out `trade` on non-matching rows -- it does not
   // filter the outer query. `trade:trade_id!inner(...)` does filter correctly.
-  const { data: reviews } = await supabase
+  const { data: reviews, error: reviewsError } = await supabase
     .from('post_trade_reviews')
     .select(`
       review_id, trade_id, market, session,
@@ -84,6 +87,7 @@ export default async function AnalystMonitorPage() {
     .eq('trade.analyst_id', user.analystId)
     .order('created_at', { ascending: false })
     .limit(100)
+  if (reviewsError) console.error('[AnalystMonitorPage] Failed to fetch post_trade_reviews:', reviewsError.message)
 
   const reviewList = (reviews ?? []) as any[]
   const reviewsByTradeId = new Map(reviewList.map(r => [r.trade_id, r]))
@@ -106,10 +110,11 @@ export default async function AnalystMonitorPage() {
     : null
 
   // Existing disputes
-  const { data: disputes } = await supabase
+  const { data: disputes, error: disputesError } = await supabase
     .from('trade_disputes')
     .select('trade_id, status, dispute_type')
     .eq('raised_by_analyst_id', user.analystId)
+  if (disputesError) console.error('[AnalystMonitorPage] Failed to fetch trade_disputes:', disputesError.message)
 
   const disputesByTradeId = new Map(
     (disputes ?? []).map((d: any) => [d.trade_id, d])

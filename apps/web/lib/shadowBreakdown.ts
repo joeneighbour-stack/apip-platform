@@ -52,11 +52,16 @@ export async function getShadowBreakdownData(adminDb: SupabaseClient): Promise<S
   // same column getCachedDefaultAnalyticsView() already reads/writes for its own cache_key,
   // so this reuses that existing convention rather than adding a second, redundant
   // "when was this row written" column that only this cache_key would use.
-  const { data: cached } = await adminDb
+  const { data: cached, error: cacheReadError } = await adminDb
     .from('analytics_cache')
     .select('payload, computed_at')
     .eq('cache_key', SHADOW_CACHE_KEY)
     .single()
+  // PGRST116 ("no rows returned") is the routine cache-miss case .single() always hits
+  // before this cache_key has ever been written -- not a real failure.
+  if (cacheReadError && cacheReadError.code !== 'PGRST116') {
+    console.error('[getShadowBreakdownData] Failed to read analytics_cache:', cacheReadError.message)
+  }
 
   if (cached) {
     const ageMinutes = (Date.now() - new Date(cached.computed_at).getTime()) / 60000
@@ -67,12 +72,13 @@ export async function getShadowBreakdownData(adminDb: SupabaseClient): Promise<S
 
   const freshData = await fetchShadowBreakdownData(adminDb)
 
-  await adminDb.from('analytics_cache').upsert({
+  const { error: cacheWriteError } = await adminDb.from('analytics_cache').upsert({
     cache_key: SHADOW_CACHE_KEY,
     payload: freshData as any,
     computed_at: new Date().toISOString(),
     trade_count: freshData.rows.length,
   }, { onConflict: 'cache_key' })
+  if (cacheWriteError) console.error('[getShadowBreakdownData] Failed to write analytics_cache:', cacheWriteError.message)
 
   return freshData
 }
@@ -90,18 +96,20 @@ export async function getShadowBreakdownData(adminDb: SupabaseClient): Promise<S
 // query, same computation, so both pages show identical numbers for "the same" comparison.
 async function fetchShadowBreakdownData(adminDb: SupabaseClient): Promise<ShadowBreakdownData> {
   const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-  const { data: earliestShadowTrade } = await adminDb
+  const { data: earliestShadowTrade, error: earliestShadowTradeError } = await adminDb
     .from('shadow_trades')
     .select('generated_at')
     .order('generated_at', { ascending: true })
     .limit(1)
+  if (earliestShadowTradeError) console.error('[getShadowBreakdownData] Failed to fetch earliest shadow_trades:', earliestShadowTradeError.message)
   const shadowStartDate = (earliestShadowTrade as any[] | null)?.[0]?.generated_at?.slice(0, 10) ?? ninetyDaysAgo
 
-  const { data: breakdownAnalystsRaw } = await adminDb
+  const { data: breakdownAnalystsRaw, error: breakdownAnalystsError } = await adminDb
     .from('analysts')
     .select('analyst_id, display_name')
     .eq('active', true)
     .order('display_name')
+  if (breakdownAnalystsError) console.error('[getShadowBreakdownData] Failed to fetch analysts:', breakdownAnalystsError.message)
   const analysts = (breakdownAnalystsRaw as any[]) ?? []
 
   const breakdownShadowRaw: any[] = []
@@ -110,7 +118,7 @@ async function fetchShadowBreakdownData(adminDb: SupabaseClient): Promise<Shadow
     let page = 0
     let hasMore = true
     while (hasMore) {
-      const { data } = await adminDb
+      const { data, error } = await adminDb
         .from('shadow_trade_outcomes')
         .select(`
           shadow_outcome_id,
@@ -126,7 +134,10 @@ async function fetchShadowBreakdownData(adminDb: SupabaseClient): Promise<Shadow
         `)
         .order('shadow_outcome_id', { ascending: true })
         .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
-      if (!data?.length) { hasMore = false } else {
+      if (error) {
+        console.error('[getShadowBreakdownData] Failed to fetch shadow_trade_outcomes:', error.message)
+        hasMore = false
+      } else if (!data?.length) { hasMore = false } else {
         breakdownShadowRaw.push(...data)
         hasMore = data.length === PAGE_SIZE
         page++
@@ -140,14 +151,17 @@ async function fetchShadowBreakdownData(adminDb: SupabaseClient): Promise<Shadow
     let page = 0
     let hasMore = true
     while (hasMore) {
-      const { data } = await adminDb
+      const { data, error } = await adminDb
         .from('analyst_publications')
         .select('analyst_id, market_id, direction, published_at, effective_triggered')
         .eq('source_system', 'ACUITY_PERFORMANCE_API')
         .gte('published_at', shadowStartDate)
         .order('publication_id', { ascending: true })
         .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
-      if (!data?.length) { hasMore = false } else {
+      if (error) {
+        console.error('[getShadowBreakdownData] Failed to fetch analyst_publications:', error.message)
+        hasMore = false
+      } else if (!data?.length) { hasMore = false } else {
         breakdownPublications.push(...data)
         hasMore = data.length === PAGE_SIZE
         page++
@@ -161,14 +175,17 @@ async function fetchShadowBreakdownData(adminDb: SupabaseClient): Promise<Shadow
     let page = 0
     let hasMore = true
     while (hasMore) {
-      const { data } = await adminDb
+      const { data, error } = await adminDb
         .from('actual_trades')
         .select('analyst_id, market_id, direction, published_at, result_r, triggered, source_system')
         .in('source_system', ['ACUITY_PERFORMANCE_API', 'MANUAL_BACKFILL'])
         .gte('published_at', shadowStartDate)
         .order('trade_id', { ascending: true })
         .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
-      if (!data?.length) { hasMore = false } else {
+      if (error) {
+        console.error('[getShadowBreakdownData] Failed to fetch actual_trades:', error.message)
+        hasMore = false
+      } else if (!data?.length) { hasMore = false } else {
         breakdownActualTrades.push(...data)
         hasMore = data.length === PAGE_SIZE
         page++

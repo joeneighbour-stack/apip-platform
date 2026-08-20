@@ -26,7 +26,7 @@ export default async function ShadowMonitoringPage() {
     let page = 0
     let hasMore = true
     while (hasMore) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('shadow_trade_outcomes')
         .select(`
           shadow_outcome_id,
@@ -47,7 +47,10 @@ export default async function ShadowMonitoringPage() {
         `)
         .order('shadow_outcome_id', { ascending: false })
         .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
-      if (!data?.length) { hasMore = false } else {
+      if (error) {
+        console.error('[ShadowMonitoringPage] Failed to fetch shadow_trade_outcomes:', error.message)
+        hasMore = false
+      } else if (!data?.length) { hasMore = false } else {
         shadowOutcomes.push(...data)
         hasMore = data.length === PAGE_SIZE
         page++
@@ -68,7 +71,7 @@ export default async function ShadowMonitoringPage() {
     let page = 0
     let hasMore = true
     while (hasMore) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('actual_trades')
         .select(`
           trade_id, direction, result_r, triggered, published_at, analyst_id, source_system,
@@ -78,7 +81,10 @@ export default async function ShadowMonitoringPage() {
         .order('published_at', { ascending: false })
         .order('trade_id', { ascending: false })
         .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
-      if (!data?.length) { hasMore = false } else {
+      if (error) {
+        console.error('[ShadowMonitoringPage] Failed to fetch actual_trades:', error.message)
+        hasMore = false
+      } else if (!data?.length) { hasMore = false } else {
         rawActualTrades.push(...data)
         hasMore = data.length === PAGE_SIZE
         page++
@@ -118,7 +124,7 @@ export default async function ShadowMonitoringPage() {
     let page = 0
     let hasMore = true
     while (hasMore) {
-      const { data } = await adminDb
+      const { data, error } = await adminDb
         .from('analyst_publications')
         .select('published_at, reconciliation_status')
         .eq('source_system', 'ACUITY_PERFORMANCE_API')
@@ -126,7 +132,10 @@ export default async function ShadowMonitoringPage() {
         .order('published_at', { ascending: false })
         .order('publication_id', { ascending: false })
         .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
-      if (!data?.length) { hasMore = false } else {
+      if (error) {
+        console.error('[ShadowMonitoringPage] Failed to fetch analyst_publications:', error.message)
+        hasMore = false
+      } else if (!data?.length) { hasMore = false } else {
         rawActualPublications.push(...data)
         hasMore = data.length === PAGE_SIZE
         page++
