@@ -76,6 +76,16 @@ export default async function AnalystWorkspacePage() {
     coverageBySession.get(row.session)!.push(symbol)
   }
 
+  // Other analysts out today, so this analyst knows why their own coverage might be
+  // wider than usual (unfilled markets get redistributed by the analyst-first scoring
+  // in runEngineSession.ts / the workload-balanced fallback allocation).
+  const { data: todayAbsences } = await supabase
+    .from('analyst_availability')
+    .select('analyst:analyst_id(display_name), reason')
+    .eq('date', today)
+    .eq('available', false)
+    .neq('analyst_id', user.analystId)
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -110,6 +120,19 @@ export default async function AnalystWorkspacePage() {
           )}
         </div>
       </div>
+
+      {/* Team absences today */}
+      {todayAbsences && todayAbsences.length > 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <p className="text-xs font-medium text-amber-800">
+            Absent today:{' '}
+            {(todayAbsences as any[]).map(a => a.analyst?.display_name).filter(Boolean).join(', ')}
+          </p>
+          <p className="text-xs text-amber-700 mt-0.5">
+            Markets may be redistributed across the team.
+          </p>
+        </div>
+      )}
 
       {/* Day-start coverage plan -- available from 04:20 UTC, before any session's
           real recommendations exist */}
