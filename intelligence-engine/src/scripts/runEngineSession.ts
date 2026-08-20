@@ -1021,7 +1021,14 @@ async function main() {
             direction: shadowTrade.direction,
             session: shadowTrade.session,
             generated_at: generatedAt,
-            entry_mode: item.opp.analystAction === 'ENTER_NOW' ? 'ENTER_NOW' : 'WAIT_FOR_PREFERRED_ZONE',
+            // Every shadow trade waits for price to reach the entry range, regardless
+            // of the analyst-facing analystAction (which stays ENTER_NOW/
+            // WAIT_FOR_PREFERRED_ZONE on the opportunity itself -- that's still a valid
+            // read on current price vs. the preferred zone for the analyst). Triggering
+            // a shadow trade at the snapshot price the moment it's generated was never a
+            // real "entry" -- it's not a benchmark for what a disciplined trader would
+            // have actually done.
+            entry_mode: 'WAIT_FOR_PREFERRED_ZONE',
             generated_price: Number(intraday.current_price),
             expires_at: computeExpiresAt(session, market.asset_class ?? null, new Date(generatedAt)).toISOString(),
             price_provider: 'FINNHUB_OANDA',
@@ -1033,10 +1040,12 @@ async function main() {
             await db.from('shadow_trade_outcomes').insert({
               shadow_outcome_id: shadowTradeOutcome.shadowOutcomeId,
               shadow_trade_id: shadowRow.shadow_trade_id,
-              trade_outcome_status: item.opp.analystAction === 'ENTER_NOW' ? 'TRIGGERED' : 'NOT_TRIGGERED',
-              triggered_at:    item.opp.analystAction === 'ENTER_NOW' ? generatedAt : null,
-              triggered_price: item.opp.analystAction === 'ENTER_NOW' ? Number(intraday.current_price) : null,
-              trigger_source:  item.opp.analystAction === 'ENTER_NOW' ? 'ENTER_NOW_AT_GENERATION' : null,
+              // shadow trade outcome always starts NOT_TRIGGERED -- price must reach
+              // the entry range before triggering.
+              trade_outcome_status: 'NOT_TRIGGERED',
+              triggered_at: null,
+              triggered_price: null,
+              trigger_source: null,
             })
             shadowTradesCreated++
           } else if (shadowError) {
