@@ -67,14 +67,14 @@ export function EvidencePillars({ row }: Props) {
   const setup = regime ? setupContext(row.direction, regime.trendState, row.currentZone, row.preferredZone, regime.adx14) : null
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4 text-center">
-      <div className="sm:pr-6 sm:border-r sm:border-border space-y-2 text-center">
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
+      <div className="sm:pr-6 sm:border-r sm:border-border space-y-2">
         <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Your Historical Profile</p>
         {tier.tier === 'NONE' ? (
           <p className="text-xs text-muted-foreground">No meaningful history available for this setup.</p>
         ) : (
           <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2">
-            <div className="flex items-center justify-center gap-2">
+            <div className="flex items-center gap-2">
               <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border flex-shrink-0 ${tierBadgeClass(tier.tier)}`}>
                 {tier.tier}
               </span>
@@ -102,7 +102,7 @@ export function EvidencePillars({ row }: Props) {
         </div>
       </div>
 
-      <div className="text-center">
+      <div>
         <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-2">Today&apos;s Conditions</p>
         {regime && trend && volatility && priceLocation && setup ? (
           <div className="space-y-3">
@@ -120,8 +120,8 @@ export function EvidencePillars({ row }: Props) {
 
             <div>
               <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Price Location</p>
-              <div className="flex items-center justify-center gap-1.5">
-                <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${priceLocationDotClass(priceLocation.headline)}`} />
+              <div className="flex items-start gap-1.5">
+                <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1 ${priceLocationDotClass(priceLocation.headline)}`} />
                 <p className="text-sm font-medium">{priceLocation.headline}</p>
               </div>
               <p className="text-xs text-muted-foreground mt-0.5">{priceLocation.implication}</p>

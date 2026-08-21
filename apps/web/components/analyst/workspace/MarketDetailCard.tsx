@@ -23,7 +23,7 @@ interface Props {
 // structure, not charting.
 export function MarketDetailCard({ row, newsHeadline, recommendationsGeneratedToday, marketsAllocatedToday }: Props) {
   return (
-    <div className="border-t border-border bg-muted/20 p-5 space-y-4 text-center">
+    <div className="border-t border-border bg-muted/20 p-5 space-y-4">
       <PrimaryRecommendation row={row} />
       <MarketContext newsHeadline={newsHeadline} />
       <MajorEventWarning eventRiskItems={row.eventRiskItems} />
