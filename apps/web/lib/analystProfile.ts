@@ -1,4 +1,5 @@
 import { createClient, createAdminClient } from '@/lib/supabase/server'
+import { maxDrawdown, type MetricsTrade } from '@/lib/metrics'
 
 export interface AnalystProfileData {
   analyst: { analyst_id: string; display_name: string; active: boolean } | null
@@ -67,13 +68,13 @@ export async function getAnalystProfileData(
   // partial (e.g. total_return_r computed before this week's trades, no triggered_rate
   // row yet at all -- confirmed against production: 2026-08 had total_return_r/
   // max_drawdown/win_rate but no triggered_rate row). total_return_r/win_rate/
-  // triggered_rate for the current month are therefore always computed live from
-  // actual_trades + analyst_publications here and override whatever executive_kpis has --
-  // the same "This Month is always live, never read from the KPI table" rule
-  // management/performance/page.tsx's TeamPerformanceGrid uses for its own This Month
-  // view. max_drawdown (and alignment_rate, which has no live equivalent) are left
-  // exactly as executive_kpis has them for the current month, present or not -- a
-  // missing one doesn't block the others, it just reads as "--" downstream.
+  // triggered_rate/max_drawdown for the current month are therefore always computed
+  // live from actual_trades + analyst_publications here and override whatever
+  // executive_kpis has -- the same "This Month is always live, never read from the KPI
+  // table" rule management/performance/page.tsx's TeamPerformanceGrid uses for its own
+  // This Month view. alignment_rate (which has no live equivalent) is left exactly as
+  // executive_kpis has it for the current month, present or not -- a missing KPI
+  // doesn't block the others, it just reads as "--" downstream.
   const { data: monthTradesRaw, error: monthTradesError } = await supabase
     .from('actual_trades')
     .select('result_r, triggered, published_at, source_system')
@@ -87,6 +88,17 @@ export async function getAnalystProfileData(
   const monthWins = monthTriggered.filter((t: any) => (t.result_r ?? 0) > 0)
   const liveTotalR = monthTriggered.reduce((s: number, t: any) => s + (t.result_r ?? 0), 0)
   const liveWinRate = monthTriggered.length > 0 ? monthWins.length / monthTriggered.length : null
+  // monthTriggered only carries the 4 columns this query actually selects (result_r,
+  // triggered, published_at, source_system) -- maxDrawdown() only reads result_r/
+  // triggered/published_at (via its internal triggeredTrades() filter), so the other
+  // MetricsTrade fields (analyst_id, market_id, etc.) are irrelevant to a single-
+  // analyst, single-month drawdown calc and the cast is safe. Passing the row's real
+  // `triggered: true` through matters: a naive { result_r, published_at }-only
+  // projection would drop that field, and triggeredTrades()'s own re-filter inside
+  // maxDrawdown() would then discard every row, silently zeroing the result.
+  const liveMaxDrawdown = monthTriggered.length > 0
+    ? maxDrawdown(monthTriggered as unknown as MetricsTrade[])
+    : null
 
   // analyst_publications has no ANALYST self-select RLS policy (only ADMIN/RESEARCH and
   // MANAGER-scoped -- migrations/018_publication_rls.sql), same reason
@@ -110,10 +122,11 @@ export async function getAnalystProfileData(
     { kpi_name: 'total_return_r', kpi_value: { value: liveTotalR, unit: 'R', trade_count: monthTriggered.length }, period_start: monthStart, period_end: null },
     ...(liveWinRate !== null ? [{ kpi_name: 'win_rate', kpi_value: { value: liveWinRate, unit: 'rate', wins: monthWins.length, triggered: monthTriggered.length }, period_start: monthStart, period_end: null }] : []),
     ...(liveTrigRate !== null ? [{ kpi_name: 'triggered_rate', kpi_value: { value: liveTrigRate, unit: 'rate', triggered: apiTriggered.length, total_setups: pubTotal }, period_start: monthStart, period_end: null }] : []),
+    ...(liveMaxDrawdown !== null ? [{ kpi_name: 'max_drawdown', kpi_value: { value: liveMaxDrawdown.value, unit: 'R', sequence_length: liveMaxDrawdown.sequenceLength }, period_start: monthStart, period_end: null }] : []),
   ]
 
   const baseKpiTrend = (kpiTrend as any[]) ?? []
-  const staleCurrentMonthMetrics = new Set(['total_return_r', 'win_rate', 'triggered_rate'])
+  const staleCurrentMonthMetrics = new Set(['total_return_r', 'win_rate', 'triggered_rate', 'max_drawdown'])
   const mergedKpiTrend = [
     ...baseKpiTrend.filter((k: any) => !(k.period_start === monthStart && staleCurrentMonthMetrics.has(k.kpi_name))),
     ...liveRows,
