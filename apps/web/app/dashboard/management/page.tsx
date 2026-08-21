@@ -136,7 +136,7 @@ export default async function ManagementWorkspacePage() {
       market:market_id ( symbol, asset_class )
     `)
     .gte('published_at', thirtyDaysAgo + 'T00:00:00Z')
-    .eq('source_system', 'ACUITY_PERFORMANCE_API')
+    .in('source_system', ['ACUITY_PERFORMANCE_API', 'MANUAL_BACKFILL'])
     .order('published_at', { ascending: false })
     .limit(500)
 
