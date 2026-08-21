@@ -1,5 +1,6 @@
 'use client'
 import { Fragment, useEffect, useState } from 'react'
+import { ChevronDown } from 'lucide-react'
 import { MarketDetailCard } from './MarketDetailCard'
 import {
   coverageZoneLabel,
@@ -65,6 +66,7 @@ export function CoverageStrip({ rows, recommendationsGeneratedToday = 0 }: Props
               <th className="font-medium py-2 px-3">Regime</th>
               <th className="font-medium py-2 px-3">Event Risk</th>
               <th className="font-medium py-2 px-3">Expires</th>
+              <th className="font-medium py-2 px-3" aria-hidden />
             </tr>
           </thead>
           <tbody>
@@ -80,12 +82,13 @@ export function CoverageStrip({ rows, recommendationsGeneratedToday = 0 }: Props
                     onClick={() => setExpandedId(isExpanded ? null : row.recommendationId)}
                     role="button"
                     tabIndex={0}
+                    title="Click to expand"
                     onKeyDown={e => {
                       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpandedId(isExpanded ? null : row.recommendationId) }
                     }}
-                    className={`cursor-pointer border-t border-border hover:bg-muted/30 transition-colors ${
+                    className={`cursor-pointer border-t border-border transition-colors ${
                       i % 2 === 1 ? 'bg-muted/10' : ''
-                    } ${row.isDoNotUse ? 'opacity-60' : ''} ${isExpanded ? 'bg-muted/30' : ''}`}
+                    } ${row.isDoNotUse ? 'opacity-60' : ''} ${isExpanded ? 'bg-muted/60' : 'hover:bg-muted/40'}`}
                   >
                     <td className="py-2 px-3 font-medium">{row.symbol}</td>
                     <td className="py-2 px-3">
@@ -131,13 +134,18 @@ export function CoverageStrip({ rows, recommendationsGeneratedToday = 0 }: Props
                     </td>
                     <td className="py-2 px-3">{row.hasHighImpactEventToday && <span className="text-amber-600">⚠</span>}</td>
                     <td className="py-2 px-3 text-muted-foreground">{countdownLabel(sessionEnd)}</td>
+                    <td className="py-2 px-3 text-right">
+                      <ChevronDown
+                        className={`w-3.5 h-3.5 text-muted-foreground transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                      />
+                    </td>
                   </tr>
                   {/* The headline used to get a slim preview row here too, duplicating
                       what the expanded MarketDetailCard's own header now shows --
                       removed in favour of that single, always-visible copy. */}
                   {isExpanded && (
                     <tr>
-                      <td colSpan={9} className="p-0">
+                      <td colSpan={10} className="p-0">
                         <MarketDetailCard
                           row={row}
                           newsHeadline={headline ?? null}
