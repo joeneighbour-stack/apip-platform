@@ -1,8 +1,6 @@
 'use server'
 import { createServerClient } from '@supabase/ssr'
 import { revalidatePath } from 'next/cache'
-import { spawn } from 'node:child_process'
-import path from 'node:path'
 import { getCurrentUser } from '@/lib/auth'
 
 // Service role client -- bypasses RLS. Every mutation below (actual_trades,
@@ -155,11 +153,11 @@ export async function resolveDispute(
     })
   if (auditError) console.error('Failed to write audit log:', auditError.message)
 
-  // 5. KPI recalculation -- fire-and-forget, doesn't block the response. Reuses the same
-  // subprocess mechanism as api/admin/trades/manual-entry/route.ts (that route awaits it
-  // since its UI reports the outcome back; this one doesn't, since the task calls for a
-  // non-blocking trigger and there's no equivalent /api/kpis/refresh endpoint in this repo).
-  if (hasOverrides) triggerKpiRecalculation()
+  // 5. KPI recalculation -- the subprocess-based trigger (spawn with shell: true) failed
+  // on Railway because /bin/sh isn't at the expected path there. KPIs are weekly figures,
+  // so rather than fixing the subprocess, recalculation is simply left to the existing
+  // Monday scheduled job instead of being triggered synchronously from here.
+  if (hasOverrides) console.log('KPI recalculation will run on next scheduled Monday job')
 
   revalidatePath('/dashboard/management')
 
@@ -278,24 +276,4 @@ export async function raiseDispute(
   revalidatePath('/dashboard/management')
   revalidatePath('/dashboard/analyst/monitor')
   return { success: true }
-}
-
-// Mirrors api/admin/trades/manual-entry/route.ts's triggerKpiRecalculation() -- same
-// subprocess mechanism, kept as a separate copy rather than importing from that route
-// (Next.js API routes aren't meant to be imported as modules, and the task's own scope
-// explicitly excludes changing anything under ManualTradeEntryPanel/manual-entry).
-// Deliberately not awaited by its one caller above (resolveDispute) -- fire-and-forget.
-function triggerKpiRecalculation(): void {
-  const engineDir = path.resolve(process.cwd(), '..', '..', 'intelligence-engine')
-  const child = spawn('npx', ['tsx', 'src/scripts/calculateKpis.ts', '--months=3'], {
-    cwd: engineDir,
-    shell: true,
-    env: {
-      ...process.env,
-      SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
-      SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
-    },
-  })
-  child.on('error', err => console.error('KPI recalc failed to launch:', err.message))
-  child.unref()
 }

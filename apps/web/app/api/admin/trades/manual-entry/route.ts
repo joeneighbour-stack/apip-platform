@@ -1,8 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/server'
 import { getCurrentUser } from '@/lib/auth'
 import { NextResponse } from 'next/server'
-import { spawn } from 'node:child_process'
-import path from 'node:path'
 
 const IMPORT_BATCH_ID = 'eaa5252a-946f-4404-b0ee-965192dde6ac' // existing MANUAL_BACKFILL batch, target_table=actual_trades
 
@@ -36,54 +34,6 @@ function validate(body: any): { error: string } | { ok: true; resultR: number } 
   const resultR = calcResultR(direction, e, s, x)
   if (resultR < -1 || resultR > 15) return { error: `Result R (${resultR}) is outside the plausible range (-1 to +15) -- check the entered prices.` }
   return { ok: true, resultR }
-}
-
-// Best-effort: the trade insert has already succeeded by the time this runs, so a failure
-// or timeout here is reported back to the client but never rolls back or fails the request.
-// intelligence-engine is a separate npm package (no workspace link, own node_modules/lockfile)
-// -- calculateKpis.ts is only runnable as a CLI subprocess, not importable as a function (it's
-// not exported, and the package is pure ESM with no cross-package resolution set up). Its own
-// env var check wants SUPABASE_URL, which apps/web doesn't have (only NEXT_PUBLIC_SUPABASE_URL)
-// -- remapped explicitly below rather than passing process.env through as-is.
-function triggerKpiRecalculation(): Promise<{ status: 'success' | 'failed' | 'timeout'; message: string }> {
-  return new Promise(resolve => {
-    const engineDir = path.resolve(process.cwd(), '..', '..', 'intelligence-engine')
-    let settled = false
-    const child = spawn('npx', ['tsx', 'src/scripts/calculateKpis.ts', '--months=3'], {
-      cwd: engineDir,
-      shell: true,
-      env: {
-        ...process.env,
-        SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
-        SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
-      },
-    })
-
-    let stderr = ''
-    child.stderr?.on('data', d => { stderr += String(d) })
-
-    const timeout = setTimeout(() => {
-      if (settled) return
-      settled = true
-      child.kill()
-      resolve({ status: 'timeout', message: 'KPI recalculation did not finish within 90s -- it may still complete in the background; re-check the Team Performance page shortly.' })
-    }, 90_000)
-
-    child.on('error', err => {
-      if (settled) return
-      settled = true
-      clearTimeout(timeout)
-      resolve({ status: 'failed', message: `Could not launch calculateKpis.ts: ${err.message}` })
-    })
-
-    child.on('close', code => {
-      if (settled) return
-      settled = true
-      clearTimeout(timeout)
-      if (code === 0) resolve({ status: 'success', message: 'KPIs recalculated (last 3 months).' })
-      else resolve({ status: 'failed', message: `calculateKpis.ts exited with code ${code}: ${stderr.slice(-500)}` })
-    })
-  })
 }
 
 export async function POST(req: Request) {
@@ -152,7 +102,13 @@ export async function POST(req: Request) {
 
   if (insertError) return NextResponse.json({ error: insertError.message }, { status: 500 })
 
-  const kpiRecalc = await triggerKpiRecalculation()
+  // KPI recalculation -- the subprocess-based trigger (spawn with shell: true) failed on
+  // Railway because /bin/sh isn't at the expected path there. KPIs are weekly figures, so
+  // rather than fixing the subprocess, recalculation is simply left to the existing Monday
+  // scheduled job. kpiRecalc.message is kept in the response (rather than dropping the
+  // field) since ManualTradeEntryPanel.tsx already reads it for its success banner.
+  console.log('KPI recalculation will run on next scheduled Monday job')
+  const kpiRecalc = { status: 'skipped' as const, message: 'KPI recalculation will run on next scheduled Monday job' }
 
   return NextResponse.json({
     ok: true,
