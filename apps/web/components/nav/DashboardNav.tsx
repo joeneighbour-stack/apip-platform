@@ -1,10 +1,12 @@
 import Link from 'next/link'
+import { Settings } from 'lucide-react'
 import type { AppRole } from '@/lib/auth'
 
 interface NavItem {
   href: string
   label: string
   roles: AppRole[]
+  icon?: typeof Settings
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -12,6 +14,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: '/dashboard/analyst/performance', label: 'My Performance', roles: ['ANALYST'] },
   { href: '/dashboard/analyst/monitor', label: 'My Monitor', roles: ['ANALYST'] },
   { href: '/dashboard/analyst/availability',   label: 'My Availability',    roles: ['ANALYST'] },
+  { href: '/dashboard/analyst/settings',       label: 'Settings',           roles: ['ANALYST'], icon: Settings },
   { href: '/dashboard/management',             label: 'Management',         roles: ['MANAGER', 'ADMIN'] },
   { href: '/dashboard/management/performance', label: 'Team Performance',   roles: ['MANAGER', 'ADMIN', 'EXECUTIVE'] },
   { href: '/dashboard/management/shadow',      label: 'Shadow Monitoring',  roles: ['MANAGER', 'ADMIN', 'RESEARCH'] },
@@ -35,8 +38,9 @@ export function DashboardNav({ role, displayName }: NavProps) {
             <Link
               key={item.href}
               href={item.href}
-              className="px-3 py-1.5 rounded-md text-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
             >
+              {item.icon && <item.icon className="w-3.5 h-3.5" />}
               {item.label}
             </Link>
           ))}
