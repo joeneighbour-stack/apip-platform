@@ -265,6 +265,42 @@ async function main() {
   }
   console.log(`MANUAL_BACKFILL trades in sync window: ${backfillKeys.size} (dedup keys)`)
 
+  // ── Load resolved-dispute-protected trades ───────────────────────────────
+  // Trades with a RESOLVED dispute carrying override_values had their triggered/
+  // result_r manually corrected by a manager (resolveDispute() in
+  // apps/web/app/actions/disputes.ts) -- a re-import must never silently clobber
+  // that correction back to whatever the webhook currently reports.
+  const { data: resolvedDisputes } = await db
+    .from('trade_disputes')
+    .select('trade_id, override_values')
+    .eq('status', 'RESOLVED')
+    .not('override_values', 'is', null)
+
+  const protectedTradeIds = new Set(
+    (resolvedDisputes ?? []).map(d => d.trade_id)
+  )
+  console.log(`Protected trades (resolved disputes): ${protectedTradeIds.size}`)
+
+  // The upsert below matches existing rows via onConflict: 'source_system,source_record_id'
+  // (there is no in-memory "existing trades by dedup key" map anywhere in this file --
+  // conflict resolution happens at the DB level, keyed on the webhook's own record id),
+  // not trade_id -- so trade_id has to be resolved to its source_record_id here to be
+  // checkable against each incoming webhook record in the main loop below. Scoped to
+  // ACUITY_PERFORMANCE_API: this importer never touches MANUAL_BACKFILL rows, so a
+  // protected MANUAL_BACKFILL trade can't be at risk from this upsert regardless.
+  const protectedSourceRecordIds = new Set<string>()
+  if (protectedTradeIds.size > 0) {
+    const { data: protectedRows } = await db
+      .from('actual_trades')
+      .select('trade_id, source_record_id')
+      .in('trade_id', [...protectedTradeIds])
+      .eq('source_system', 'ACUITY_PERFORMANCE_API')
+    for (const row of protectedRows ?? []) {
+      if (row.source_record_id) protectedSourceRecordIds.add(row.source_record_id)
+    }
+  }
+  console.log(`Protected source_record_ids (this source system): ${protectedSourceRecordIds.size}`)
+
   // ── Start import batch ───────────────────────────────────────────────────
   let batchId: string | null = null
   if (!isDryRun) {
@@ -347,7 +383,7 @@ async function main() {
   console.log(`  Analyst trades: ${analystTrades.length}, Pattern (skipped): ${patternCount}`)
 
   // ── Normalise and upsert ─────────────────────────────────────────────────
-  let successRows = 0, duplicateRows = 0, errorRows = 0, outOfScopeRows = 0, skippedBackfill = 0
+  let successRows = 0, duplicateRows = 0, errorRows = 0, outOfScopeRows = 0, skippedBackfill = 0, skippedProtected = 0
   let unknownAnalysts = new Set<string>()
   let unknownSymbols = new Set<string>()
   const tradeRows: any[] = []
@@ -394,6 +430,15 @@ async function main() {
     const tradeDate = String(t.PublicationDate).slice(0, 10)
     const dedupKey = `${analystId}::${marketId}::${direction}::${tradeDate}`
     if (tradeDate < LIVE_API_START && backfillKeys.has(dedupKey)) { skippedBackfill++; continue }
+
+    // Skip trades protected by a resolved dispute correction -- the upsert below
+    // matches existing rows via (source_system, source_record_id), so that's the key
+    // checked here rather than trade_id (see protectedSourceRecordIds above).
+    if (protectedSourceRecordIds.has(t.ReportId)) {
+      console.log(`  Skipping ${normSymbol} — protected by resolved dispute`)
+      skippedProtected++
+      continue
+    }
 
     // 'LIVE_COMPUTED' matches migration 028's documented provenance for zone
     // derived from market_state_daily at import time -- entry_zone_source
@@ -483,6 +528,26 @@ async function main() {
     }
   } else if (isDryRun) {
     // already counted above
+  }
+
+  // ── Re-apply resolved dispute overrides ──────────────────────────────────
+  // Belt-and-braces alongside the protectedSourceRecordIds skip above: re-applies
+  // every resolved-dispute correction immediately after this run's upsert, in case
+  // anything still slipped through. Gated on !isDryRun -- a dry run must not write
+  // anything, same as every other mutation in this script.
+  if (!isDryRun) {
+    let reappliedCount = 0
+    for (const dispute of (resolvedDisputes ?? [])) {
+      const overrides = dispute.override_values as any
+      if (!overrides) continue
+      const { error: reapplyError } = await db.from('actual_trades').update({
+        ...(overrides.triggered !== undefined ? { triggered: overrides.triggered } : {}),
+        ...(overrides.computed_result_r !== undefined ? { result_r: overrides.computed_result_r } : {}),
+      }).eq('trade_id', dispute.trade_id)
+      if (reapplyError) console.error(`  Failed to re-apply dispute override for trade ${dispute.trade_id}: ${reapplyError.message}`)
+      else reappliedCount++
+    }
+    console.log(`Re-applied ${reappliedCount} dispute overrides`)
   }
 
   // ── Link to recommendation_versions (post-platform trades) ───────────────
@@ -575,6 +640,7 @@ async function main() {
   console.log(`Out of scope:     ${outOfScopeRows} (equities not in APIP universe)`)
   console.log(`Errors:           ${errorRows}`)
   console.log(`Skipped backfill: ${skippedBackfill} (already exist as MANUAL_BACKFILL)`)
+  console.log(`Skipped protected: ${skippedProtected} (protected by resolved dispute)`)
 
   if (unknownAnalysts.size > 0) {
     console.log(`Unknown analysts: ${[...unknownAnalysts].join(', ')}`)
