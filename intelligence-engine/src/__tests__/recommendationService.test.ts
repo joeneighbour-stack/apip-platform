@@ -100,8 +100,8 @@ describe('buildRecommendation', () => {
   });
 
   it('hiddenExecutionLevels carries the exact numeric levels for the future shadow trade, structurally separate from the analyst-facing version', () => {
-    // The default fixture's band-boundary target already clears a natural 4:1 RR
-    // (entry at the ZONE_1 band edge -- see entryOptimizerService.test.ts), so
+    // The default fixture's band-boundary target already clears the 2:1 floor
+    // (entry at the ZONE_1 zone midpoint -- see entryOptimizerService.test.ts), so
     // minimumRr only becomes visible in rr once it's set high enough to force the
     // RR-floor expansion. minimumRr=12 does that -- there's no cap anymore
     // (entryOptimizerService.ts's buildEntryOptimizer() expands to exactly
@@ -226,15 +226,15 @@ describe('buildRecommendation', () => {
 
   // Zone selection is now regime-conditional (entryOptimizerService.ts's
   // selectEntryZone()), not sourced from templateService.ts's historical
-  // preferredEntryZone. Stop is one zone width (step = band width / 4) outside
-  // the opposite band boundary, so entering at the band edge (ZONE_1/ZONE_4,
-  // the RANGE/MIXED cases) always gives a natural 4:1 RR (band width = 4x zone
-  // width) -- never expanded, target lands exactly on the natural band
-  // boundary. Entering at the adjacent zone (ZONE_2/ZONE_3, the trend-aligned
-  // cases) gives only a natural 3:2 RR against this fixture, below the 2:1
-  // floor -- target expands to exactly minimumRr x stop distance, which lands
-  // *beyond* the band boundary here (see entryOptimizerService.test.ts for the
-  // isolated arithmetic).
+  // preferredEntryZone. Entry is the zone midpoint; stop is one zone width
+  // (step = band width / 4) outside the opposite band boundary. Entering at
+  // ZONE_1/ZONE_4 (the RANGE/MIXED cases) gives a natural ~2.33:1 RR against
+  // this fixture -- clears the 2:1 floor, so target lands exactly on the
+  // natural band boundary, never expanded. Entering at the adjacent zone
+  // (ZONE_2/ZONE_3, the trend-aligned cases) gives only a natural 1:1 RR,
+  // below the floor -- target expands to exactly minimumRr x stop distance,
+  // which lands *beyond* the band boundary here (see entryOptimizerService.test.ts
+  // for the isolated arithmetic).
   describe('regime-conditional zone selection', () => {
     const sellTrades: RecommendationInputTrade[] = Array.from({ length: 15 }, () => ({
       market: 'EURUSD', analyst: 'TIV', direction: 'SELL', entryZone: 'ZONE_4', resultR: 1.0, triggered: true,
@@ -285,9 +285,9 @@ describe('buildRecommendation', () => {
       expect(opportunity.direction).toBe('BUY');
       expect(opportunity.preferredEntryZone).toBe('ZONE_2');
       expect(hiddenExecutionLevels.stop).toBeLessThan(1.08); // stop is always outside the band, regardless of zone
-      // entryPrice=1.085, stop=1.075 (lowerBand - step), stopDistance=0.01; natural
-      // targetDistance=0.015 < 2*0.01=0.02 -> expands to entryPrice + 2*stopDistance.
-      expect(hiddenExecutionLevels.target).toBeCloseTo(1.105, 10);
+      // entryPrice=1.0875 (zone midpoint), stop=1.075 (lowerBand - step), stopDistance=0.0125;
+      // natural targetDistance=0.0125 < 2*0.0125=0.025 -> expands to entryPrice + 2*stopDistance.
+      expect(hiddenExecutionLevels.target).toBeCloseTo(1.1125, 10);
       expect(hiddenExecutionLevels.target).toBeGreaterThan(1.10); // beyond the band, by design
       expect(hiddenExecutionLevels.target).toBeGreaterThan(hiddenExecutionLevels.entryPrice);
       expect(hiddenExecutionLevels.rr).toBeCloseTo(2.0, 9);
@@ -301,9 +301,9 @@ describe('buildRecommendation', () => {
       expect(opportunity.direction).toBe('SELL');
       expect(opportunity.preferredEntryZone).toBe('ZONE_3');
       expect(hiddenExecutionLevels.stop).toBeGreaterThan(1.10);
-      // entryPrice=1.095, stop=1.105 (upperBand + step), stopDistance=0.01; natural
-      // targetDistance=0.015 < 2*0.01=0.02 -> expands to entryPrice - 2*stopDistance.
-      expect(hiddenExecutionLevels.target).toBeCloseTo(1.075, 10);
+      // entryPrice=1.0925 (zone midpoint), stop=1.105 (upperBand + step), stopDistance=0.0125;
+      // natural targetDistance=0.0125 < 2*0.0125=0.025 -> expands to entryPrice - 2*stopDistance.
+      expect(hiddenExecutionLevels.target).toBeCloseTo(1.0675, 10);
       expect(hiddenExecutionLevels.target).toBeLessThan(1.08); // beyond the band, by design
       expect(hiddenExecutionLevels.target).toBeLessThan(hiddenExecutionLevels.entryPrice);
       expect(hiddenExecutionLevels.rr).toBeCloseTo(2.0, 9);

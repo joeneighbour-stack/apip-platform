@@ -56,33 +56,33 @@ describe('buildEntryOptimizer', () => {
     expect(sell.stop).toBeCloseTo(1.10 + 0.005, 10); // upperBand + step
   });
 
-  it('BUY + RANGE: selects ZONE_1, entry at the band edge -- natural RR is exactly 4:1 (band width = 4x zone width), so target is untouched', () => {
+  it('BUY + RANGE: selects ZONE_1, entry at the zone midpoint -- natural target distance still clears the 2:1 floor, so target is untouched', () => {
     const result = buildEntryOptimizer({
       marketState: marketState(), direction: 'BUY', minimumRr: 2.0, trendState: 'RANGE',
       sessionHigh: null, sessionLow: null,
     });
     expect(result.preferredZone).toBe('ZONE_1');
-    expect(result.entryPrice).toBeCloseTo(1.08, 10); // zone low = lowerBand itself
+    expect(result.entryPrice).toBeCloseTo(1.0825, 10); // zone midpoint: (1.08 + 1.085) / 2
     expect(result.stop).toBeCloseTo(1.075, 10); // lowerBand - step
     expect(result.target).toBeCloseTo(1.10, 10); // natural target = upperBand, never expanded here
-    expect(result.rr).toBeCloseTo(4.0, 9);
+    expect(result.rr).toBeCloseTo(7 / 3, 9); // stopDistance 0.0075, targetDistance 0.0175
   });
 
-  it('SELL + RANGE: selects ZONE_4, entry at the band edge -- same 4:1 natural RR, mirrored', () => {
+  it('SELL + RANGE: selects ZONE_4, entry at the zone midpoint -- same natural RR, mirrored', () => {
     const result = buildEntryOptimizer({
       marketState: marketState(), direction: 'SELL', minimumRr: 2.0, trendState: 'RANGE',
       sessionHigh: null, sessionLow: null,
     });
     expect(result.preferredZone).toBe('ZONE_4');
-    expect(result.entryPrice).toBeCloseTo(1.10, 10); // zone high = upperBand itself
+    expect(result.entryPrice).toBeCloseTo(1.0975, 10); // zone midpoint: (1.095 + 1.10) / 2
     expect(result.stop).toBeGreaterThan(result.entryPrice);
     expect(result.stop).toBeCloseTo(1.105, 10); // upperBand + step
     expect(result.target).toBeLessThan(result.entryPrice);
     expect(result.target).toBeCloseTo(1.08, 10); // natural target = lowerBand
-    expect(result.rr).toBeCloseTo(4.0, 9);
+    expect(result.rr).toBeCloseTo(7 / 3, 9); // stopDistance 0.0075, targetDistance 0.0175
   });
 
-  it('BUY + TRENDING_UP: selects ZONE_2 -- natural RR here is only 3:2 (below the 2:1 floor), so target expands to exactly minimumRr x stop distance', () => {
+  it('BUY + TRENDING_UP: selects ZONE_2 -- natural RR is below the 2:1 floor, so target expands to exactly minimumRr x stop distance', () => {
     const result = buildEntryOptimizer({
       marketState: marketState(), direction: 'BUY', minimumRr: 2.0, trendState: 'TRENDING_UP',
       sessionHigh: null, sessionLow: null,
@@ -91,10 +91,10 @@ describe('buildEntryOptimizer', () => {
     expect(result.entryRangeLow).toBeCloseTo(1.085, 10);
     expect(result.entryRangeHigh).toBeCloseTo(1.09, 10);
     expect(result.entryMid).toBeCloseTo(1.0875, 10);
-    expect(result.entryPrice).toBeCloseTo(1.085, 10); // BUY enters at zone low
+    expect(result.entryPrice).toBeCloseTo(1.0875, 10); // entry is the zone midpoint
     expect(result.stop).toBeCloseTo(1.075, 10); // lowerBand - step, same as ZONE_1 -- stop only depends on the band, not the zone
-    // stopDistance = 0.01, natural targetDistance = 0.015 (< 2*0.01 = 0.02) -> expand
-    expect(result.target).toBeCloseTo(1.105, 10); // entryPrice + 2.0 * stopDistance -- beyond the band, by design
+    // stopDistance = 0.0125, natural targetDistance = 0.0125 (< 2*0.0125 = 0.025) -> expand
+    expect(result.target).toBeCloseTo(1.1125, 10); // entryPrice + 2.0 * stopDistance -- beyond the band, by design
     expect(result.rr).toBeCloseTo(2.0, 9);
   });
 
@@ -104,9 +104,9 @@ describe('buildEntryOptimizer', () => {
       sessionHigh: null, sessionLow: null,
     });
     expect(result.preferredZone).toBe('ZONE_3');
-    expect(result.entryPrice).toBeCloseTo(1.095, 10); // SELL enters at zone high
+    expect(result.entryPrice).toBeCloseTo(1.0925, 10); // zone midpoint: (1.09 + 1.095) / 2
     expect(result.stop).toBeCloseTo(1.105, 10); // upperBand + step
-    expect(result.target).toBeCloseTo(1.075, 10); // entryPrice - 2.0 * stopDistance
+    expect(result.target).toBeCloseTo(1.0675, 10); // entryPrice - 2.0 * stopDistance
     expect(result.rr).toBeCloseTo(2.0, 9);
   });
 
@@ -115,8 +115,8 @@ describe('buildEntryOptimizer', () => {
       marketState: marketState(), direction: 'BUY', minimumRr: 100, trendState: 'TRENDING_UP',
       sessionHigh: null, sessionLow: null,
     });
-    // entryPrice = 1.085, stopDistance = 0.01 (same geometry as the ZONE_2 test above)
-    expect(result.target).toBeCloseTo(1.085 + 100 * 0.01, 10);
+    // entryPrice = 1.0875, stopDistance = 0.0125 (same geometry as the ZONE_2 test above)
+    expect(result.target).toBeCloseTo(1.0875 + 100 * 0.0125, 10);
     expect(result.rr).toBeCloseTo(100, 9);
   });
 

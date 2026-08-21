@@ -10,9 +10,9 @@
 // Zone selection is now regime-conditional (selectEntryZone()), not derived from
 // historical ATR-multiplier profiles or the caller's own preferredEntryZone --
 // this service now OWNS zone selection and returns it, rather than accepting it
-// as an input. Entry price is the edge of the selected zone nearest the outer
-// band (zone low for BUY, zone high for SELL), not the zone midpoint, to
-// maximise room to target. Target is the outer band boundary itself (always
+// as an input. Entry price is the zone midpoint, maximising the probability
+// that price actually reaches entry rather than requiring it to reach the
+// zone's far edge. Target is the outer band boundary itself (always
 // inside the band by construction); stop is placed one full zone width outside
 // the OPPOSITE band boundary -- geometrically consistent and ATR-scaled by
 // construction, since zone width is itself derived from ATR20 (marketStateService.ts).
@@ -62,7 +62,7 @@ export interface EntryOptimizerOutput {
   entryRangeLow: number;    // zone low (analyst-facing display)
   entryRangeHigh: number;   // zone high (analyst-facing display)
   entryMid: number;         // zone midpoint (display only)
-  entryPrice: number;       // zone low (BUY) or zone high (SELL) -- shadow trade entry
+  entryPrice: number;       // zone midpoint -- shadow trade entry (maximises trigger probability)
   riskRangeLow: number;     // stop price (exact)
   riskRangeHigh: number;    // stop price + small buffer for display
   targetRangeLow: number;   // target price - small buffer for display
@@ -132,9 +132,10 @@ export function buildEntryOptimizer(input: EntryOptimizerInput): EntryOptimizerO
   const entryRangeLow = !Number.isNaN(zoneLow) ? Math.min(zoneLow, zoneHigh) : NaN;
   const entryRangeHigh = !Number.isNaN(zoneHigh) ? Math.max(zoneLow, zoneHigh) : NaN;
   const entryMid = !Number.isNaN(zoneLow) && !Number.isNaN(zoneHigh) ? (zoneLow + zoneHigh) / 2 : NaN;
-  // BUY enters at the zone low, SELL at the zone high -- the edge nearest the
-  // outer band, maximising the distance available to the (in-band) target.
-  const entryPrice = direction === 'BUY' ? entryRangeLow : entryRangeHigh;
+  // Entry is the zone midpoint -- maximises the probability price actually
+  // reaches the entry (vs. the zone's far edge), while still requiring price
+  // to enter the recommended zone at all.
+  const entryPrice = entryMid;
 
   // Band reliability: once the intraday session range already exceeds 1.5x ATR20,
   // price has moved more than a full ATR since session open, so the band boundaries
