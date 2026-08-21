@@ -64,10 +64,16 @@ export default async function ManagementAnalystWorkspacePage({ params }: PagePro
             {' · '}Read-only management view
           </p>
         </div>
-        <a href="/dashboard/management"
-          className="text-sm text-muted-foreground hover:text-foreground transition-colors shrink-0">
-          &larr; Back to Management
-        </a>
+        <div className="flex items-center gap-4 shrink-0">
+          <a href={`/dashboard/analyst/monitor?analystId=${analystId}`}
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            View Monitor &rarr;
+          </a>
+          <a href="/dashboard/management"
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            &larr; Back to Management
+          </a>
+        </div>
       </div>
 
       <div className="flex gap-3 flex-wrap justify-end">

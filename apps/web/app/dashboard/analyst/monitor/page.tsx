@@ -3,12 +3,39 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { TradeHistoryTable } from '@/components/analyst/TradeHistoryTable'
 
-export default async function AnalystMonitorPage() {
+interface PageProps {
+  // Allows MANAGER/ADMIN to view a specific analyst's monitor via
+  // ?analystId=xxx (linked from the management analyst workspace page).
+  // ANALYST always sees their own -- the param is ignored for that role.
+  searchParams: Promise<{ analystId?: string }>
+}
+
+export default async function AnalystMonitorPage({ searchParams }: PageProps) {
   const user = await getCurrentUser()
-  if (user.role !== 'ANALYST') redirect('/login')
-  if (!user.analystId) redirect('/dashboard/analyst')
+  if (!['ANALYST', 'MANAGER', 'ADMIN'].includes(user.role)) redirect('/login')
+
+  const { analystId: analystIdParam } = await searchParams
+  const isManagerView = ['MANAGER', 'ADMIN'].includes(user.role)
+  const viewingAnalystId = isManagerView ? (analystIdParam ?? user.analystId) : user.analystId
+  if (!viewingAnalystId) redirect('/dashboard')
 
   const supabase = await createClient()
+
+  // Header/back-link context for the manager-view case -- reusing "My Monitor" and a
+  // back link to /dashboard/analyst (ANALYST-only, redirects everyone else to /login)
+  // would be actively broken for a manager viewing someone else's monitor.
+  let viewedAnalystName: string | null = null
+  if (isManagerView) {
+    const { data: viewedAnalyst, error: viewedAnalystError } = await supabase
+      .from('analysts')
+      .select('display_name')
+      .eq('analyst_id', viewingAnalystId)
+      .single()
+    if (viewedAnalystError && viewedAnalystError.code !== 'PGRST116') {
+      console.error('[AnalystMonitorPage] Failed to fetch viewed analyst:', viewedAnalystError.message)
+    }
+    viewedAnalystName = viewedAnalyst?.display_name ?? null
+  }
 
   // Yesterday / last working day
   const yesterday = new Date(Date.now() - 86400000)
@@ -19,7 +46,7 @@ export default async function AnalystMonitorPage() {
   const { data: yesterdayTrades, error: yesterdayTradesError } = await supabase
     .from('actual_trades')
     .select('trade_id, result_r, triggered, direction, market:market_id ( symbol )')
-    .eq('analyst_id', user.analystId)
+    .eq('analyst_id', viewingAnalystId)
     .gte('published_at', yesterdayStr + 'T00:00:00Z')
     .lt('published_at', yesterdayStr + 'T23:59:59Z')
   if (yesterdayTradesError) console.error('[AnalystMonitorPage] Failed to fetch yesterday actual_trades:', yesterdayTradesError.message)
@@ -42,7 +69,7 @@ export default async function AnalystMonitorPage() {
       published_at, historical_backfill, expiry,
       market:market_id ( symbol, asset_class )
     `)
-    .eq('analyst_id', user.analystId)
+    .eq('analyst_id', viewingAnalystId)
     .gte('published_at', thirtyDaysAgo + 'T00:00:00Z')
     .order('published_at', { ascending: false })
   if (recentTradesError) console.error('[AnalystMonitorPage] Failed to fetch recent actual_trades:', recentTradesError.message)
@@ -84,7 +111,7 @@ export default async function AnalystMonitorPage() {
       alignment_score, review_status, analyst_facing_review, created_at,
       trade:trade_id!inner ( result_r, triggered, analyst_id )
     `)
-    .eq('trade.analyst_id', user.analystId)
+    .eq('trade.analyst_id', viewingAnalystId)
     .order('created_at', { ascending: false })
     .limit(100)
   if (reviewsError) console.error('[AnalystMonitorPage] Failed to fetch post_trade_reviews:', reviewsError.message)
@@ -113,7 +140,7 @@ export default async function AnalystMonitorPage() {
   const { data: disputes, error: disputesError } = await supabase
     .from('trade_disputes')
     .select('trade_id, status, dispute_type')
-    .eq('raised_by_analyst_id', user.analystId)
+    .eq('raised_by_analyst_id', viewingAnalystId)
   if (disputesError) console.error('[AnalystMonitorPage] Failed to fetch trade_disputes:', disputesError.message)
 
   const disputesByTradeId = new Map(
@@ -124,12 +151,14 @@ export default async function AnalystMonitorPage() {
     <div className="space-y-8">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold">My Monitor</h1>
+          <h1 className="text-xl font-semibold">
+            {isManagerView ? `${viewedAnalystName ?? 'Analyst'}'s Monitor` : 'My Monitor'}
+          </h1>
           <p className="text-sm text-muted-foreground mt-1">
             Recent activity, coaching compliance, and trade log
           </p>
         </div>
-        <a href="/dashboard/analyst"
+        <a href={isManagerView ? `/dashboard/management/analyst/${viewingAnalystId}/workspace` : '/dashboard/analyst'}
           className="text-sm text-muted-foreground hover:text-foreground transition-colors">
           &larr; Back
         </a>
@@ -237,7 +266,7 @@ export default async function AnalystMonitorPage() {
       <section className="space-y-3">
         <TradeHistoryTable
           trades={tradesWithDetails}
-          analystId={user.analystId!}
+          analystId={viewingAnalystId}
           disputesByTradeId={disputesByTradeId}
           reviewsByTradeId={reviewsByTradeId}
           currentUserRole={user.role as 'ANALYST' | 'MANAGER' | 'ADMIN'}
