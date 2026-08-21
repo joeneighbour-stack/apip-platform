@@ -1,5 +1,7 @@
+'use client'
 import Link from 'next/link'
 import { Settings } from 'lucide-react'
+import { createClient } from '@/lib/supabase/client'
 import type { AppRole } from '@/lib/auth'
 
 interface NavItem {
@@ -27,6 +29,12 @@ interface NavProps {
   displayName: string
 }
 
+async function handleSignOut() {
+  const supabase = createClient()
+  await supabase.auth.signOut()
+  window.location.href = '/login'
+}
+
 export function DashboardNav({ role, displayName }: NavProps) {
   const visibleItems = NAV_ITEMS.filter(item => item.roles.includes(role))
   return (
@@ -51,6 +59,12 @@ export function DashboardNav({ role, displayName }: NavProps) {
         <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium">
           {role}
         </span>
+        <button
+          onClick={handleSignOut}
+          className="text-sm px-3 py-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+        >
+          Sign out
+        </button>
       </div>
     </nav>
   )
