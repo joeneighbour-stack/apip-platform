@@ -143,8 +143,22 @@ async function main() {
   // backfill during dedup below rather than treated as a genuine additional trade.
   const LIVE_API_START = '2026-08-01'
 
-  const syncDaysBackEnv = process.env.SYNC_DAYS_BACK
-  const syncDaysBack = syncDaysBackEnv ? Number(syncDaysBackEnv) : null
+  // Default: last 48 hours (catches same-day and yesterday's late publications).
+  // Override via SYNC_DAYS_BACK env var, or pass --full-sync for a manual
+  // historical re-run from LIVE_API_START (or --from= directly for anything
+  // further back than that). Replaces the old "look up the last successful
+  // import_batches row and sync from there" fallback -- that could silently
+  // balloon into a large, slow window (and the historical-scan MANUAL_BACKFILL
+  // dedup load below with it) if a scheduled run had been missed for several
+  // days; a flat, predictable window is both faster and simpler to reason about,
+  // and a real multi-day gap is caught by import-watchdog.yml or a manual
+  // --full-sync rather than an ever-growing default.
+  const DEFAULT_SYNC_DAYS = 2
+  const syncDaysBack = process.env.SYNC_DAYS_BACK
+    ? parseInt(process.env.SYNC_DAYS_BACK)
+    : DEFAULT_SYNC_DAYS
+
+  const isFullSync = process.argv.includes('--full-sync')
 
   let fromDate: string
   let toDate = toArg ?? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
@@ -156,36 +170,21 @@ async function main() {
       console.log(`  Warning: --from=${fromArg} is before MIN_API_DATE, clamped to ${MIN_API_DATE}`)
     }
     console.log(`Sync window: ${fromDate} → ${toDate} (explicit)`)
-  } else if (syncDaysBack !== null && !Number.isNaN(syncDaysBack)) {
-    // SYNC_DAYS_BACK env override -- start date is today minus N days
+  } else if (isFullSync) {
+    // Full historical window -- everything the live feed has been authoritative
+    // for. Dates before this remain MANUAL_BACKFILL's domain; pass --from=
+    // directly to reach further back than that.
+    fromDate = LIVE_API_START
+    console.log(`FULL SYNC: fetching from ${fromDate}`)
+    console.log(`Sync window: ${fromDate} → ${toDate} (full sync)`)
+  } else {
+    // SYNC_DAYS_BACK env override, or the DEFAULT_SYNC_DAYS=2 (48h) default
     const daysBackDate = new Date(Date.now() - syncDaysBack * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
     fromDate = daysBackDate < MIN_API_DATE ? MIN_API_DATE : daysBackDate
     if (daysBackDate < MIN_API_DATE) {
       console.log(`  Warning: SYNC_DAYS_BACK=${syncDaysBack} resolves before MIN_API_DATE, clamped to ${MIN_API_DATE}`)
     }
-    console.log(`Sync window: ${fromDate} → ${toDate} (SYNC_DAYS_BACK=${syncDaysBack} override)`)
-  } else {
-    // Find last successful ACUITY_PERFORMANCE_API sync
-    const { data: lastBatch } = await db
-      .from('import_batches')
-      .select('date_range_end, finished_at')
-      .eq('source_system', 'ACUITY_PERFORMANCE_API')
-      .eq('status', 'SUCCESS')
-      .order('finished_at', { ascending: false })
-      .limit(1)
-      .single()
-
-    if (lastBatch?.date_range_end) {
-      // Go back 1 day to catch any late-arriving trades
-      const lastSync = new Date(lastBatch.date_range_end)
-      lastSync.setDate(lastSync.getDate() - 1)
-      fromDate = lastSync.toISOString().slice(0, 10)
-      console.log(`Sync window: ${fromDate} → ${toDate} (incremental from last sync)`)
-    } else {
-      // No previous sync -- default to 2026-06-19 (manual backfill ends 2026-06-18)
-      fromDate = '2026-06-19'
-      console.log(`Sync window: ${fromDate} → ${toDate} (no previous sync, using default)`)
-    }
+    console.log(`Sync window: ${fromDate} → ${toDate} (SYNC_DAYS_BACK=${syncDaysBack})`)
   }
 
   // ── Load lookups ─────────────────────────────────────────────────────────
@@ -241,8 +240,19 @@ async function main() {
   // MANUAL_BACKFILL, double-counting it in every downstream R calculation.
   // Paginated with a deterministic order: .range() without one doesn't guarantee
   // stable results across pages and can silently drop rows on a table this size.
+  //
+  // Only needed when fromDate reaches back before LIVE_API_START: the in-loop
+  // check below (`tradeDate < LIVE_API_START && backfillKeys.has(...)`) can only
+  // ever be true for a trade in that range, so there's nothing for this set to
+  // protect once fromDate is already at or after LIVE_API_START -- true for every
+  // normal 48-hour incremental run. Gated on the actual fromDate rather than
+  // syncDaysBack itself: an explicit --from= before LIVE_API_START still needs
+  // this loaded regardless of what SYNC_DAYS_BACK/DEFAULT_SYNC_DAYS resolved to,
+  // since that variable doesn't reflect the real window once --from= or
+  // --full-sync are involved.
+  const needsBackfillDedup = fromDate < LIVE_API_START
   const backfillKeys = new Set<string>()
-  {
+  if (needsBackfillDedup) {
     const PAGE_SIZE = 1000
     let page = 0
     let hasMore = true
@@ -262,8 +272,10 @@ async function main() {
         page++
       }
     }
+    console.log(`MANUAL_BACKFILL trades in sync window: ${backfillKeys.size} (dedup keys)`)
+  } else {
+    console.log(`MANUAL_BACKFILL dedup skipped -- fromDate (${fromDate}) is at/after LIVE_API_START`)
   }
-  console.log(`MANUAL_BACKFILL trades in sync window: ${backfillKeys.size} (dedup keys)`)
 
   // ── Load resolved-dispute-protected trades ───────────────────────────────
   // Trades with a RESOLVED dispute carrying override_values had their triggered/
