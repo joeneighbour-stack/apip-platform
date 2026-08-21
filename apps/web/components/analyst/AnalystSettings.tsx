@@ -31,6 +31,11 @@ export function AnalystSettings({ email }: { email: string }) {
     setLoading(false)
   }
 
+  async function handleLogout() {
+    await supabase.auth.signOut()
+    window.location.href = '/login'
+  }
+
   return (
     <div className="space-y-6">
       <div className="rounded-lg border border-border bg-card p-4 space-y-1">
@@ -70,6 +75,21 @@ export function AnalystSettings({ email }: { email: string }) {
             {loading ? 'Updating...' : 'Update password'}
           </button>
         </form>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-medium">Session</h2>
+        <div className="rounded-lg border border-border bg-card p-4">
+          <p className="text-xs text-muted-foreground mb-3">
+            Sign out of your account on this device.
+          </p>
+          <button
+            onClick={handleLogout}
+            className="text-sm px-4 py-2 rounded-md border border-border hover:bg-muted transition-colors"
+          >
+            Sign out
+          </button>
+        </div>
       </section>
     </div>
   )
