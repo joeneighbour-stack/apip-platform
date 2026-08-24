@@ -145,13 +145,31 @@ async function main() {
   const allEligibleToday = new Set([...eligibleBySession.values()].flat())
   console.log(`Analysts eligible for at least one session today: ${allEligibleToday.size}`)
 
+  // Seed workload from today's European engine allocation (written by
+  // runEngineSession.ts's post-loop upsert for EUROPEAN). This ensures US/APAC
+  // allocation accounts for European load, so the total daily workload
+  // respects MIN/MAX_MARKETS_PER_ANALYST. On days where European hasn't run
+  // yet (04:20 vs 04:48 UTC), this returns zero rows -- that's acceptable,
+  // the pre-allocator is a forecast.
+  const { data: europeanOpps } = await db
+    .from('opportunities')
+    .select('assigned_analyst_id')
+    .eq('date', today)
+    .eq('session', 'EUROPEAN')
+    .not('assigned_analyst_id', 'is', null)
+  const europeanCount = (europeanOpps ?? []).length
+  console.log(`European opportunities already assigned today: ${europeanCount}`)
+
   // ── Load all markets across both sessions ──────────────────────────────────
   const allSymbols = SESSION_ORDER.flatMap(s => SESSION_MARKETS[s]!)
   const { data: marketRows } = await db.from('markets')
     .select('market_id, symbol, asset_class').in('symbol', allSymbols)
   const marketBySymbol = new Map((marketRows ?? []).map(m => [m.symbol, m]))
-  const totalMarkets = allSymbols.length
-  console.log(`Markets across US + APAC: ${totalMarkets} (${marketRows?.length ?? 0} resolved)`)
+  // Total markets across ALL sessions for cap calculation -- US + APAC (allSymbols)
+  // plus today's real EUROPEAN opportunity count, so targetPerAnalyst/hardCap in
+  // workloadAdjustedScore() reflect the full day's load, not just US + APAC's.
+  const totalMarkets = allSymbols.length + europeanCount
+  console.log(`Markets across US + APAC: ${allSymbols.length} (${marketRows?.length ?? 0} resolved); total incl. European: ${totalMarkets}`)
 
   // ── Load most recent regime per market -- yesterday's, since today's ─────
   // derive-regime run (04:33) hasn't happened yet at this script's 04:20 slot.
@@ -209,8 +227,17 @@ async function main() {
   }
 
   // ── Score + assign every market across every session, one combined pass ──
+  // Initialise workload map -- start from zero for all eligible analysts
   const workload = new Map<string, number>()
   for (const id of allEligibleToday) workload.set(id, 0)
+
+  // Seed from today's European engine allocation (fetched above)
+  for (const opp of (europeanOpps ?? [])) {
+    const id = opp.assigned_analyst_id
+    if (workload.has(id)) {
+      workload.set(id, (workload.get(id) ?? 0) + 1)
+    }
+  }
 
   type Assignment = { marketId: string; symbol: string; session: string; analystId: string }
   const assignments: Assignment[] = []
