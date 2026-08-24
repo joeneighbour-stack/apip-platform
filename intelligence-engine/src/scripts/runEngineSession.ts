@@ -70,6 +70,69 @@ function computeExpiresAt(sessionType: string, assetClass: string | null, genera
   }).includes('BST')
   return new Date(`${dateStr}T${String(targetHour - (isDST ? 1 : 0)).padStart(2,'0')}:00:00Z`)
 }
+
+// ── Shadow trade entry variants ─────────────────────────────────────────────
+// Three shadow trades per recommendation, one per entry point within the same
+// zone the (single, unchanged) analyst-facing recommendation already uses --
+// ZONE_MID is that same entry (entryStopTarget.entryPrice in
+// entryOptimizerService.ts), ZONE_BOTTOM/ZONE_TOP are the zone's own low/high
+// edge. This only decides where in the zone a shadow trade enters; it does not
+// touch zone SELECTION (still entryOptimizerService.ts's selectEntryZone(),
+// unchanged) or the analyst-facing recommendation itself.
+
+type EntryVariant = 'ZONE_BOTTOM' | 'ZONE_MID' | 'ZONE_TOP'
+const ENTRY_VARIANTS: EntryVariant[] = ['ZONE_BOTTOM', 'ZONE_MID', 'ZONE_TOP']
+
+function variantEntry(
+  direction: 'BUY' | 'SELL',
+  variant: EntryVariant,
+  zoneLow: number,
+  zoneHigh: number,
+): number {
+  const mid = (zoneLow + zoneHigh) / 2
+  if (variant === 'ZONE_MID') return mid  // current behaviour
+  if (direction === 'BUY') {
+    // BUY: BOTTOM = zone low (cheapest), TOP = zone high (nearest current price)
+    return variant === 'ZONE_BOTTOM' ? zoneLow : zoneHigh
+  } else {
+    // SELL: BOTTOM = zone low (nearest current price), TOP = zone high (most expensive)
+    return variant === 'ZONE_BOTTOM' ? zoneHigh : zoneLow
+  }
+}
+
+// Mirrors entryOptimizerService.ts's buildEntryOptimizer() stop/target/rr
+// geometry exactly (rawTarget/step/stop are entry-independent -- band-boundary
+// anchored, identical across all three variants; only the RR-floor check and,
+// when it kicks in, the floored target depend on entryPrice) -- evaluated per
+// variant entry point rather than only at the zone midpoint. Not exported from
+// entryOptimizerService.ts and not refactored to share this exact block with
+// it, since that service's contract is one entry (the analyst-facing
+// recommendation) and changing that wasn't asked for; duplicated here instead.
+function variantStopTargetRr(
+  direction: 'BUY' | 'SELL',
+  entryPrice: number,
+  lowerBand: number,
+  upperBand: number,
+  minimumRr: number,
+): { stop: number; target: number; rr: number } {
+  const rawTarget = direction === 'BUY' ? upperBand : lowerBand
+  const step = (upperBand - lowerBand) / 4
+  const stop = direction === 'BUY' ? lowerBand - step : upperBand + step
+
+  const stopDistance = Math.abs(entryPrice - stop)
+  const naturalTargetDistance = Math.abs(rawTarget - entryPrice)
+  const target = naturalTargetDistance >= minimumRr * stopDistance
+    ? rawTarget
+    : direction === 'BUY'
+      ? entryPrice + minimumRr * stopDistance
+      : entryPrice - minimumRr * stopDistance
+
+  const finalTargetDistance = Math.abs(target - entryPrice)
+  const rr = stopDistance > 0 ? finalTargetDistance / stopDistance : NaN
+
+  return { stop, target, rr }
+}
+
 const SESSION_MARKETS: Record<string, string[]> = {
   EUROPEAN: [
     'EURNZD', 'EURGBP', 'Natural Gas', 'AUDCAD',
@@ -1039,84 +1102,104 @@ async function main() {
         }
 
         try {
-          const shadowId = randomUUID()
-          const shadowOutcomeId = randomUUID()
-          const { shadowTrade, shadowTradeOutcome } = createShadowTrade({
-            shadowTradeId: shadowId,
-            shadowOutcomeId,
-            createdAt: generatedAt,
-            recommendationVersionId: rvRow.recommendation_version_id,
-            opportunityId: oppRow.opportunity_id,
-            entry: hidden.entryPrice,
-            stop: hidden.stop,
-            target: hidden.target,
-            rr: hidden.rr,
-            templateSource: diagnostics.templateSource,
-            direction: item.opp.direction,
-            session,
-          })
+          // Zone bounds and band boundaries are the same for all three variants --
+          // rv.entryRangeLow/High is entryStopTarget.entryRangeLow/High
+          // (recommendationService.ts), i.e. the exact zone the single analyst-facing
+          // recommendation already uses. Only the entry point within that zone (and
+          // therefore stop/target/rr, via variantStopTargetRr()) differs per variant.
+          const zoneLow   = Number(rv.entryRangeLow)
+          const zoneHigh  = Number(rv.entryRangeHigh)
+          const lowerBand = Number(marketState.lowerBand)
+          const upperBand = Number(marketState.upperBand)
+          const direction = item.opp.direction
 
           // APAC engine runs at 13:05 UTC, hours before APAC-session analysts actually
           // publish -- monitoring the shadow trade immediately would measure market
           // movement between generation and publication as if it were the trade itself.
           // See migrations/053_shadow_trades_monitor_from.sql. Same reasoning for US:
           // engine-us runs at 08:48 UTC, well before US-session analysts actually
-          // publish -- gated until 12:00 UTC (13:00 UK) instead.
+          // publish -- gated until 12:00 UTC (13:00 UK) instead. Same for every variant
+          // of this opportunity, so computed once outside the loop below.
           const monitorFrom = session === 'APAC'
             ? new Date(new Date(generatedAt).toISOString().slice(0, 10) + 'T15:00:00Z').toISOString()
             : session === 'US'
             ? new Date(new Date(generatedAt).toISOString().slice(0, 10) + 'T12:00:00Z').toISOString()
             : null
+          const expiresAt = computeExpiresAt(session, market.asset_class ?? null, new Date(generatedAt)).toISOString()
 
-          const { data: shadowRow, error: shadowError } = await db.from('shadow_trades').insert({
-            shadow_trade_id: shadowTrade.shadowTradeId,
-            opportunity_id: shadowTrade.opportunityId,
-            recommendation_version_id: shadowTrade.recommendationVersionId,
-            entry: shadowTrade.entry,
-            stop: shadowTrade.stop,
-            target: shadowTrade.target,
-            rr: shadowTrade.rr,
-            template_source: shadowTrade.templateSource,
-            confidence_label: shadowTrade.confidenceLabel,
-            direction: shadowTrade.direction,
-            session: shadowTrade.session,
-            generated_at: generatedAt,
-            // Every shadow trade waits for price to reach the entry range, regardless
-            // of the analyst-facing analystAction (which stays ENTER_NOW/
-            // WAIT_FOR_PREFERRED_ZONE on the opportunity itself -- that's still a valid
-            // read on current price vs. the preferred zone for the analyst). Triggering
-            // a shadow trade at the snapshot price the moment it's generated was never a
-            // real "entry" -- it's not a benchmark for what a disciplined trader would
-            // have actually done.
-            entry_mode: 'WAIT_FOR_PREFERRED_ZONE',
-            generated_price: Number(intraday.current_price),
-            expires_at: computeExpiresAt(session, market.asset_class ?? null, new Date(generatedAt)).toISOString(),
-            price_provider: 'FINNHUB_OANDA',
-            price_resolution: '5MIN',
-            monitor_from: monitorFrom,
-            // Both already the column defaults (migrations/061_strategy_learning.sql)
-            // -- written explicitly so every row is unambiguously tagged with which
-            // entry-zone variant and which shadow strategy produced it, rather than
-            // relying on the default staying correct as future variants/systems
-            // (ZONE_BOTTOM/ZONE_TOP, OPTIMAL) get added.
-            entry_variant: 'ZONE_MID',
-            shadow_system: 'ANALYST_MIRROR',
-          }).select('shadow_trade_id').single()
+          for (const variant of ENTRY_VARIANTS) {
+            // ZONE_MID reuses hiddenExecutionLevels' already-computed entry/stop/
+            // target/rr directly (not a parallel recomputation), guaranteeing this
+            // variant stays byte-identical to current behaviour -- exactly what
+            // variantEntry()'s own 'current behaviour' comment says for ZONE_MID.
+            // ZONE_BOTTOM/ZONE_TOP compute a fresh entry via variantEntry() and
+            // fresh stop/target/rr via variantStopTargetRr(), off the same band.
+            const entry = variant === 'ZONE_MID'
+              ? hidden.entryPrice
+              : variantEntry(direction, variant, zoneLow, zoneHigh)
+            const { stop, target, rr } = variant === 'ZONE_MID'
+              ? { stop: hidden.stop, target: hidden.target, rr: hidden.rr }
+              : variantStopTargetRr(direction, entry, lowerBand, upperBand, MINIMUM_RR)
 
-          if (!shadowError && shadowRow) {
-            await db.from('shadow_trade_outcomes').insert({
-              shadow_outcome_id: shadowTradeOutcome.shadowOutcomeId,
-              shadow_trade_id: shadowRow.shadow_trade_id,
-              // shadow trade outcome always starts NOT_TRIGGERED -- price must reach
-              // the entry range before triggering.
-              trade_outcome_status: 'NOT_TRIGGERED',
-              triggered_at: null,
-              triggered_price: null,
-              trigger_source: null,
+            const shadowId = randomUUID()
+            const shadowOutcomeId = randomUUID()
+            const { shadowTrade, shadowTradeOutcome } = createShadowTrade({
+              shadowTradeId: shadowId,
+              shadowOutcomeId,
+              createdAt: generatedAt,
+              recommendationVersionId: rvRow.recommendation_version_id,
+              opportunityId: oppRow.opportunity_id,
+              entry, stop, target, rr,
+              templateSource: diagnostics.templateSource,
+              direction,
+              session,
             })
-            shadowTradesCreated++
-          } else if (shadowError) {
-            console.log(`  ${market.symbol} shadow: ${shadowError.message}`)
+
+            const { data: shadowRow, error: shadowError } = await db.from('shadow_trades').insert({
+              shadow_trade_id: shadowTrade.shadowTradeId,
+              opportunity_id: shadowTrade.opportunityId,
+              recommendation_version_id: shadowTrade.recommendationVersionId,
+              entry: shadowTrade.entry,
+              stop: shadowTrade.stop,
+              target: shadowTrade.target,
+              rr: shadowTrade.rr,
+              template_source: shadowTrade.templateSource,
+              confidence_label: shadowTrade.confidenceLabel,
+              direction: shadowTrade.direction,
+              session: shadowTrade.session,
+              generated_at: generatedAt,
+              // Every shadow trade waits for price to reach the entry range, regardless
+              // of the analyst-facing analystAction (which stays ENTER_NOW/
+              // WAIT_FOR_PREFERRED_ZONE on the opportunity itself -- that's still a valid
+              // read on current price vs. the preferred zone for the analyst). Triggering
+              // a shadow trade at the snapshot price the moment it's generated was never a
+              // real "entry" -- it's not a benchmark for what a disciplined trader would
+              // have actually done.
+              entry_mode: 'WAIT_FOR_PREFERRED_ZONE',
+              generated_price: Number(intraday.current_price),
+              expires_at: expiresAt,
+              price_provider: 'FINNHUB_OANDA',
+              price_resolution: '5MIN',
+              monitor_from: monitorFrom,
+              entry_variant: variant,
+              shadow_system: 'ANALYST_MIRROR',
+            }).select('shadow_trade_id').single()
+
+            if (!shadowError && shadowRow) {
+              await db.from('shadow_trade_outcomes').insert({
+                shadow_outcome_id: shadowTradeOutcome.shadowOutcomeId,
+                shadow_trade_id: shadowRow.shadow_trade_id,
+                // shadow trade outcome always starts NOT_TRIGGERED -- price must reach
+                // the entry range before triggering.
+                trade_outcome_status: 'NOT_TRIGGERED',
+                triggered_at: null,
+                triggered_price: null,
+                trigger_source: null,
+              })
+              shadowTradesCreated++
+            } else if (shadowError) {
+              console.log(`  ${market.symbol} shadow (${variant}): ${shadowError.message}`)
+            }
           }
         } catch (err) {
           console.log(`  ${market.symbol} shadow: ${(err as Error).message}`)
