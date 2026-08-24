@@ -68,6 +68,7 @@ interface ShadowOutcome {
   trade_outcome_status: TradeOutcomeStatus
   triggered_price: number | null
   triggered_at: string | null
+  raw_price_evidence: Record<string, any> | null
 }
 
 // ── DST-aware expiry calculation ────────────────────────────────────────────
@@ -155,6 +156,26 @@ function calcResultR(
   return (triggeredPrice - exitPrice) / risk
 }
 
+// ── MFE/MAE ──────────────────────────────────────────────────────────────────
+// Uses trade.entry/trade.stop (the planned levels), matching calcResultR()'s own
+// calls above (which are always passed trade.entry, never the actual
+// triggered_price) -- so MFE/MAE and result_r stay on the same R basis.
+
+function calculateR(price: number, entry: number, stop: number, direction: 'BUY' | 'SELL'): number {
+  const riskDistance = Math.abs(entry - stop)
+  if (riskDistance === 0) return 0
+  return direction === 'BUY'
+    ? (price - entry) / riskDistance
+    : (entry - price) / riskDistance
+}
+
+// currentMfeR/currentMaeR start at -Infinity/+Infinity (sentinel "no bar processed
+// yet") so the first real bar always wins the comparison -- normalise back to null
+// before writing to a numeric column, since -Infinity/+Infinity are not valid values.
+function finiteOrNull(value: number): number | null {
+  return Number.isFinite(value) ? value : null
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -194,7 +215,7 @@ async function main() {
       ),
       shadow_trade_outcomes (
         shadow_outcome_id, trade_outcome_status,
-        triggered_price, triggered_at
+        triggered_price, triggered_at, raw_price_evidence
       )
     `)
     .in('shadow_trade_outcomes.trade_outcome_status', ['NOT_TRIGGERED', 'TRIGGERED'])
@@ -269,6 +290,7 @@ async function main() {
             triggered_at: trade.generated_at,
             triggered_price: triggeredPrice,
             trigger_source: 'ENTER_NOW_AT_GENERATION',
+            bars_to_trigger: 0, // triggers instantly at generation, no bars scanned
             monitor_run_id: monitorRunId,
           }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
           console.log(`  ${symbol}: TRIGGERED (ENTER_NOW) @ ${triggeredPrice}`)
@@ -278,7 +300,9 @@ async function main() {
 
         // WAIT_FOR_PREFERRED_ZONE — scan bars for entry touch
         let triggered = false
+        let notTriggeredBarIndex = 0
         for (const bar of bars) {
+          notTriggeredBarIndex++
           const barTime = new Date(bar.ts * 1000)
           if (barTime >= expiresAt) break
 
@@ -315,6 +339,7 @@ async function main() {
               trigger_source: triggerSource,
               trigger_bar_timestamp: new Date(bar.ts * 1000).toISOString(),
               raw_price_evidence: { bar },
+              bars_to_trigger: notTriggeredBarIndex,
               monitor_run_id: monitorRunId,
             }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
             console.log(`  ${symbol}: TRIGGERED (${triggerSource}) @ ${triggeredPrice}`)
@@ -332,14 +357,41 @@ async function main() {
         const dir            = trade.direction as 'BUY' | 'SELL'
         const stop           = Number(trade.stop)
         const target         = Number(trade.target)
+        const entry          = Number(trade.entry)
         const triggeredPrice = Number(outcome.triggered_price)
         const triggeredAt    = new Date(outcome.triggered_at!)
+
+        // MFE/MAE running state -- seeded from a prior monitor run's
+        // raw_price_evidence.running_* (Fix 4) so it accumulates correctly across
+        // runs. -Infinity/+Infinity sentinels until the first post-trigger bar is
+        // processed; finiteOrNull() normalises back to null on write if no bar was
+        // ever processed (degenerate EXPIRY_PRICE_UNAVAILABLE case).
+        const existingEvidence = (outcome.raw_price_evidence ?? {}) as Record<string, any>
+        let currentMfeR      = typeof existingEvidence.running_mfe_r === 'number' ? existingEvidence.running_mfe_r : -Infinity
+        let currentMaeR      = typeof existingEvidence.running_mae_r === 'number' ? existingEvidence.running_mae_r : Infinity
+        let currentMfePrice: number | null = typeof existingEvidence.running_mfe_price === 'number' ? existingEvidence.running_mfe_price : null
+        let currentMaePrice: number | null = typeof existingEvidence.running_mae_price === 'number' ? existingEvidence.running_mae_price : null
+        let barsSinceTrigger = 0
+        let lastProcessedBar: Bar | null = null
 
         let closed = false
 
         for (const bar of bars) {
           const barTime = new Date(bar.ts * 1000)
           if (barTime <= triggeredAt) continue // skip bars before trigger
+
+          barsSinceTrigger++
+          lastProcessedBar = bar
+
+          // MFE/MAE: best/worst price reached this bar, in R off the planned
+          // entry/stop -- same reference calcResultR() below uses (trade.entry,
+          // trade.stop), so MFE/MAE stays on the same R basis as result_r.
+          const barMfe  = dir === 'BUY' ? bar.h : bar.l
+          const barMae  = dir === 'BUY' ? bar.l : bar.h
+          const barMfeR = calculateR(barMfe, entry, stop, dir)
+          const barMaeR = calculateR(barMae, entry, stop, dir)
+          if (barMfeR > currentMfeR) { currentMfeR = barMfeR; currentMfePrice = barMfe }
+          if (barMaeR < currentMaeR) { currentMaeR = barMaeR; currentMaePrice = barMae }
 
           // Check expiry
           if (barTime >= expiresAt) {
@@ -354,6 +406,11 @@ async function main() {
                 closed_at: expiresAt.toISOString(),
                 exit_reason: 'EXPIRY_PRICE_UNAVAILABLE',
                 result_r: null,
+                mfe_r: finiteOrNull(currentMfeR),
+                mae_r: finiteOrNull(currentMaeR),
+                mfe_price: currentMfePrice,
+                mae_price: currentMaePrice,
+                bars_to_close: barsSinceTrigger,
                 monitor_run_id: monitorRunId,
               }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
               console.log(`  ${symbol}: EXPIRY (price unavailable)`)
@@ -367,6 +424,11 @@ async function main() {
                 exit_bar_timestamp: lastBar ? new Date(lastBar.ts * 1000).toISOString() : null,
                 result_r: resultR,
                 raw_price_evidence: { last_bar: lastBar },
+                mfe_r: finiteOrNull(currentMfeR),
+                mae_r: finiteOrNull(currentMaeR),
+                mfe_price: currentMfePrice,
+                mae_price: currentMaePrice,
+                bars_to_close: barsSinceTrigger,
                 monitor_run_id: monitorRunId,
               }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
               console.log(`  ${symbol}: EXPIRY @ ${exitPrice}, R=${resultR.toFixed(2)}`)
@@ -388,6 +450,11 @@ async function main() {
               exit_bar_timestamp: new Date(bar.ts * 1000).toISOString(),
               result_r: null,
               raw_price_evidence: { bar },
+              mfe_r: finiteOrNull(currentMfeR),
+              mae_r: finiteOrNull(currentMaeR),
+              mfe_price: currentMfePrice,
+              mae_price: currentMaePrice,
+              bars_to_close: barsSinceTrigger,
               monitor_run_id: monitorRunId,
             }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
             console.log(`  ${symbol}: AMBIGUOUS (stop+target same bar)`)
@@ -407,6 +474,11 @@ async function main() {
               exit_bar_timestamp: new Date(bar.ts * 1000).toISOString(),
               result_r: resultR,
               raw_price_evidence: { bar },
+              mfe_r: finiteOrNull(currentMfeR),
+              mae_r: finiteOrNull(currentMaeR),
+              mfe_price: currentMfePrice,
+              mae_price: currentMaePrice,
+              bars_to_close: barsSinceTrigger,
               monitor_run_id: monitorRunId,
             }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
             console.log(`  ${symbol}: TARGET_HIT, R=${resultR.toFixed(2)}`)
@@ -426,6 +498,11 @@ async function main() {
               exit_bar_timestamp: new Date(bar.ts * 1000).toISOString(),
               result_r: -1.0,
               raw_price_evidence: { bar },
+              mfe_r: finiteOrNull(currentMfeR),
+              mae_r: finiteOrNull(currentMaeR),
+              mfe_price: currentMfePrice,
+              mae_price: currentMaePrice,
+              bars_to_close: barsSinceTrigger,
               monitor_run_id: monitorRunId,
             }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
             console.log(`  ${symbol}: STOP_HIT, R=-1.00`)
@@ -435,7 +512,25 @@ async function main() {
           }
         }
 
-        if (!closed) console.log(`  ${symbol}: TRIGGERED, monitoring P&L`)
+        if (!closed) {
+          console.log(`  ${symbol}: TRIGGERED, monitoring P&L`)
+          // Fix 4: persist running MFE/MAE so it survives to the next monitor run --
+          // only when at least one post-trigger bar was actually processed this run,
+          // otherwise there's nothing new to record.
+          if (lastProcessedBar) {
+            await db.from('shadow_trade_outcomes').update({
+              raw_price_evidence: {
+                ...existingEvidence,
+                running_mfe_r: finiteOrNull(currentMfeR),
+                running_mae_r: finiteOrNull(currentMaeR),
+                running_mfe_price: currentMfePrice,
+                running_mae_price: currentMaePrice,
+                last_bar_ts: lastProcessedBar.ts,
+              },
+              monitor_run_id: monitorRunId,
+            }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
+          }
+        }
       }
 
     } catch (err) {
