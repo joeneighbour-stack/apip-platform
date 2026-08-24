@@ -378,7 +378,7 @@ async function main() {
 
         for (const bar of bars) {
           const barTime = new Date(bar.ts * 1000)
-          if (barTime <= triggeredAt) continue // skip bars before trigger
+          if (barTime < triggeredAt) continue // skip bars before trigger -- the bar AT triggeredAt is included
 
           barsSinceTrigger++
           lastProcessedBar = bar
