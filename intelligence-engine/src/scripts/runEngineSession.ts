@@ -838,6 +838,14 @@ async function main() {
         }
       }
 
+      // EUROPEAN only: the real, final per-market assignment (post analyst-first +
+      // fallback allocation) overwrites daily_coverage_plan for session='EUROPEAN'
+      // once this loop finishes, superseding preallocateDay.ts's earlier forecast
+      // for this session -- see that script's header comment, which no longer
+      // pre-allocates EUROPEAN at all for this exact reason. US/APAC still rely on
+      // preallocateDay.ts's forecast; only EUROPEAN's plan is overwritten with reality.
+      const europeanCoveragePlanRows: { market_id: string; analyst_id: string }[] = []
+
       for (const item of generatedItems) {
         const { market, marketState, opp, rv, hidden, diagnostics, validityOverride, triggerProbability, trendState } = item
         const allocation = allocationByRvId.get(item.rvId)
@@ -864,6 +872,9 @@ async function main() {
 
         if (oppErr || !oppRow) { console.error(`  ${market.symbol} opp error: ${oppErr?.message}`); continue }
         opportunitiesCreated++
+        if (session === 'EUROPEAN') {
+          europeanCoveragePlanRows.push({ market_id: market.market_id, analyst_id: allocation.assignedAnalystId })
+        }
 
         const { data: rvRow, error: rvErr } = await db.from('recommendation_versions').upsert({
           recommendation_version_id: item.rvId,
@@ -1075,6 +1086,27 @@ async function main() {
           }
         } catch (err) {
           console.log(`  ${market.symbol} shadow: ${(err as Error).message}`)
+        }
+      }
+
+      // Overwrite daily_coverage_plan for session='EUROPEAN' with this run's real
+      // assignments, one batch upsert after the loop above rather than per-market --
+      // see europeanCoveragePlanRows' declaration comment. Only markets that got a
+      // real assignment this run are touched; a EUROPEAN market that produced no
+      // opportunity this run (skipped/errored above) keeps whatever row already
+      // exists (preallocateDay.ts's forecast, or a previous day's engine run),
+      // rather than being deleted.
+      if (session === 'EUROPEAN' && europeanCoveragePlanRows.length > 0) {
+        const { error: coveragePlanError } = await db.from('daily_coverage_plan').upsert(
+          europeanCoveragePlanRows.map(r => ({
+            date: today, market_id: r.market_id, analyst_id: r.analyst_id, session: 'EUROPEAN',
+          })),
+          { onConflict: 'date,market_id,session' },
+        )
+        if (coveragePlanError) {
+          console.error(`  daily_coverage_plan overwrite failed: ${coveragePlanError.message}`)
+        } else {
+          console.log(`  daily_coverage_plan: ${europeanCoveragePlanRows.length} EUROPEAN row(s) overwritten with real assignments`)
         }
       }
 

@@ -4,10 +4,19 @@
 // ============================================================================
 // Runs once at the very start of the day (04:20 UTC -- before populate-daily
 // at 04:28, before derive-regime at 04:33, before EUROPEAN's own engine run
-// at 04:48) and assigns every market across all three sessions (EUROPEAN +
-// US + APAC combined) to an analyst in a single pass, writing the result to
-// daily_coverage_plan (migrations/049) so analysts can see a full-day
-// coverage forecast first thing in the morning.
+// at 04:48) and assigns every US + APAC market to an analyst in a single
+// pass, writing the result to daily_coverage_plan (migrations/049) so
+// analysts can see a same-day coverage forecast for those two sessions
+// first thing in the morning.
+//
+// EUROPEAN is deliberately NOT pre-allocated here (it used to be, combined
+// with US + APAC in one pass): engine-european's own run now overwrites
+// daily_coverage_plan for session='EUROPEAN' directly with its real
+// assignments once it runs at 04:48 -- see runEngineSession.ts's post-loop
+// upsert for EUROPEAN. Pre-allocating it here first would just be forecast
+// work immediately superseded 28 minutes later, and scoring it into this
+// script's shared workload map would give US/APAC a workload baseline
+// seeded from a forecast that never gets used for anything.
 //
 // Deliberately NOT a scaled-down engine run:
 //   - No captureIntradaySnapshot / market_state_intraday read -- there is no
@@ -46,23 +55,17 @@ import { randomUUID } from 'node:crypto'
 import { scoreAnalystForMarket, type AnalystScore, type AnalystProfileRow } from '../services/analystScoringService.js'
 import { allocateCoverage, type OpportunityForAllocation } from '../services/allocationService.js'
 
-// Mirrors SESSION_MARKETS in runEngineSession.ts -- kept as a separate copy
-// rather than importing from there, since that file has no exports (it's a
-// standalone `main()` script, same as this one) and refactoring it to share
-// this constant wasn't asked for. Keep the two in sync if session market
-// lists change.
+// US + APAC entries mirror SESSION_MARKETS in runEngineSession.ts -- kept as a
+// separate copy rather than importing from there, since that file has no
+// exports (it's a standalone `main()` script, same as this one) and
+// refactoring it to share this constant wasn't asked for. Keep the two in
+// sync if session market lists change. No EUROPEAN entry here -- this script
+// no longer pre-allocates that session (see header comment).
 const SESSION_MARKETS: Record<string, string[]> = {
-  EUROPEAN: [
-    'EURNZD', 'EURGBP', 'Natural Gas', 'AUDCAD',
-    'FTSE', 'GBPCHF', 'Silver', 'Brent', 'GBPUSD',
-    'USDMXN', 'AUDJPY', 'USDTRY', 'USDCAD', 'EURJPY',
-    'Oil', 'USDJPY', 'CAC', 'Palladium', 'Gold', 'EURSEK',
-    'AUDUSD', 'GBPJPY', 'EURCHF', 'Platinum', 'Copper', 'EURUSD', 'USDCHF', 'DAX',
-  ],
   US:   ['DOW', 'SP500', 'NASDAQ', 'US2000', 'Ripple', 'Solana', 'Ethereum', 'Bitcoin', 'Litecoin'],
   APAC: ['CHINA A50', 'ASX200', 'GBPAUD', 'NZDJPY', 'NZDUSD', 'NIKKEI', 'EURAUD', 'GBPNZD'],
 }
-const SESSION_ORDER = ['EUROPEAN', 'US', 'APAC'] as const
+const SESSION_ORDER = ['US', 'APAC'] as const
 
 // Matches runEngineSession.ts's own MAX/MIN_MARKETS_PER_ANALYST exactly --
 // duplicated for the same reason SESSION_MARKETS is (no shared module
@@ -115,7 +118,7 @@ async function main() {
   console.log(`Date: ${today}`)
   console.log(`Mode: ${isDryRun ? 'DRY RUN (no writes)' : 'LIVE'}\n`)
 
-  // ── Load analysts + today's availability (all sessions) ──────────────────
+  // ── Load analysts + today's availability (US + APAC) ──────────────────
   const { data: analystRows } = await db.from('analysts')
     .select('analyst_id, display_name, active, sessions').eq('active', true)
 
@@ -142,13 +145,13 @@ async function main() {
   const allEligibleToday = new Set([...eligibleBySession.values()].flat())
   console.log(`Analysts eligible for at least one session today: ${allEligibleToday.size}`)
 
-  // ── Load all markets across all sessions ──────────────────────────────────
+  // ── Load all markets across both sessions ──────────────────────────────────
   const allSymbols = SESSION_ORDER.flatMap(s => SESSION_MARKETS[s]!)
   const { data: marketRows } = await db.from('markets')
     .select('market_id, symbol, asset_class').in('symbol', allSymbols)
   const marketBySymbol = new Map((marketRows ?? []).map(m => [m.symbol, m]))
   const totalMarkets = allSymbols.length
-  console.log(`Markets across all sessions: ${totalMarkets} (${marketRows?.length ?? 0} resolved)`)
+  console.log(`Markets across US + APAC: ${totalMarkets} (${marketRows?.length ?? 0} resolved)`)
 
   // ── Load most recent regime per market -- yesterday's, since today's ─────
   // derive-regime run (04:33) hasn't happened yet at this script's 04:20 slot.
