@@ -518,7 +518,7 @@ async function main() {
           // only when at least one post-trigger bar was actually processed this run,
           // otherwise there's nothing new to record.
           if (lastProcessedBar) {
-            await db.from('shadow_trade_outcomes').update({
+            const { error: mfeUpdateError } = await db.from('shadow_trade_outcomes').update({
               raw_price_evidence: {
                 ...existingEvidence,
                 running_mfe_r: finiteOrNull(currentMfeR),
@@ -529,6 +529,11 @@ async function main() {
               },
               monitor_run_id: monitorRunId,
             }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
+            if (mfeUpdateError) {
+              console.error(`  ${symbol}: MFE/MAE update failed:`, mfeUpdateError.message)
+            } else {
+              console.log(`  ${symbol}: MFE/MAE updated — mfe=${finiteOrNull(currentMfeR)?.toFixed(3)}R mae=${finiteOrNull(currentMaeR)?.toFixed(3)}R bars=${barsSinceTrigger}`)
+            }
           }
         }
       }
