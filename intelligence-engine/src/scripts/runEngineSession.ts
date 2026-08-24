@@ -16,7 +16,7 @@ import { allocateCoverage, type OpportunityForAllocation } from '../services/all
 import { createShadowTrade } from '../services/shadowTradeService.js'
 import type { ActiveAnalyst } from '../services/analystProfileService.js'
 import { scoreAnalystForMarket, type AnalystScore, type AnalystProfileRow, type DirectionAlignment } from '../services/analystScoringService.js'
-import type { AtrProfile } from '../services/entryOptimizerService.js'
+import { selectEntryZone, zoneBounds, type AtrProfile } from '../services/entryOptimizerService.js'
 import { atrProfileMapKey } from '../services/analystAtrProfileService.js'
 import type { SessionType } from '../types/domain.js'
 
@@ -288,6 +288,7 @@ async function main() {
   const sessionMarkets = SESSION_MARKETS[session as string] ?? []
   let opportunitiesCreated = 0, recommendationsCreated = 0
   let coachingCreated = 0, shadowTradesCreated = 0, shadowTradesSkippedUnreliableBand = 0
+  let optimalShadowTradesCreated = 0, optimalSkippedNoSignal = 0, optimalSkippedUnreliableBand = 0
 
   try {
     // ── Step 1: Load market state ────────────────────────────────────────────
@@ -855,6 +856,16 @@ async function main() {
       const analystFirstItems = generatedItems.filter(item => item.preAssignedAnalystId)
       const fallbackItems = generatedItems.filter(item => !item.preAssignedAnalystId)
 
+      // Captured below as each opportunity is successfully written -- feeds the
+      // OPTIMAL shadow trade pass after this loop. Independent of whether the
+      // ANALYST_MIRROR shadow trade itself succeeds/is band-reliable for that
+      // market; the OPTIMAL pass re-checks band reliability on its own.
+      const optimalPassCandidates: Array<{
+        market: any; marketState: any; trendState: string | null; intraday: any
+        opportunityId: string; recommendationVersionId: string
+        opportunityDirection: 'BUY' | 'SELL'
+      }> = []
+
       for (const item of analystFirstItems) {
         const score = item.analystScore as AnalystScore
         allocationByRvId.set(item.rvId, {
@@ -1025,6 +1036,14 @@ async function main() {
           .update({ active_recommendation_version_id: rvRow.recommendation_version_id })
           .eq('opportunity_id', oppRow.opportunity_id)
 
+        optimalPassCandidates.push({
+          market, marketState, trendState,
+          intraday: intradayByMarket.get(market.market_id),
+          opportunityId: oppRow.opportunity_id,
+          recommendationVersionId: rvRow.recommendation_version_id,
+          opportunityDirection: item.opp.direction,
+        })
+
         const { data: teamRow } = await db.from('teams').select('team_id').eq('active', true).single()
         if (teamRow) {
           await db.from('coverage_allocation').insert({
@@ -1183,6 +1202,11 @@ async function main() {
               monitor_from: monitorFrom,
               entry_variant: variant,
               shadow_system: 'ANALYST_MIRROR',
+              // Same analyst already assigned this opportunity (allocation.assignedAnalystId,
+              // used above for opportunities/coverage_allocation) -- migrations/
+              // 062_shadow_optimal_analyst.sql. Additive field only; the analyst
+              // assignment/variant generation logic above is unchanged.
+              profile_analyst_id: allocation.assignedAnalystId,
             }).select('shadow_trade_id').single()
 
             if (!shadowError && shadowRow) {
@@ -1203,6 +1227,143 @@ async function main() {
           }
         } catch (err) {
           console.log(`  ${market.symbol} shadow: ${(err as Error).message}`)
+        }
+      }
+
+      // ── OPTIMAL pass: unconstrained best-profile shadow trades ────────────────
+      // Runs after every opportunity this session has been written -- purely
+      // additive shadow trade generation, no recommendations/allocations/coaching
+      // touched. For each opportunity, scores every session-eligible analyst
+      // against this market/regime (same confidence x |avgR| x alignmentMultiplier
+      // formula as the main engine's analyst-first scoring above), with no
+      // workload cap at all -- every market gets an OPTIMAL trade regardless of
+      // how many other markets that analyst already "won" here or in the main
+      // pass. Skips a market only when no analyst has a real (non-NONE) tier
+      // signal for it, or the band is unreliable (same 1.5x ATR20 check as the
+      // ANALYST_MIRROR pass, re-evaluated independently per market).
+      console.log(`\nOPTIMAL pass: scoring ${optimalPassCandidates.length} opportunit${optimalPassCandidates.length === 1 ? 'y' : 'ies'}...`)
+      for (const candidate of optimalPassCandidates) {
+        const { market, marketState, trendState, intraday, opportunityId, recommendationVersionId, opportunityDirection } = candidate
+        try {
+          const volatilityState = regimeByMarketId.get(market.market_id)?.volatility_state ?? null
+          const currentZone = marketState.currentZone ?? null
+
+          let best: AnalystScore | null = null
+          let bestValue = -Infinity
+          for (const a of eligibleAnalysts) {
+            const score = scoreAnalystForMarket(
+              a.analyst, market.market_id, market.asset_class, trendState, volatilityState, currentZone,
+              profilesByAnalyst.get(a.analyst) ?? [],
+            )
+            if (score.profileTier === 'NONE' || !score.preferredDirection) continue
+            const value = score.confidence * Math.abs(score.avgR) * score.alignmentMultiplier
+            if (value > bestValue) { bestValue = value; best = score }
+          }
+
+          if (!best || !best.preferredDirection) {
+            console.log(`  ${market.symbol}: OPTIMAL skipped -- no analyst has a real profile signal for this market`)
+            optimalSkippedNoSignal++
+            continue
+          }
+
+          const sessionRange = (intraday?.session_high ?? 0) - (intraday?.session_low ?? 0)
+          const atr20 = marketState.atr20 ?? marketState.atr14 ?? 0
+          const bandReliable = atr20 > 0 && sessionRange <= atr20 * 1.5
+          if (!bandReliable) {
+            console.log(`  ${market.symbol}: OPTIMAL skipped -- intraday range (${sessionRange.toFixed(5)}) exceeds 1.5x ATR20 (${(atr20 * 1.5).toFixed(5)})`)
+            optimalSkippedUnreliableBand++
+            continue
+          }
+
+          const optimalDirection = best.preferredDirection
+          const zone = selectEntryZone(optimalDirection, trendState)
+          const [rawZoneLow, rawZoneHigh] = zoneBounds(marketState, zone)
+          const zoneLow = Math.min(rawZoneLow, rawZoneHigh)
+          const zoneHigh = Math.max(rawZoneLow, rawZoneHigh)
+          const lowerBand = Number(marketState.lowerBand)
+          const upperBand = Number(marketState.upperBand)
+
+          if ([zoneLow, zoneHigh, lowerBand, upperBand].some(v => Number.isNaN(v))) {
+            console.log(`  ${market.symbol}: OPTIMAL skipped -- no usable band/zone geometry`)
+            optimalSkippedNoSignal++
+            continue
+          }
+
+          if (optimalDirection !== opportunityDirection) {
+            console.log(`  ${market.symbol}: OPTIMAL direction (${optimalDirection}, ${best.profileTier}) differs from recommendation (${opportunityDirection})`)
+          }
+
+          const monitorFrom = session === 'APAC'
+            ? new Date(new Date(generatedAt).toISOString().slice(0, 10) + 'T15:00:00Z').toISOString()
+            : session === 'US'
+            ? new Date(new Date(generatedAt).toISOString().slice(0, 10) + 'T12:00:00Z').toISOString()
+            : null
+          const expiresAt = computeExpiresAt(session, market.asset_class ?? null, new Date(generatedAt)).toISOString()
+
+          for (const variant of ENTRY_VARIANTS) {
+            const entry = variantEntry(optimalDirection, variant, zoneLow, zoneHigh)
+            const { stop, target, rr } = variantStopTargetRr(optimalDirection, entry, lowerBand, upperBand, MINIMUM_RR)
+
+            const shadowId = randomUUID()
+            const shadowOutcomeId = randomUUID()
+            const { shadowTrade, shadowTradeOutcome } = createShadowTrade({
+              shadowTradeId: shadowId,
+              shadowOutcomeId,
+              createdAt: generatedAt,
+              recommendationVersionId,
+              opportunityId,
+              entry, stop, target, rr,
+              // Not template-selection based (no buildRecommendation() call in this
+              // pass) -- 'unknown' is the honest value here, not one of the real
+              // template-derived sources.
+              templateSource: 'unknown',
+              direction: optimalDirection,
+              session,
+            })
+
+            const { data: shadowRow, error: shadowError } = await db.from('shadow_trades').insert({
+              shadow_trade_id: shadowTrade.shadowTradeId,
+              opportunity_id: shadowTrade.opportunityId,
+              recommendation_version_id: shadowTrade.recommendationVersionId,
+              entry: shadowTrade.entry,
+              stop: shadowTrade.stop,
+              target: shadowTrade.target,
+              rr: shadowTrade.rr,
+              template_source: shadowTrade.templateSource,
+              confidence_label: shadowTrade.confidenceLabel,
+              direction: shadowTrade.direction,
+              session: shadowTrade.session,
+              generated_at: generatedAt,
+              entry_mode: 'WAIT_FOR_PREFERRED_ZONE',
+              generated_price: Number(intraday?.current_price),
+              expires_at: expiresAt,
+              price_provider: 'FINNHUB_OANDA',
+              price_resolution: '5MIN',
+              monitor_from: monitorFrom,
+              entry_variant: variant,
+              shadow_system: 'OPTIMAL',
+              // migrations/062_shadow_optimal_analyst.sql -- the analyst whose profile
+              // was scored highest for this market, may differ from the opportunity's
+              // own assigned_analyst_id.
+              profile_analyst_id: best.analystId,
+            }).select('shadow_trade_id').single()
+
+            if (!shadowError && shadowRow) {
+              await db.from('shadow_trade_outcomes').insert({
+                shadow_outcome_id: shadowTradeOutcome.shadowOutcomeId,
+                shadow_trade_id: shadowRow.shadow_trade_id,
+                trade_outcome_status: 'NOT_TRIGGERED',
+                triggered_at: null,
+                triggered_price: null,
+                trigger_source: null,
+              })
+              optimalShadowTradesCreated++
+            } else if (shadowError) {
+              console.log(`  ${market.symbol} OPTIMAL shadow (${variant}): ${shadowError.message}`)
+            }
+          }
+        } catch (err) {
+          console.log(`  ${market.symbol} OPTIMAL shadow: ${(err as Error).message}`)
         }
       }
 
@@ -1231,6 +1392,9 @@ async function main() {
         opportunities: opportunitiesCreated, recommendations: recommendationsCreated,
         coaching: coachingCreated, shadow_trades: shadowTradesCreated,
         shadow_trades_skipped_unreliable_band: shadowTradesSkippedUnreliableBand,
+        optimal_shadow_trades: optimalShadowTradesCreated,
+        optimal_skipped_no_signal: optimalSkippedNoSignal,
+        optimal_skipped_unreliable_band: optimalSkippedUnreliableBand,
       })
 
       await db.from('engine_runs').update({
@@ -1248,6 +1412,9 @@ async function main() {
       console.log(`Coaching recs:   ${coachingCreated}`)
       console.log(`Shadow trades:   ${shadowTradesCreated}`)
       console.log(`  skipped (unreliable band): ${shadowTradesSkippedUnreliableBand}`)
+      console.log(`OPTIMAL shadow trades: ${optimalShadowTradesCreated}`)
+      console.log(`  skipped (no signal):       ${optimalSkippedNoSignal}`)
+      console.log(`  skipped (unreliable band): ${optimalSkippedUnreliableBand}`)
     }
 
   } catch (err) {
