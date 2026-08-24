@@ -15,7 +15,7 @@ import { buildCoachingRecommendation } from '../services/coachingService.js'
 import { allocateCoverage, type OpportunityForAllocation } from '../services/allocationService.js'
 import { createShadowTrade } from '../services/shadowTradeService.js'
 import type { ActiveAnalyst } from '../services/analystProfileService.js'
-import { scoreAnalystForMarket, type AnalystScore, type AnalystProfileRow } from '../services/analystScoringService.js'
+import { scoreAnalystForMarket, type AnalystScore, type AnalystProfileRow, type DirectionAlignment } from '../services/analystScoringService.js'
 import type { AtrProfile } from '../services/entryOptimizerService.js'
 import { atrProfileMapKey } from '../services/analystAtrProfileService.js'
 import type { SessionType } from '../types/domain.js'
@@ -854,6 +854,31 @@ async function main() {
           continue
         }
 
+        // directionAlignment for regime_tags/coaching must reflect the recommendation
+        // itself (opp.direction, what the engine is actually telling the analyst to
+        // do today) vs today's trend -- not item.analystScore.directionAlignment,
+        // which is the analyst's historical PROFILE direction vs trend (still correct
+        // and unchanged as the analyst-first scoring/ranking signal in
+        // analystScoringService.ts, just the wrong thing to show an analyst as "is
+        // this recommendation with or against the trend"). Computed unconditionally
+        // (not gated on item.analystScore existing) since the recommendation
+        // direction and trend are always known regardless of which path -- analyst-
+        // first or fallback -- assigned the analyst; the fallback path previously
+        // wrote no directionAlignment into regime_tags at all.
+        const recDirection = opp.direction
+        const trendBullish = trendState === 'TRENDING_UP'
+        const trendBearish = trendState === 'TRENDING_DOWN'
+        const ranging = trendState === 'RANGE' || trendState === 'MIXED'
+        const recommendationAlignment: DirectionAlignment = !trendState
+          ? 'NONE'
+          : ranging
+            ? 'NEUTRAL'
+            : (recDirection === 'BUY' && trendBullish) || (recDirection === 'SELL' && trendBearish)
+              ? 'TREND_ALIGNED'
+              : (recDirection === 'BUY' && trendBearish) || (recDirection === 'SELL' && trendBullish)
+                ? 'COUNTER_TREND'
+                : 'NEUTRAL'
+
         const intraday = intradayByMarket.get(market.market_id)
 
         const { data: oppRow, error: oppErr } = await db.from('opportunities').upsert({
@@ -898,11 +923,13 @@ async function main() {
           // profile avgR and quality, raw (pre-confidence-scaling) trigger
           // probability, and whether an analyst-specific ATR profile was used --
           // without this, there's no way to audit why a recommendation looked the
-          // way it did from the database alone. directionAlignment/
-          // alignmentMultiplier/profileTier are only present when the analyst-first
-          // path was used (no AnalystScore exists for the fallback path); the
-          // diagnostics fields are always present, since buildRecommendation()
-          // always returns diagnostics regardless of which path assigned the analyst.
+          // way it did from the database alone. directionAlignment is now always
+          // present (computed above from the recommendation's own direction vs
+          // today's trend, not the analyst's historical profile direction) --
+          // alignmentMultiplier/profileTier remain analyst-first-path-only (no
+          // AnalystScore exists for the fallback path); the diagnostics fields are
+          // always present, since buildRecommendation() always returns diagnostics
+          // regardless of which path assigned the analyst.
           // Was writing direction_alignment (snake_case) while every reader queries
           // regime_tags->>'directionAlignment' (camelCase) -- silently always null.
           //
@@ -913,8 +940,8 @@ async function main() {
           // trade's actual stop/target landed outside/inside the band that was live
           // at generation -- reusing this existing jsonb column avoids a new migration.
           regime_tags: {
+            directionAlignment: recommendationAlignment,
             ...(item.analystScore ? {
-              directionAlignment: (item.analystScore as AnalystScore).directionAlignment,
               alignmentMultiplier: (item.analystScore as AnalystScore).alignmentMultiplier,
               profileTier: (item.analystScore as AnalystScore).profileTier,
             } : {}),
