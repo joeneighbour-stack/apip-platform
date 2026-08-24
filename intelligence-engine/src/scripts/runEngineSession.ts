@@ -1094,6 +1094,13 @@ async function main() {
             price_provider: 'FINNHUB_OANDA',
             price_resolution: '5MIN',
             monitor_from: monitorFrom,
+            // Both already the column defaults (migrations/061_strategy_learning.sql)
+            // -- written explicitly so every row is unambiguously tagged with which
+            // entry-zone variant and which shadow strategy produced it, rather than
+            // relying on the default staying correct as future variants/systems
+            // (ZONE_BOTTOM/ZONE_TOP, OPTIMAL) get added.
+            entry_variant: 'ZONE_MID',
+            shadow_system: 'ANALYST_MIRROR',
           }).select('shadow_trade_id').single()
 
           if (!shadowError && shadowRow) {
