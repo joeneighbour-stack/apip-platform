@@ -145,20 +145,27 @@ async function main() {
   const allEligibleToday = new Set([...eligibleBySession.values()].flat())
   console.log(`Analysts eligible for at least one session today: ${allEligibleToday.size}`)
 
-  // Seed workload from today's European engine allocation (written by
-  // runEngineSession.ts's post-loop upsert for EUROPEAN). This ensures US/APAC
-  // allocation accounts for European load, so the total daily workload
-  // respects MIN/MAX_MARKETS_PER_ANALYST. On days where European hasn't run
-  // yet (04:20 vs 04:48 UTC), this returns zero rows -- that's acceptable,
-  // the pre-allocator is a forecast.
+  // Seed workload from YESTERDAY's European engine allocation as a proxy
+  // for today's expected European load. The pre-allocator runs at 04:20 UTC,
+  // 28 minutes before today's European engine writes opportunities at 04:48 UTC,
+  // so today's rows don't exist yet. Yesterday's allocation is a reliable
+  // proxy since European market lists and analyst eligibility are stable day-to-day.
+  // On Mondays, uses Friday's allocation (weekend skipped correctly above).
+  const yesterday = new Date()
+  yesterday.setDate(yesterday.getDate() - 1)
+  // Skip back to Friday if today is Monday (no weekend engine runs)
+  if (yesterday.getDay() === 0) yesterday.setDate(yesterday.getDate() - 1) // Sunday → Friday
+  if (yesterday.getDay() === 6) yesterday.setDate(yesterday.getDate() - 1) // Saturday → Friday
+  const yesterdayStr = yesterday.toISOString().slice(0, 10)
+
   const { data: europeanOpps } = await db
     .from('opportunities')
     .select('assigned_analyst_id')
-    .eq('date', today)
+    .eq('date', yesterdayStr)
     .eq('session', 'EUROPEAN')
     .not('assigned_analyst_id', 'is', null)
   const europeanCount = (europeanOpps ?? []).length
-  console.log(`European opportunities already assigned today: ${europeanCount}`)
+  console.log(`European opportunities from ${yesterdayStr} (proxy for today): ${europeanCount}`)
 
   // ── Load all markets across both sessions ──────────────────────────────────
   const allSymbols = SESSION_ORDER.flatMap(s => SESSION_MARKETS[s]!)
@@ -166,8 +173,9 @@ async function main() {
     .select('market_id, symbol, asset_class').in('symbol', allSymbols)
   const marketBySymbol = new Map((marketRows ?? []).map(m => [m.symbol, m]))
   // Total markets across ALL sessions for cap calculation -- US + APAC (allSymbols)
-  // plus today's real EUROPEAN opportunity count, so targetPerAnalyst/hardCap in
-  // workloadAdjustedScore() reflect the full day's load, not just US + APAC's.
+  // plus yesterday's EUROPEAN opportunity count (europeanCount, today's proxy), so
+  // targetPerAnalyst/hardCap in workloadAdjustedScore() reflect the full day's
+  // expected load, not just US + APAC's.
   const totalMarkets = allSymbols.length + europeanCount
   console.log(`Markets across US + APAC: ${allSymbols.length} (${marketRows?.length ?? 0} resolved); total incl. European: ${totalMarkets}`)
 
@@ -231,7 +239,7 @@ async function main() {
   const workload = new Map<string, number>()
   for (const id of allEligibleToday) workload.set(id, 0)
 
-  // Seed from today's European engine allocation (fetched above)
+  // Seed from yesterday's European engine allocation, used as today's proxy (fetched above)
   for (const opp of (europeanOpps ?? [])) {
     const id = opp.assigned_analyst_id
     if (workload.has(id)) {
