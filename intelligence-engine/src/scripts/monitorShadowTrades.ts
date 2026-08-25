@@ -237,6 +237,49 @@ async function main() {
 
   console.log(`Active trades: ${activeTrades.length}`)
 
+  // Pre-fetch bars once per unique price_data_symbol, not once per shadow trade --
+  // with 6 shadow trades per opportunity (3 entry variants x 2 shadow systems, see
+  // migrations/061_strategy_learning.sql and 062_shadow_optimal_analyst.sql), the
+  // per-trade fetch below used to call Finnhub up to 6 times for the identical
+  // symbol in one monitor run, hitting rate limits and getting empty arrays back
+  // for most of those calls. Cache key is the Finnhub symbol only; each symbol's
+  // fromTs is the EARLIEST fromTs needed across all its active trades, so every
+  // trade -- however far back its own window starts -- finds its bars already
+  // covered in the shared array. The per-trade loop below still filters bars to
+  // each trade's own triggered_at (TRIGGERED) or expires_at (NOT_TRIGGERED)
+  // exactly as it always did, so a wider shared window changes nothing about
+  // which bars a given trade actually acts on.
+  const barCache = new Map<string, Bar[]>()
+  const uniqueSymbols = new Map<string, { finnhubSym: string; isCrypto: boolean; fromTs: number }>()
+
+  for (const trade of activeTrades) {
+    const market = (trade.opportunities as any)?.markets
+    const outcome = trade.shadow_trade_outcomes?.[0] as ShadowOutcome | undefined
+    if (!market || !outcome) continue
+
+    const finnhubSym = market.price_data_symbol as string
+    const isCrypto = market.asset_class === 'CRYPTO'
+    const status = outcome.trade_outcome_status
+
+    const fromTs = status === 'TRIGGERED' && outcome.triggered_at
+      ? Math.floor(new Date(outcome.triggered_at).getTime() / 1000) - 300
+      : Math.floor(new Date(trade.generated_at).getTime() / 1000)
+
+    const existing = uniqueSymbols.get(finnhubSym)
+    if (!existing || fromTs < existing.fromTs) {
+      uniqueSymbols.set(finnhubSym, { finnhubSym, isCrypto, fromTs })
+    }
+  }
+
+  console.log(`Unique symbols to fetch: ${uniqueSymbols.size}`)
+  for (const [finnhubSym, { isCrypto, fromTs }] of uniqueSymbols) {
+    const bars = isCrypto
+      ? await fetchCryptoBars(finnhubSym, fromTs, nowTs, CANDLE_KEY)
+      : await fetch5MinBars(finnhubSym, fromTs, nowTs, CANDLE_KEY)
+    barCache.set(finnhubSym, bars)
+    await new Promise(r => setTimeout(r, 200)) // rate limit -- same pacing as the per-trade loop below
+  }
+
   const summary = { triggered: 0, closed: 0, expired: 0, ambiguous: 0, skipped: 0, errors: 0 }
 
   for (const trade of activeTrades) {
@@ -246,8 +289,6 @@ async function main() {
 
     const symbol      = market.symbol as string
     const finnhubSym  = market.price_data_symbol as string
-    const assetClass  = market.asset_class as string
-    const isCrypto    = assetClass === 'CRYPTO'
     const expiresAt   = new Date(trade.expires_at)
     const status      = outcome.trade_outcome_status
 
@@ -256,14 +297,12 @@ async function main() {
     if (terminalStates.includes(status)) { summary.skipped++; continue }
 
     try {
-      // Fetch 5-min bars since trade was created (or since triggered_at for TRIGGERED)
-      const fromTs = status === 'TRIGGERED' && outcome.triggered_at
-        ? Math.floor(new Date(outcome.triggered_at).getTime() / 1000) - 300
-        : Math.floor(new Date(trade.generated_at).getTime() / 1000)
-
-      const bars = isCrypto
-        ? await fetchCryptoBars(finnhubSym, fromTs, nowTs, CANDLE_KEY)
-        : await fetch5MinBars(finnhubSym, fromTs, nowTs, CANDLE_KEY)
+      // Bars already fetched once per unique symbol above -- fromTs/isCrypto no
+      // longer computed here. An empty array (never populated -- shouldn't happen
+      // given every active trade's symbol was walked into uniqueSymbols above, but
+      // matches the pre-fetch loop's own defensive fallback) just means this trade's
+      // loops below run zero iterations, same as a genuinely empty Finnhub response.
+      const bars = barCache.get(finnhubSym) ?? []
 
       // ── Handle NOT_TRIGGERED ──────────────────────────────────────────────
       if (status === 'NOT_TRIGGERED') {
