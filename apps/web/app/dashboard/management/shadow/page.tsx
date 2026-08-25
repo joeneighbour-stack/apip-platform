@@ -32,6 +32,8 @@ export default async function ShadowMonitoringPage() {
           shadow_outcome_id,
           trade_outcome_status,
           result_r,
+          mfe_r,
+          mae_r,
           outcome_timestamp,
           shadow_trade:shadow_trade_id (
             shadow_trade_id,
@@ -39,6 +41,8 @@ export default async function ShadowMonitoringPage() {
             direction, session,
             template_source,
             generated_at,
+            entry_variant,
+            shadow_system,
             opportunity:opportunity_id (
               date,
               market:market_id ( symbol, asset_class, display_precision, market_id )

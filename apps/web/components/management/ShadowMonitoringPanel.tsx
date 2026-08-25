@@ -1,14 +1,19 @@
 'use client'
-import { useState, useMemo } from 'react'
+import { useState, useMemo, Fragment } from 'react'
 import { useLivePrices } from '@/hooks/useLivePrices'
 import { UnrealisedR } from '@/components/shared/UnrealisedR'
 import { ShadowSinceLaunchStats } from './ShadowSinceLaunchStats'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Legend } from 'recharts'
 
+type EntryVariant = 'ZONE_BOTTOM' | 'ZONE_MID' | 'ZONE_TOP'
+type ShadowSystem = 'ANALYST_MIRROR' | 'OPTIMAL'
+
 interface ShadowOutcome {
   shadow_outcome_id: string
   trade_outcome_status: string
   result_r: number | null
+  mfe_r: number | null
+  mae_r: number | null
   outcome_timestamp: string | null
   shadow_trade: {
     shadow_trade_id: string
@@ -20,6 +25,8 @@ interface ShadowOutcome {
     session: string | null
     template_source: string
     generated_at: string
+    entry_variant: EntryVariant | null
+    shadow_system: ShadowSystem | null
     opportunity: {
       date: string
       market: { symbol: string; asset_class: string; display_precision: number | null; market_id: string } | null
@@ -49,14 +56,6 @@ interface Props {
   // Breakdown grid lives in its own component (own data fetch, own client state) but needs to
   // appear in the middle of this panel's section order, not after it.
   breakdownSlot?: React.ReactNode
-}
-
-const STATUS_STYLES: Record<string, string> = {
-  TARGET_HIT:    'bg-green-100 text-green-800',
-  STOP_HIT:      'bg-red-100 text-red-800',
-  EXPIRY:        'bg-muted text-muted-foreground',
-  TRIGGERED:     'bg-blue-50 text-blue-700',
-  NOT_TRIGGERED: 'bg-slate-100 text-slate-600',
 }
 
 const DATE_RANGES = [
@@ -92,6 +91,63 @@ function monthLabel(dateStr: string) {
   return d.toLocaleString('en-GB', { day: 'numeric', month: 'short' })
 }
 
+// Same status set byMarket already used inline for "has this setup actually
+// triggered (or gone further)" -- extracted here so the Variant Performance tab's
+// Triggered % uses the identical definition rather than a second, subtly
+// different one.
+const TRIGGERED_OR_BEYOND = ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED', 'CLOSED_PROFIT', 'CLOSED_LOSS']
+
+const ENTRY_VARIANTS: EntryVariant[] = ['ZONE_BOTTOM', 'ZONE_MID', 'ZONE_TOP']
+const VARIANT_LABELS: Record<EntryVariant, string> = {
+  ZONE_BOTTOM: 'Bottom', ZONE_MID: 'Mid', ZONE_TOP: 'Top',
+}
+const SYSTEM_LABELS: Record<ShadowSystem, string> = {
+  ANALYST_MIRROR: 'Analyst Mirror', OPTIMAL: 'Optimal Signal',
+}
+
+function statusColour(status: string): string {
+  switch (status) {
+    case 'TARGET_HIT':
+    case 'CLOSED_PROFIT': return 'text-green-700 font-medium'
+    case 'STOP_HIT':
+    case 'CLOSED_LOSS':   return 'text-red-700 font-medium'
+    case 'TRIGGERED':     return 'text-blue-600'
+    case 'NOT_TRIGGERED': return 'text-slate-500'
+    case 'EXPIRY':         return 'text-muted-foreground'
+    default:               return 'text-muted-foreground'
+  }
+}
+
+function statusLabel(status: string): string {
+  switch (status) {
+    case 'TARGET_HIT':    return 'Target'
+    case 'STOP_HIT':      return 'Stop'
+    case 'CLOSED_PROFIT': return 'Profit'
+    case 'CLOSED_LOSS':   return 'Loss'
+    case 'TRIGGERED':     return 'Open'
+    case 'NOT_TRIGGERED': return 'Pending'
+    case 'EXPIRY':         return 'Expired'
+    default:               return status.replace(/_/g, ' ')
+  }
+}
+
+// Variant cell -- one column per entry variant in the grouped trade table (Fix 3).
+function VariantCell({ outcome }: { outcome: ShadowOutcome | null }) {
+  if (!outcome) return <td className="px-3 py-2 text-xs text-muted-foreground">—</td>
+  const status = outcome.trade_outcome_status
+  const r = shadowResultR(outcome)
+  return (
+    <td className="px-3 py-2 text-xs">
+      <span className={statusColour(status)}>{statusLabel(status)}</span>
+      {r !== null && (
+        <span className={`ml-1 tabular-nums ${r >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+          {r > 0 ? '+' : ''}{r.toFixed(2)}R
+        </span>
+      )}
+    </td>
+  )
+}
+
 export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades, actualPublications, breakdownSlot }: Props) {
   // Live prices for TRIGGERED shadow trades
   const triggeredSymbols = [...new Set(shadowOutcomes
@@ -101,11 +157,30 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades, actualPubl
   )]
   const { prices: livePrices } = useLivePrices(triggeredSymbols)
 
+  // Outer tab: the existing panel (all sections below, now scoped by the system
+  // tab underneath it) vs the new Variant Performance summary (Fix 5) -- separate
+  // from, and unaffected by, the system tab, since it deliberately spans both
+  // systems (one row per variant x system).
+  const [pageTab, setPageTab] = useState<'MONITOR' | 'VARIANTS'>('MONITOR')
+  // System tab: which shadow_system every section in the Trade Monitor tab is
+  // scoped to. Defaults to ANALYST_MIRROR since that's the pre-existing single
+  // shadow system this whole panel was built around.
+  const [system, setSystem] = useState<ShadowSystem>('ANALYST_MIRROR')
+
   const [sessionFilter, setSessionFilter] = useState('ALL')
   const [assetFilter, setAssetFilter] = useState('ALL')
   const [outcomeFilter, setOutcomeFilter] = useState('ALL')
   const [dateRangeDays, setDateRangeDays] = useState(1)
   const [comparisonWindow, setComparisonWindow] = useState(30)
+
+  // Rows generated before migrations/061_strategy_learning.sql have shadow_system
+  // = null in the database (the column default only applies to new inserts, not
+  // backfilled onto existing rows) -- treated as ANALYST_MIRROR here since every
+  // shadow trade before that migration WAS the analyst-mirror system, just not
+  // yet labelled as one.
+  const systemFilteredOutcomes = useMemo(() =>
+    shadowOutcomes.filter(o => (o.shadow_trade?.shadow_system ?? 'ANALYST_MIRROR') === system),
+    [shadowOutcomes, system])
 
   // Simple aggregate comparison: all shadow trade outcomes vs all analyst actual
   // trades for the period, grouped by date only -- not restricted to markets
@@ -113,6 +188,16 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades, actualPubl
   // zeroed out analyst R for any day the analyst didn't trade the exact same market
   // as a given shadow setup, and could double-count analyst R when multiple shadow
   // outcomes existed for the same market/date.
+  //
+  // Scoped to the selected system tab (systemFilteredOutcomes) -- NOT further
+  // scoped to a single entry variant, so with three variants per opportunity this
+  // now sums R across all three rather than the single trade each opportunity used
+  // to produce. That's a real, larger-magnitude change to every R total in this
+  // panel (period comparison, Since Platform Launch, By Market) now that shadow
+  // trades are 3x their pre-variant volume -- the task only specified filtering by
+  // shadow_system here, not also by entry_variant, so the aggregate sections below
+  // are unchanged beyond that one filter. See Variant Performance (Fix 5) for the
+  // per-variant breakdown these totals now blend together.
   const dailyComparison = useMemo(() => {
     const cutoff = new Date(Date.now() - comparisonWindow * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
@@ -125,7 +210,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades, actualPubl
     }
 
     const dailyData = new Map<string, { date: string; shadowR: number; analystR: number; count: number }>()
-    for (const outcome of shadowOutcomes) {
+    for (const outcome of systemFilteredOutcomes) {
       const opp = outcome.shadow_trade?.opportunity
       if (!opp?.date || opp.date < cutoff) continue
       const shadowR = shadowResultR(outcome) ?? 0
@@ -154,20 +239,20 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades, actualPubl
         count: d.count,
       }
     })
-  }, [shadowOutcomes, actualTrades, comparisonWindow])
+  }, [systemFilteredOutcomes, actualTrades, comparisonWindow])
 
   const totalShadowR = dailyComparison.length > 0 ? dailyComparison[dailyComparison.length - 1]!.cumulativeShadowR : 0
   const totalAnalystR = dailyComparison.length > 0 ? dailyComparison[dailyComparison.length - 1]!.cumulativeAnalystR : 0
   const deltaR = totalShadowR - totalAnalystR
 
   const byMarket = new Map<string, { symbol: string; assetClass: string; total: number; triggered: number; wins: number; totalR: number; avgRr: number; rrCount: number }>()
-  for (const o of shadowOutcomes) {
+  for (const o of systemFilteredOutcomes) {
     const st = o.shadow_trade
     const symbol = st?.opportunity?.market?.symbol
     const assetClass = st?.opportunity?.market?.asset_class ?? ''
     if (!symbol) continue
     const existing = byMarket.get(symbol) ?? { symbol, assetClass, total: 0, triggered: 0, wins: 0, totalR: 0, avgRr: 0, rrCount: 0 }
-    const isTriggered = ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED', 'CLOSED_PROFIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)
+    const isTriggered = TRIGGERED_OR_BEYOND.includes(o.trade_outcome_status)
     const r = shadowResultR(o) ?? 0
     byMarket.set(symbol, {
       ...existing,
@@ -182,10 +267,10 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades, actualPubl
   const marketRows = [...byMarket.values()].sort((a, b) => b.totalR - a.totalR)
 
   const dateFilteredOutcomes = useMemo(() => {
-    if (dateRangeDays === 0) return shadowOutcomes
+    if (dateRangeDays === 0) return systemFilteredOutcomes
     const cutoff = new Date(Date.now() - dateRangeDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-    return shadowOutcomes.filter(o => (o.shadow_trade as any)?.opportunity?.date >= cutoff)
-  }, [shadowOutcomes, dateRangeDays])
+    return systemFilteredOutcomes.filter(o => (o.shadow_trade as any)?.opportunity?.date >= cutoff)
+  }, [systemFilteredOutcomes, dateRangeDays])
 
   const filtered = dateFilteredOutcomes.filter(o => {
     const st = o.shadow_trade as any
@@ -195,6 +280,97 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades, actualPubl
     return true
   })
 
+  // Fix 3: one row per market+date+direction (== one opportunity, within the
+  // already-selected system tab), three variant columns instead of three
+  // separate rows. Click-to-expand pattern -- this file had no expand/collapse
+  // state before; matches the Fragment-wrapped expand-row convention already used
+  // elsewhere in the app (e.g. TradeHistoryTable.tsx), not a pre-existing pattern
+  // in this specific file.
+  const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null)
+
+  const tradeGroups = useMemo(() => {
+    const groups = new Map<string, {
+      key: string; symbol: string; assetClass: string; precision: number | null
+      direction: string; date: string; session: string | null
+      variants: Record<EntryVariant, ShadowOutcome | null>
+    }>()
+    for (const outcome of filtered) {
+      const st = outcome.shadow_trade
+      const opp = st?.opportunity
+      const marketId = opp?.market?.market_id
+      const symbol = opp?.market?.symbol
+      const date = opp?.date
+      const direction = st?.direction
+      const variant = st?.entry_variant
+      if (!marketId || !symbol || !date || !direction || !variant) continue
+      const key = `${marketId}::${date}::${direction}`
+      const existing = groups.get(key) ?? {
+        key, symbol, assetClass: opp?.market?.asset_class ?? '',
+        precision: opp?.market?.display_precision ?? null,
+        direction, date, session: st?.session ?? null,
+        variants: { ZONE_BOTTOM: null, ZONE_MID: null, ZONE_TOP: null },
+      }
+      existing.variants[variant] = outcome
+      groups.set(key, existing)
+    }
+    return [...groups.values()].sort((a, b) => b.date.localeCompare(a.date))
+  }, [filtered])
+
+  // Fix 5: Variant Performance -- one row per (entry_variant x shadow_system)
+  // combination, computed from the full shadowOutcomes prop (both systems, not
+  // scoped to the system tab above -- this view deliberately compares across
+  // systems). Asset-class filter only: the task also asked for a regime filter,
+  // but no regime field is fetched anywhere for shadow trades (not in the
+  // current query, not added by Fix 1's entry_variant/shadow_system/mfe_r/mae_r
+  // additions) and this section is explicitly "no additional query needed" --
+  // there's no regime data available to filter by without one, so that dropdown
+  // isn't implemented.
+  const [vpAssetFilter, setVpAssetFilter] = useState('ALL')
+
+  const variantPerformanceRows = useMemo(() => {
+    type Agg = {
+      variant: EntryVariant; system: ShadowSystem
+      total: number; triggered: number; closed: number; wins: number
+      totalR: number; totalMfe: number; mfeCount: number; totalMae: number; maeCount: number
+    }
+    const byKey = new Map<string, Agg>()
+    for (const o of shadowOutcomes) {
+      const st = o.shadow_trade
+      if (vpAssetFilter !== 'ALL' && st?.opportunity?.market?.asset_class !== vpAssetFilter) continue
+      const variant = st?.entry_variant
+      const system = st?.shadow_system ?? 'ANALYST_MIRROR'
+      if (!variant) continue
+      const key = `${variant}::${system}`
+      const existing = byKey.get(key) ?? {
+        variant, system, total: 0, triggered: 0, closed: 0, wins: 0,
+        totalR: 0, totalMfe: 0, mfeCount: 0, totalMae: 0, maeCount: 0,
+      }
+      existing.total++
+      if (TRIGGERED_OR_BEYOND.includes(o.trade_outcome_status)) existing.triggered++
+      const r = shadowResultR(o)
+      if (r !== null) {
+        existing.closed++
+        existing.totalR += r
+        if (r > 0) existing.wins++
+      }
+      if (o.mfe_r !== null) { existing.totalMfe += o.mfe_r; existing.mfeCount++ }
+      if (o.mae_r !== null) { existing.totalMae += o.mae_r; existing.maeCount++ }
+      byKey.set(key, existing)
+    }
+    return [...byKey.values()]
+      // Only rows with at least 10 closed trades -- too thin a sample otherwise.
+      .filter(a => a.closed >= 10)
+      .map(a => ({
+        variant: a.variant, system: a.system, trades: a.closed,
+        triggeredPct: a.total > 0 ? a.triggered / a.total : null,
+        winRate: a.closed > 0 ? a.wins / a.closed : null,
+        avgR: a.closed > 0 ? a.totalR / a.closed : null,
+        avgMfe: a.mfeCount > 0 ? a.totalMfe / a.mfeCount : null,
+        avgMae: a.maeCount > 0 ? a.totalMae / a.maeCount : null,
+      }))
+      .sort((x, y) => (y.avgR ?? -Infinity) - (x.avgR ?? -Infinity))
+  }, [shadowOutcomes, vpAssetFilter])
+
   return (
     <div className="space-y-6">
       <div className="rounded-lg border border-amber-200 bg-amber-50/50 px-4 py-3">
@@ -202,6 +378,122 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades, actualPubl
           Shadow benchmark data is restricted to management. Analysts do not have visibility of these metrics.
           Shadow trades execute at the midpoint of the suggested entry range using median ATR-normalised stop/target distances.
         </p>
+      </div>
+
+      {/* Fix 5: outer tab -- Trade Monitor (everything below, scoped by the system
+          tab underneath) vs Variant Performance (spans both systems). Styled to
+          match ManagementTabs.tsx's border-b-2/-mb-px underline pattern -- the only
+          existing tab component in the management dashboard. */}
+      <div className="flex items-center gap-1 border-b border-border">
+        <button
+          onClick={() => setPageTab('MONITOR')}
+          className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+            pageTab === 'MONITOR'
+              ? 'border-foreground text-foreground'
+              : 'border-transparent text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          Trade Monitor
+        </button>
+        <button
+          onClick={() => setPageTab('VARIANTS')}
+          className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+            pageTab === 'VARIANTS'
+              ? 'border-foreground text-foreground'
+              : 'border-transparent text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          Variant Performance
+        </button>
+      </div>
+
+      {pageTab === 'VARIANTS' ? (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-medium">Variant Performance ({variantPerformanceRows.length})</h2>
+            <select value={vpAssetFilter} onChange={e => setVpAssetFilter(e.target.value)}
+              className="text-xs px-2 py-1.5 rounded-md border border-border bg-background">
+              <option value="ALL">All classes</option>
+              <option value="FX">FX</option>
+              <option value="INDEX">Index</option>
+              <option value="COMMODITY">Commodity</option>
+              <option value="CRYPTO">Crypto</option>
+            </select>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            One row per entry variant &times; shadow system, across both systems and every closed trade regardless
+            of asset class unless filtered above. Rows with fewer than 10 closed trades are hidden as too thin a
+            sample. No regime filter -- no regime field is fetched for shadow trades, and this view is computed
+            entirely from data already on the page.
+          </p>
+          <div className="rounded-lg border border-border overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50">
+                <tr>
+                  {['Variant', 'System', 'Triggered %', 'Win Rate', 'Avg R', 'Avg MFE', 'Avg MAE', 'Trades'].map(h => (
+                    <th key={h} className="text-left px-3 py-2.5 text-xs font-medium text-muted-foreground whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {variantPerformanceRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-6 text-center text-xs text-muted-foreground">
+                      No variant/system combination has 10+ closed trades yet{vpAssetFilter !== 'ALL' ? ' for this asset class' : ''}.
+                    </td>
+                  </tr>
+                ) : variantPerformanceRows.map(row => (
+                  <tr key={`${row.variant}::${row.system}`} className="hover:bg-muted/30">
+                    <td className="px-3 py-2 text-xs font-medium whitespace-nowrap">{VARIANT_LABELS[row.variant]}</td>
+                    <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">{SYSTEM_LABELS[row.system]}</td>
+                    <td className="px-3 py-2 text-xs tabular-nums">
+                      {row.triggeredPct !== null ? `${Math.round(row.triggeredPct * 100)}%` : '—'}
+                    </td>
+                    <td className="px-3 py-2 text-xs tabular-nums">
+                      {row.winRate !== null ? `${Math.round(row.winRate * 100)}%` : '—'}
+                    </td>
+                    <td className={`px-3 py-2 text-xs tabular-nums font-medium ${
+                      row.avgR !== null ? (row.avgR >= 0 ? 'text-green-700' : 'text-red-700') : ''
+                    }`}>
+                      {row.avgR !== null ? `${row.avgR > 0 ? '+' : ''}${row.avgR.toFixed(2)}R` : '—'}
+                    </td>
+                    <td className="px-3 py-2 text-xs tabular-nums text-green-700">
+                      {row.avgMfe !== null ? `+${row.avgMfe.toFixed(2)}R` : '—'}
+                    </td>
+                    <td className="px-3 py-2 text-xs tabular-nums text-red-600">
+                      {row.avgMae !== null ? row.avgMae.toFixed(2) + 'R' : '—'}
+                    </td>
+                    <td className="px-3 py-2 text-xs tabular-nums text-muted-foreground">{row.trades}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : (
+      <>
+      {/* Fix 2: system tab -- scopes every section below (period comparison, Since
+          Platform Launch, By Market, the grouped trade table) to one shadow_system
+          at a time via systemFilteredOutcomes. */}
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => setSystem('ANALYST_MIRROR')}
+          className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
+            system === 'ANALYST_MIRROR'
+              ? 'bg-foreground text-background border-foreground'
+              : 'border-border text-muted-foreground hover:text-foreground'
+          }`}>
+          Analyst Mirror
+        </button>
+        <button
+          onClick={() => setSystem('OPTIMAL')}
+          className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
+            system === 'OPTIMAL'
+              ? 'bg-foreground text-background border-foreground'
+              : 'border-border text-muted-foreground hover:text-foreground'
+          }`}>
+          Optimal Signal
+        </button>
       </div>
 
       {/* Period comparison chart */}
@@ -280,7 +572,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades, actualPubl
       </section>
 
       <ShadowSinceLaunchStats
-        shadowOutcomes={shadowOutcomes}
+        shadowOutcomes={systemFilteredOutcomes}
         actualTrades={actualTrades}
         actualPublications={actualPublications}
       />
@@ -339,77 +631,94 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades, actualPubl
           <table className="w-full text-sm">
             <thead className="bg-muted/50">
               <tr>
-                {['Date', 'Market', 'Session', 'Dir', 'Entry', 'Stop', 'Target', 'RR', 'Outcome', 'Result R'].map(h => (
+                {['Date', 'Market', 'Session', 'Dir', 'Bottom', 'Mid', 'Top', ''].map(h => (
                   <th key={h} className="text-left px-3 py-2.5 text-xs font-medium text-muted-foreground whitespace-nowrap">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {filtered.length === 0 ? (
+              {tradeGroups.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-4 py-6 text-center text-xs text-muted-foreground">
+                  <td colSpan={8} className="px-4 py-6 text-center text-xs text-muted-foreground">
                     No shadow outcomes for the selected period.
                   </td>
                 </tr>
-              ) : filtered.map(outcome => {
-                const st = outcome.shadow_trade as any
-                const opp = st?.opportunity
-                const precision = opp?.market?.display_precision ?? 4
-                const resultR = shadowResultR(outcome)
-                const dir = st?.direction
-                const symbol = opp?.market?.symbol ?? ''
-                const currentPrice = livePrices[symbol] ?? null
-                const isOpenTriggered = outcome.trade_outcome_status === 'TRIGGERED'
+              ) : tradeGroups.map(group => {
+                const isExpanded = expandedGroupKey === group.key
+                const hasAnyTrade = ENTRY_VARIANTS.some(v => group.variants[v] !== null)
+                const currentPrice = livePrices[group.symbol] ?? null
 
                 return (
-                  <tr key={outcome.shadow_outcome_id} className="hover:bg-muted/30">
-                    <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">{opp?.date ?? '—'}</td>
-                    <td className="px-3 py-2 font-medium text-xs whitespace-nowrap">{symbol || '—'}</td>
-                    <td className="px-3 py-2 text-xs text-muted-foreground">{st?.session ?? '—'}</td>
-                    <td className="px-3 py-2">
-                      {dir ? (
+                  <Fragment key={group.key}>
+                    <tr
+                      onClick={() => hasAnyTrade && setExpandedGroupKey(isExpanded ? null : group.key)}
+                      className={`transition-colors ${hasAnyTrade ? 'cursor-pointer hover:bg-muted/30' : 'hover:bg-muted/30'}`}
+                    >
+                      <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">{group.date}</td>
+                      <td className="px-3 py-2 font-medium text-xs whitespace-nowrap">{group.symbol}</td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground">{group.session ?? '—'}</td>
+                      <td className="px-3 py-2">
                         <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
-                          dir === 'BUY' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                        }`}>{dir}</span>
-                      ) : <span className="text-muted-foreground text-xs">—</span>}
-                    </td>
-                    <td className="px-3 py-2 text-xs tabular-nums text-muted-foreground whitespace-nowrap">
-                      {st?.entry != null ? fmtPrice(Number(st.entry), precision) : '—'}
-                    </td>
-                    <td className="px-3 py-2 text-xs tabular-nums text-red-700 whitespace-nowrap">
-                      {st?.stop != null ? fmtPrice(Number(st.stop), precision) : '—'}
-                    </td>
-                    <td className="px-3 py-2 text-xs tabular-nums text-green-700 whitespace-nowrap">
-                      {st?.target != null ? fmtPrice(Number(st.target), precision) : '—'}
-                    </td>
-                    <td className="px-3 py-2 text-xs tabular-nums text-muted-foreground">
-                      {st?.rr != null ? `${Number(st.rr).toFixed(1)}:1` : '—'}
-                    </td>
-                    <td className="px-3 py-2">
-                      <span className={`text-xs font-medium px-2 py-0.5 rounded-full whitespace-nowrap ${
-                        STATUS_STYLES[outcome.trade_outcome_status] ?? 'bg-muted text-muted-foreground'
-                      }`}>
-                        {outcome.trade_outcome_status.replace(/_/g, ' ')}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-xs tabular-nums font-medium">
-                      {resultR !== null ? (
-                        <span className={resultR >= 0 ? 'text-green-700' : 'text-red-700'}>
-                          {resultR > 0 ? '+' : ''}{resultR.toFixed(2)}R
-                        </span>
-                      ) : isOpenTriggered && st?.entry != null && st?.stop != null && st?.target != null ? (
-                        <UnrealisedR
-                          entry={Number(st.entry)}
-                          stop={Number(st.stop)}
-                          target={Number(st.target)}
-                          direction={dir as 'BUY' | 'SELL'}
-                          currentPrice={currentPrice}
-                        />
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </td>
-                  </tr>
+                          group.direction === 'BUY' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                        }`}>{group.direction}</span>
+                      </td>
+                      <VariantCell outcome={group.variants.ZONE_BOTTOM} />
+                      <VariantCell outcome={group.variants.ZONE_MID} />
+                      <VariantCell outcome={group.variants.ZONE_TOP} />
+                      <td className="px-3 py-2 text-xs text-muted-foreground/60">
+                        {hasAnyTrade ? (isExpanded ? '▲' : '▼') : ''}
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr>
+                        <td colSpan={8} className="px-4 py-3 bg-muted/20 border-t border-border">
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                            {ENTRY_VARIANTS.map(variant => {
+                              const outcome = group.variants[variant]
+                              const st = outcome?.shadow_trade
+                              const isOpenTriggered = outcome?.trade_outcome_status === 'TRIGGERED'
+                              return (
+                                <div key={variant} className="space-y-1">
+                                  <p className="text-xs font-medium">{VARIANT_LABELS[variant]}</p>
+                                  {!outcome || !st ? (
+                                    <p className="text-xs text-muted-foreground">No trade</p>
+                                  ) : (
+                                    <>
+                                      <p className="text-xs tabular-nums text-muted-foreground">
+                                        Entry {fmtPrice(Number(st.entry), group.precision)}
+                                        {' · '}<span className="text-red-700">Stop {fmtPrice(Number(st.stop), group.precision)}</span>
+                                        {' · '}<span className="text-green-700">Target {fmtPrice(Number(st.target), group.precision)}</span>
+                                        {' · '}{Number(st.rr).toFixed(1)}:1
+                                      </p>
+                                      {/* Fix 4: MFE/MAE, per variant, only when the trade has triggered */}
+                                      {outcome.mfe_r !== null && outcome.mae_r !== null && (
+                                        <div className="text-xs text-muted-foreground mt-1">
+                                          <span className="text-red-600">MAE {outcome.mae_r.toFixed(2)}R</span>
+                                          <span className="mx-2">&middot;</span>
+                                          <span className="text-green-600">MFE +{outcome.mfe_r.toFixed(2)}R</span>
+                                        </div>
+                                      )}
+                                      {isOpenTriggered && (
+                                        <p className="text-xs mt-1">
+                                          <UnrealisedR
+                                            entry={Number(st.entry)}
+                                            stop={Number(st.stop)}
+                                            target={Number(st.target)}
+                                            direction={group.direction as 'BUY' | 'SELL'}
+                                            currentPrice={currentPrice}
+                                          />
+                                        </p>
+                                      )}
+                                    </>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 )
               })}
             </tbody>
@@ -454,6 +763,8 @@ export function ShadowMonitoringPanel({ shadowOutcomes, actualTrades, actualPubl
             </table>
           </div>
         </section>
+      )}
+      </>
       )}
     </div>
   )
