@@ -34,6 +34,7 @@ export default async function ShadowMonitoringPage() {
           result_r,
           mfe_r,
           mae_r,
+          raw_price_evidence,
           outcome_timestamp,
           shadow_trade:shadow_trade_id (
             shadow_trade_id,

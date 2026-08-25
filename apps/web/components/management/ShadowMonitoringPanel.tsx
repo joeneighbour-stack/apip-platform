@@ -14,6 +14,7 @@ interface ShadowOutcome {
   result_r: number | null
   mfe_r: number | null
   mae_r: number | null
+  raw_price_evidence: Record<string, any> | null
   outcome_timestamp: string | null
   shadow_trade: {
     shadow_trade_id: string
@@ -90,6 +91,23 @@ function shadowResultR(outcome: ShadowOutcome): number | null {
   if (outcome.trade_outcome_status === 'TARGET_HIT') return st.rr
   if (outcome.trade_outcome_status === 'STOP_HIT') return -1
   return null
+}
+
+// mfe_r/mae_r are only written at close (monitorShadowTrades.ts) -- for a still-open
+// TRIGGERED trade they're null, and the current running value instead lives in
+// raw_price_evidence.running_mfe_r/running_mae_r (written on every monitor run that
+// processes a new bar). Falls back to null when neither is available (NOT_TRIGGERED,
+// or a TRIGGERED trade with no bar processed yet this run).
+function effectiveMfe(outcome: ShadowOutcome): number | null {
+  if (outcome.mfe_r !== null) return outcome.mfe_r  // closed trade — use final value
+  const evidence = outcome.raw_price_evidence as any
+  return typeof evidence?.running_mfe_r === 'number' ? evidence.running_mfe_r : null
+}
+
+function effectiveMae(outcome: ShadowOutcome): number | null {
+  if (outcome.mae_r !== null) return outcome.mae_r  // closed trade — use final value
+  const evidence = outcome.raw_price_evidence as any
+  return typeof evidence?.running_mae_r === 'number' ? evidence.running_mae_r : null
 }
 
 function monthLabel(dateStr: string) {
@@ -356,8 +374,10 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
         existing.totalR += r
         if (r > 0) existing.wins++
       }
-      if (o.mfe_r !== null) { existing.totalMfe += o.mfe_r; existing.mfeCount++ }
-      if (o.mae_r !== null) { existing.totalMae += o.mae_r; existing.maeCount++ }
+      const mfe = effectiveMfe(o)
+      const mae = effectiveMae(o)
+      if (mfe !== null) { existing.totalMfe += mfe; existing.mfeCount++ }
+      if (mae !== null) { existing.totalMae += mae; existing.maeCount++ }
       byKey.set(key, existing)
     }
     return [...byKey.values()]
@@ -695,14 +715,24 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
                                         {' · '}<span className="text-green-700">Target {fmtPrice(Number(st.target), group.precision)}</span>
                                         {' · '}{Number(st.rr).toFixed(1)}:1
                                       </p>
-                                      {/* Fix 4: MFE/MAE, per variant, only when the trade has triggered */}
-                                      {outcome.mfe_r !== null && outcome.mae_r !== null && (
-                                        <div className="text-xs text-muted-foreground mt-1">
-                                          <span className="text-red-600">MAE {outcome.mae_r.toFixed(2)}R</span>
-                                          <span className="mx-2">&middot;</span>
-                                          <span className="text-green-600">MFE +{outcome.mfe_r.toFixed(2)}R</span>
-                                        </div>
-                                      )}
+                                      {/* MFE/MAE, per variant, only when the trade has triggered -- final
+                                          value once closed, running value (raw_price_evidence) while still
+                                          open, via effectiveMfe/effectiveMae. */}
+                                      {(() => {
+                                        const mfe = effectiveMfe(outcome)
+                                        const mae = effectiveMae(outcome)
+                                        if (mfe === null || mae === null) return null
+                                        return (
+                                          <div className="text-xs text-muted-foreground mt-1">
+                                            <span className="text-red-600">MAE {mae.toFixed(2)}R</span>
+                                            <span className="mx-2">&middot;</span>
+                                            <span className="text-green-600">MFE +{mfe.toFixed(2)}R</span>
+                                            {isOpenTriggered && (
+                                              <span className="ml-1.5 text-muted-foreground/70">(live)</span>
+                                            )}
+                                          </div>
+                                        )
+                                      })()}
                                       {isOpenTriggered && (
                                         <p className="text-xs mt-1">
                                           <UnrealisedR
