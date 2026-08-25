@@ -154,6 +154,19 @@ export default async function ShadowMonitoringPage() {
     return dateB.localeCompare(dateA)
   })
 
+  // Two views of the same fetch, no second query:
+  // - canonicalShadowOutcomes (ANALYST_MIRROR + ZONE_MID only) -- the aggregate stats
+  //   sections (period comparison, Since Platform Launch, By Market) use this as the
+  //   fixed baseline, so those totals stay a clean 1:1 read against the pre-variant
+  //   methodology rather than silently summing across all 3 entry variants x 2 systems.
+  // - allShadowOutcomes -- every variant/system, for the variant-grouped trade table
+  //   and the Variant Performance tab, which need the full picture.
+  const canonicalShadowOutcomes = sorted.filter(
+    o => (o.shadow_trade as any)?.shadow_system === 'ANALYST_MIRROR'
+      && (o.shadow_trade as any)?.entry_variant === 'ZONE_MID'
+  )
+  const allShadowOutcomes = sorted
+
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
@@ -169,7 +182,8 @@ export default async function ShadowMonitoringPage() {
         </a>
       </div>
       <ShadowMonitoringPanel
-        shadowOutcomes={sorted}
+        shadowOutcomes={allShadowOutcomes}
+        canonicalShadowOutcomes={canonicalShadowOutcomes}
         actualTrades={actualTrades ?? []}
         actualPublications={rawActualPublications}
         breakdownSlot={<AnalystShadowBreakdown rows={breakdownRows} analysts={breakdownAnalysts} />}

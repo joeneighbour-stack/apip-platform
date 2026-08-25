@@ -99,6 +99,8 @@ async function fetchShadowBreakdownData(adminDb: SupabaseClient): Promise<Shadow
   const { data: earliestShadowTrade, error: earliestShadowTradeError } = await adminDb
     .from('shadow_trades')
     .select('generated_at')
+    .eq('shadow_system', 'ANALYST_MIRROR')
+    .eq('entry_variant', 'ZONE_MID')
     .order('generated_at', { ascending: true })
     .limit(1)
   if (earliestShadowTradeError) console.error('[getShadowBreakdownData] Failed to fetch earliest shadow_trades:', earliestShadowTradeError.message)
@@ -124,7 +126,7 @@ async function fetchShadowBreakdownData(adminDb: SupabaseClient): Promise<Shadow
           shadow_outcome_id,
           trade_outcome_status,
           result_r,
-          shadow_trade:shadow_trade_id (
+          shadow_trade:shadow_trade_id!inner (
             rr, direction, generated_at,
             opportunity:opportunity_id (
               market_id,
@@ -132,6 +134,15 @@ async function fetchShadowBreakdownData(adminDb: SupabaseClient): Promise<Shadow
             )
           )
         `)
+        // shadow_trade_id!inner is required for these two filters to actually restrict
+        // the outer shadow_trade_outcomes rows -- a plain (non-!inner) embed only nulls
+        // out the embedded shadow_trade object for non-matching rows, it does not filter
+        // the outer query (verified against this exact table earlier in the codebase,
+        // e.g. monitor/page.tsx's post_trade_reviews fetch). Without !inner, this would
+        // still return every outcome across all variants/systems, defeating the point of
+        // this fix.
+        .eq('shadow_trade.shadow_system', 'ANALYST_MIRROR')
+        .eq('shadow_trade.entry_variant', 'ZONE_MID')
         .order('shadow_outcome_id', { ascending: true })
         .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
       if (error) {
