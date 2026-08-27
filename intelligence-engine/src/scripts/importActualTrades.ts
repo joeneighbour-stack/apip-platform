@@ -651,11 +651,18 @@ async function main() {
         : errorRows > 0 ? 'PARTIAL_SUCCESS'
         : 'SUCCESS'
 
+      // chk_batch_row_reconciliation requires total_rows = success_rows + duplicate_rows +
+      // error_rows whenever status = 'SUCCESS'. total_rows is analystTrades.length, which
+      // includes every skip category from the loop above, not just skippedBackfill/
+      // skippedProtected -- outOfScopeRows (equities not in the APIP universe, or an
+      // unmapped symbol) is also a per-row skip that never becomes a success/error/
+      // duplicate row, so it has to be folded in here too or the constraint stays
+      // violated (and the update rejected) for any SUCCESS batch with out-of-scope rows.
       const { error: batchUpdateError } = await db.from('import_batches').update({
         status,
         total_rows: analystTrades.length,
         success_rows: successRows,
-        duplicate_rows: duplicateRows,
+        duplicate_rows: duplicateRows + skippedBackfill + skippedProtected + outOfScopeRows,
         error_rows: errorRows,
         finished_at: new Date().toISOString(),
       }).eq('import_batch_id', batchId)
