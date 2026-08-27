@@ -340,13 +340,14 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
   // Fix 5: Variant Performance -- one row per (entry_variant x shadow_system)
   // combination, computed from the full shadowOutcomes prop (both systems, not
   // scoped to the system tab above -- this view deliberately compares across
-  // systems). Asset-class filter only: the task also asked for a regime filter,
-  // but no regime field is fetched anywhere for shadow trades (not in the
-  // current query, not added by Fix 1's entry_variant/shadow_system/mfe_r/mae_r
-  // additions) and this section is explicitly "no additional query needed" --
-  // there's no regime data available to filter by without one, so that dropdown
-  // isn't implemented.
+  // systems). Asset-class and direction filters. A regime filter was asked for
+  // separately, but no regime field is fetched anywhere for shadow trades (not
+  // in the current query, not added by the entry_variant/shadow_system/mfe_r/
+  // mae_r additions) and this section is explicitly "no additional query
+  // needed" -- there's no regime data available to filter by without one, so
+  // that dropdown isn't implemented.
   const [vpAssetFilter, setVpAssetFilter] = useState('ALL')
+  const [vpDirectionFilter, setVpDirectionFilter] = useState<'ALL' | 'BUY' | 'SELL'>('ALL')
 
   const variantPerformanceRows = useMemo(() => {
     type Agg = {
@@ -358,6 +359,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
     for (const o of shadowOutcomes) {
       const st = o.shadow_trade
       if (vpAssetFilter !== 'ALL' && st?.opportunity?.market?.asset_class !== vpAssetFilter) continue
+      if (vpDirectionFilter !== 'ALL' && st?.direction !== vpDirectionFilter) continue
       const variant = st?.entry_variant
       const system = st?.shadow_system ?? 'ANALYST_MIRROR'
       if (!variant) continue
@@ -392,7 +394,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
         avgMae: a.maeCount > 0 ? a.totalMae / a.maeCount : null,
       }))
       .sort((x, y) => (y.avgR ?? -Infinity) - (x.avgR ?? -Infinity))
-  }, [shadowOutcomes, vpAssetFilter])
+  }, [shadowOutcomes, vpAssetFilter, vpDirectionFilter])
 
   return (
     <div className="space-y-6">
@@ -434,20 +436,28 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
         <section className="space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-medium">Variant Performance ({variantPerformanceRows.length})</h2>
-            <select value={vpAssetFilter} onChange={e => setVpAssetFilter(e.target.value)}
-              className="text-xs px-2 py-1.5 rounded-md border border-border bg-background">
-              <option value="ALL">All classes</option>
-              <option value="FX">FX</option>
-              <option value="INDEX">Index</option>
-              <option value="COMMODITY">Commodity</option>
-              <option value="CRYPTO">Crypto</option>
-            </select>
+            <div className="flex items-center gap-2">
+              <select value={vpDirectionFilter} onChange={e => setVpDirectionFilter(e.target.value as 'ALL' | 'BUY' | 'SELL')}
+                className="text-xs px-2 py-1.5 rounded-md border border-border bg-background">
+                <option value="ALL">Both directions</option>
+                <option value="BUY">BUY</option>
+                <option value="SELL">SELL</option>
+              </select>
+              <select value={vpAssetFilter} onChange={e => setVpAssetFilter(e.target.value)}
+                className="text-xs px-2 py-1.5 rounded-md border border-border bg-background">
+                <option value="ALL">All classes</option>
+                <option value="FX">FX</option>
+                <option value="INDEX">Index</option>
+                <option value="COMMODITY">Commodity</option>
+                <option value="CRYPTO">Crypto</option>
+              </select>
+            </div>
           </div>
           <p className="text-xs text-muted-foreground">
             One row per entry variant &times; shadow system, across both systems and every closed trade regardless
-            of asset class unless filtered above. Rows with fewer than 10 closed trades are hidden as too thin a
-            sample. No regime filter -- no regime field is fetched for shadow trades, and this view is computed
-            entirely from data already on the page.
+            of asset class or direction unless filtered above. Rows with fewer than 10 closed trades are hidden as
+            too thin a sample. No regime filter -- no regime field is fetched for shadow trades, and this view is
+            computed entirely from data already on the page.
           </p>
           <div className="rounded-lg border border-border overflow-x-auto">
             <table className="w-full text-sm">
@@ -462,7 +472,8 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
                 {variantPerformanceRows.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="px-4 py-6 text-center text-xs text-muted-foreground">
-                      No variant/system combination has 10+ closed trades yet{vpAssetFilter !== 'ALL' ? ' for this asset class' : ''}.
+                      No variant/system combination has 10+ closed trades yet
+                      {vpAssetFilter !== 'ALL' || vpDirectionFilter !== 'ALL' ? ' for this filter' : ''}.
                     </td>
                   </tr>
                 ) : variantPerformanceRows.map(row => (
@@ -502,7 +513,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
           that prop's declaration comment. */}
       <div className="flex items-center gap-1">
         <button
-          onClick={() => setSystem('ANALYST_MIRROR')}
+          onClick={() => { setSystem('ANALYST_MIRROR'); setExpandedGroupKey(null) }}
           className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
             system === 'ANALYST_MIRROR'
               ? 'bg-foreground text-background border-foreground'
@@ -511,7 +522,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
           Analyst Mirror
         </button>
         <button
-          onClick={() => setSystem('OPTIMAL')}
+          onClick={() => { setSystem('OPTIMAL'); setExpandedGroupKey(null) }}
           className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
             system === 'OPTIMAL'
               ? 'bg-foreground text-background border-foreground'
