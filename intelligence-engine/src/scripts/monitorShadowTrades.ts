@@ -213,7 +213,7 @@ async function main() {
         market_id,
         markets!inner ( symbol, price_data_symbol, asset_class, price_data_provider )
       ),
-      shadow_trade_outcomes (
+      shadow_trade_outcomes!inner (
         shadow_outcome_id, trade_outcome_status,
         triggered_price, triggered_at, raw_price_evidence
       )
@@ -225,9 +225,15 @@ async function main() {
     process.exit(1)
   }
 
+  // shadow_trade_outcomes.trade_outcome_status is required for the !inner filter
+  // above to actually restrict the outer shadow_trades query -- a plain (non-!inner)
+  // embed only affects the embedded array, it does not filter the outer rows, so
+  // this used to fetch every shadow trade ever generated (all terminal statuses too)
+  // on every 5-minute run and rely entirely on the client-side re-check below.
   const activeTrades = (trades ?? []).filter(t => {
     const outcome = t.shadow_trade_outcomes?.[0]
-    if (!outcome || !['NOT_TRIGGERED', 'TRIGGERED'].includes(outcome.trade_outcome_status)) return false
+    if (!outcome) return false  // shouldn't happen with !inner, but defensive
+    if (!['NOT_TRIGGERED', 'TRIGGERED'].includes(outcome.trade_outcome_status)) return false
     // APAC trades are generated hours before analysts actually publish (see migrations/
     // 053_shadow_trades_monitor_from.sql) -- ignore until monitor_from so this doesn't
     // measure market movement between generation and publication as if it were the trade.
