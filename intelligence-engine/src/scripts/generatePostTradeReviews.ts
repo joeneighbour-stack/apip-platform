@@ -231,7 +231,8 @@ async function main() {
     const market  = trade.market as any
     if (!rv?.entry_range_low || !rv?.entry_range_high || !trade.entry) { skipped++; continue }
 
-    const coachingDir     = directionByOppId.get(rv.opportunity_id) ?? trade.direction
+    const coachingDir = directionByOppId.get(rv.opportunity_id)
+    if (!coachingDir) { skipped++; continue }
     const recommendedZone = zoneByOppId.get(rv.opportunity_id) ?? null
     const lowerBand        = rv.regime_tags?.lowerBand != null ? Number(rv.regime_tags.lowerBand) : null
     const upperBand        = rv.regime_tags?.upperBand != null ? Number(rv.regime_tags.upperBand) : null
