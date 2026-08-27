@@ -267,9 +267,16 @@ async function main() {
     const isCrypto = market.asset_class === 'CRYPTO'
     const status = outcome.trade_outcome_status
 
+    // NOT_TRIGGERED trades gated by monitor_from (APAC/US, see migrations/
+    // 053_shadow_trades_monitor_from.sql) shouldn't start their bar window at
+    // generated_at -- that window includes pre-publication price movement the
+    // trade was never actually eligible to trigger on.
+    const startTime = (status === 'NOT_TRIGGERED' && trade.monitor_from)
+      ? new Date(trade.monitor_from)
+      : new Date(trade.generated_at)
     const fromTs = status === 'TRIGGERED' && outcome.triggered_at
       ? Math.floor(new Date(outcome.triggered_at).getTime() / 1000) - 300
-      : Math.floor(new Date(trade.generated_at).getTime() / 1000)
+      : Math.floor(startTime.getTime() / 1000)
 
     const existing = uniqueSymbols.get(finnhubSym)
     if (!existing || fromTs < existing.fromTs) {
@@ -344,12 +351,17 @@ async function main() {
         }
 
         // WAIT_FOR_PREFERRED_ZONE — scan bars for entry touch
+        const monitorFrom = trade.monitor_from ? new Date(trade.monitor_from) : null
         let triggered = false
         let notTriggeredBarIndex = 0
         for (const bar of bars) {
           notTriggeredBarIndex++
           const barTime = new Date(bar.ts * 1000)
           if (barTime >= expiresAt) break
+
+          // Skip bars before monitor_from gate -- pre-publication price movement
+          // is not a valid trigger (see migrations/053_shadow_trades_monitor_from.sql).
+          if (monitorFrom && barTime < monitorFrom) continue
 
           const dir = trade.direction as 'BUY' | 'SELL'
           const entry = Number(trade.entry)
