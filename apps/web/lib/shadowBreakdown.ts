@@ -100,7 +100,7 @@ async function fetchShadowBreakdownData(adminDb: SupabaseClient): Promise<Shadow
     .from('shadow_trades')
     .select('generated_at')
     .eq('shadow_system', 'ANALYST_MIRROR')
-    .eq('entry_variant', 'ZONE_MID')
+    .eq('entry_variant', 'MID')
     .order('generated_at', { ascending: true })
     .limit(1)
   if (earliestShadowTradeError) console.error('[getShadowBreakdownData] Failed to fetch earliest shadow_trades:', earliestShadowTradeError.message)
@@ -142,7 +142,7 @@ async function fetchShadowBreakdownData(adminDb: SupabaseClient): Promise<Shadow
         // still return every outcome across all variants/systems, defeating the point of
         // this fix.
         .eq('shadow_trade.shadow_system', 'ANALYST_MIRROR')
-        .eq('shadow_trade.entry_variant', 'ZONE_MID')
+        .eq('shadow_trade.entry_variant', 'MID')
         .order('shadow_outcome_id', { ascending: true })
         .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
       if (error) {

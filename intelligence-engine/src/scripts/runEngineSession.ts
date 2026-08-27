@@ -74,14 +74,17 @@ function computeExpiresAt(sessionType: string, assetClass: string | null, genera
 // ── Shadow trade entry variants ─────────────────────────────────────────────
 // Three shadow trades per recommendation, one per entry point within the same
 // zone the (single, unchanged) analyst-facing recommendation already uses --
-// ZONE_MID is that same entry (entryStopTarget.entryPrice in
-// entryOptimizerService.ts), ZONE_BOTTOM/ZONE_TOP are the zone's own low/high
-// edge. This only decides where in the zone a shadow trade enters; it does not
-// touch zone SELECTION (still entryOptimizerService.ts's selectEntryZone(),
-// unchanged) or the analyst-facing recommendation itself.
+// MID is that same entry (entryStopTarget.entryPrice in
+// entryOptimizerService.ts), CONSERVATIVE/AGGRESSIVE are the zone's own
+// low/high edge, whichever edge gives the better/worse RR for the trade's
+// direction (see variantEntry() below -- not simply "zone low"/"zone high",
+// since which edge is deeper into the pullback/rally flips between BUY and
+// SELL). This only decides where in the zone a shadow trade enters; it does
+// not touch zone SELECTION (still entryOptimizerService.ts's
+// selectEntryZone(), unchanged) or the analyst-facing recommendation itself.
 
-type EntryVariant = 'ZONE_BOTTOM' | 'ZONE_MID' | 'ZONE_TOP'
-const ENTRY_VARIANTS: EntryVariant[] = ['ZONE_BOTTOM', 'ZONE_MID', 'ZONE_TOP']
+type EntryVariant = 'CONSERVATIVE' | 'MID' | 'AGGRESSIVE'
+const ENTRY_VARIANTS: EntryVariant[] = ['CONSERVATIVE', 'MID', 'AGGRESSIVE']
 
 function variantEntry(
   direction: 'BUY' | 'SELL',
@@ -90,13 +93,15 @@ function variantEntry(
   zoneHigh: number,
 ): number {
   const mid = (zoneLow + zoneHigh) / 2
-  if (variant === 'ZONE_MID') return mid  // current behaviour
+  if (variant === 'MID') return mid  // current behaviour
   if (direction === 'BUY') {
-    // BUY: BOTTOM = zone low (cheapest), TOP = zone high (nearest current price)
-    return variant === 'ZONE_BOTTOM' ? zoneLow : zoneHigh
+    // BUY: CONSERVATIVE = zone low (deepest pullback, best RR)
+    //      AGGRESSIVE   = zone high (shallow pullback, worst RR)
+    return variant === 'CONSERVATIVE' ? zoneLow : zoneHigh
   } else {
-    // SELL: BOTTOM = zone low (nearest current price), TOP = zone high (most expensive)
-    return variant === 'ZONE_BOTTOM' ? zoneHigh : zoneLow
+    // SELL: CONSERVATIVE = zone high (deepest rally, best RR)
+    //       AGGRESSIVE   = zone low (shallow rally, worst RR)
+    return variant === 'CONSERVATIVE' ? zoneHigh : zoneLow
   }
 }
 
@@ -1147,16 +1152,16 @@ async function main() {
           const expiresAt = computeExpiresAt(session, market.asset_class ?? null, new Date(generatedAt)).toISOString()
 
           for (const variant of ENTRY_VARIANTS) {
-            // ZONE_MID reuses hiddenExecutionLevels' already-computed entry/stop/
+            // MID reuses hiddenExecutionLevels' already-computed entry/stop/
             // target/rr directly (not a parallel recomputation), guaranteeing this
             // variant stays byte-identical to current behaviour -- exactly what
-            // variantEntry()'s own 'current behaviour' comment says for ZONE_MID.
-            // ZONE_BOTTOM/ZONE_TOP compute a fresh entry via variantEntry() and
+            // variantEntry()'s own 'current behaviour' comment says for MID.
+            // CONSERVATIVE/AGGRESSIVE compute a fresh entry via variantEntry() and
             // fresh stop/target/rr via variantStopTargetRr(), off the same band.
-            const entry = variant === 'ZONE_MID'
+            const entry = variant === 'MID'
               ? hidden.entryPrice
               : variantEntry(direction, variant, zoneLow, zoneHigh)
-            const { stop, target, rr } = variant === 'ZONE_MID'
+            const { stop, target, rr } = variant === 'MID'
               ? { stop: hidden.stop, target: hidden.target, rr: hidden.rr }
               : variantStopTargetRr(direction, entry, lowerBand, upperBand, MINIMUM_RR)
 

@@ -5,7 +5,7 @@ import { UnrealisedR } from '@/components/shared/UnrealisedR'
 import { ShadowSinceLaunchStats } from './ShadowSinceLaunchStats'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Legend } from 'recharts'
 
-type EntryVariant = 'ZONE_BOTTOM' | 'ZONE_MID' | 'ZONE_TOP'
+type EntryVariant = 'CONSERVATIVE' | 'MID' | 'AGGRESSIVE'
 type ShadowSystem = 'ANALYST_MIRROR' | 'OPTIMAL'
 
 interface ShadowOutcome {
@@ -55,7 +55,7 @@ interface Props {
   // and (via the system-scoped systemCanonicalOutcomes memo below) the aggregate
   // stats sections. Filtered upstream in shadow/page.tsx.
   shadowOutcomes: ShadowOutcome[]
-  // ANALYST_MIRROR + ZONE_MID only, fixed regardless of the system tab -- kept for
+  // ANALYST_MIRROR + MID only, fixed regardless of the system tab -- kept for
   // API-compatibility with shadow/page.tsx; not read anywhere in this component
   // (AnalystShadowBreakdown, the one consumer that needs a fixed ANALYST_MIRROR
   // baseline, is fed its own separate data via getShadowBreakdownData in page.tsx,
@@ -125,9 +125,11 @@ function monthLabel(dateStr: string) {
 // different one.
 const TRIGGERED_OR_BEYOND = ['TARGET_HIT', 'STOP_HIT', 'TRIGGERED', 'CLOSED_PROFIT', 'CLOSED_LOSS']
 
-const ENTRY_VARIANTS: EntryVariant[] = ['ZONE_BOTTOM', 'ZONE_MID', 'ZONE_TOP']
+const ENTRY_VARIANTS: EntryVariant[] = ['CONSERVATIVE', 'MID', 'AGGRESSIVE']
 const VARIANT_LABELS: Record<EntryVariant, string> = {
-  ZONE_BOTTOM: 'Bottom', ZONE_MID: 'Mid', ZONE_TOP: 'Top',
+  CONSERVATIVE: 'Conservative',
+  MID: 'Mid',
+  AGGRESSIVE: 'Aggressive',
 }
 const SYSTEM_LABELS: Record<ShadowSystem, string> = {
   ANALYST_MIRROR: 'Analyst Mirror', OPTIMAL: 'Optimal Signal',
@@ -210,16 +212,16 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
     shadowOutcomes.filter(o => (o.shadow_trade?.shadow_system ?? 'ANALYST_MIRROR') === system),
     [shadowOutcomes, system])
 
-  // Canonical outcomes for the currently-selected system tab: ZONE_MID only, within
+  // Canonical outcomes for the currently-selected system tab: MID only, within
   // whichever shadow_system is active. Used by the aggregate stats sections (period
   // comparison, Since Platform Launch, By Market) so those totals respond to the
   // system tab instead of always reading ANALYST_MIRROR. The canonicalShadowOutcomes
-  // prop (ANALYST_MIRROR + ZONE_MID, fixed) remains separately available and is used
+  // prop (ANALYST_MIRROR + MID, fixed) remains separately available and is used
   // only by AnalystShadowBreakdown's like-for-like analyst-vs-shadow comparison.
   const systemCanonicalOutcomes = useMemo(() =>
     shadowOutcomes.filter(o =>
       (o.shadow_trade?.shadow_system ?? 'ANALYST_MIRROR') === system
-      && (o.shadow_trade?.entry_variant ?? 'ZONE_MID') === 'ZONE_MID'
+      && (o.shadow_trade?.entry_variant ?? 'MID') === 'MID'
     ),
     [shadowOutcomes, system])
 
@@ -230,7 +232,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
   // as a given shadow setup, and could double-count analyst R when multiple shadow
   // outcomes existed for the same market/date.
   //
-  // Scoped to systemCanonicalOutcomes (ZONE_MID only, within the selected system
+  // Scoped to systemCanonicalOutcomes (MID only, within the selected system
   // tab) -- these totals respond to the system tab rather than summing across all
   // 3 entry variants (which is what systemFilteredOutcomes -- the trade table's
   // own scope -- would do). See Variant Performance for the per-variant breakdown.
@@ -344,7 +346,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
         key, symbol, assetClass: opp?.market?.asset_class ?? '',
         precision: opp?.market?.display_precision ?? null,
         direction, date, session: st?.session ?? null,
-        variants: { ZONE_BOTTOM: null, ZONE_MID: null, ZONE_TOP: null },
+        variants: { CONSERVATIVE: null, MID: null, AGGRESSIVE: null },
       }
       existing.variants[variant] = outcome
       groups.set(key, existing)
@@ -524,7 +526,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
       {/* System tab -- scopes the grouped trade table further down
           (systemFilteredOutcomes) AND the aggregate stats sections below
           (Period comparison, Since Platform Launch, By Market), which read
-          from systemCanonicalOutcomes (ZONE_MID within the selected system). */}
+          from systemCanonicalOutcomes (MID within the selected system). */}
       <div className="flex items-center gap-1">
         <button
           onClick={() => { setSystem('ANALYST_MIRROR'); setExpandedGroupKey(null) }}
@@ -681,7 +683,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
           <table className="w-full text-sm">
             <thead className="bg-muted/50">
               <tr>
-                {['Date', 'Market', 'Session', 'Dir', 'Bottom', 'Mid', 'Top', ''].map(h => (
+                {['Date', 'Market', 'Session', 'Dir', 'Conservative', 'Mid', 'Aggressive', ''].map(h => (
                   <th key={h} className="text-left px-3 py-2.5 text-xs font-medium text-muted-foreground whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -712,9 +714,9 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
                           group.direction === 'BUY' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
                         }`}>{group.direction}</span>
                       </td>
-                      <VariantCell outcome={group.variants.ZONE_BOTTOM} />
-                      <VariantCell outcome={group.variants.ZONE_MID} />
-                      <VariantCell outcome={group.variants.ZONE_TOP} />
+                      <VariantCell outcome={group.variants.CONSERVATIVE} />
+                      <VariantCell outcome={group.variants.MID} />
+                      <VariantCell outcome={group.variants.AGGRESSIVE} />
                       <td className="px-3 py-2 text-xs text-muted-foreground/60">
                         {hasAnyTrade ? (isExpanded ? '▲' : '▼') : ''}
                       </td>
