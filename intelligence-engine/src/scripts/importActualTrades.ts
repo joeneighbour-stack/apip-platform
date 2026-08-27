@@ -651,7 +651,7 @@ async function main() {
         : errorRows > 0 ? 'PARTIAL_SUCCESS'
         : 'SUCCESS'
 
-      await db.from('import_batches').update({
+      const { error: batchUpdateError } = await db.from('import_batches').update({
         status,
         total_rows: analystTrades.length,
         success_rows: successRows,
@@ -659,6 +659,9 @@ async function main() {
         error_rows: errorRows,
         finished_at: new Date().toISOString(),
       }).eq('import_batch_id', batchId)
+      if (batchUpdateError) {
+        console.error(`Failed to update batch status: ${batchUpdateError.message}`)
+      }
     }
 
     // ── Summary ──────────────────────────────────────────────────────────────
@@ -690,11 +693,14 @@ async function main() {
     // rows already stuck that way before this fix existed).
     console.error('Unhandled error in import:', (err as Error).message)
     if (batchId && db) {
-      await db.from('import_batches').update({
+      const { error: batchUpdateError } = await db.from('import_batches').update({
         status: 'FAILED',
         finished_at: new Date().toISOString(),
         checksum_or_summary: `Unhandled error: ${(err as Error).message}`,
       }).eq('import_batch_id', batchId)
+      if (batchUpdateError) {
+        console.error(`Failed to update batch status: ${batchUpdateError.message}`)
+      }
     }
     process.exit(1)
   }
