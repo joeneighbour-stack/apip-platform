@@ -51,11 +51,15 @@ interface ActualPublication {
 
 interface Props {
   // All variants x both systems -- feeds the variant-grouped trade table (further
-  // scoped by the system tab, ANALYST_MIRROR/OPTIMAL) and the Variant Performance tab.
+  // scoped by the system tab, ANALYST_MIRROR/OPTIMAL), the Variant Performance tab,
+  // and (via the system-scoped systemCanonicalOutcomes memo below) the aggregate
+  // stats sections. Filtered upstream in shadow/page.tsx.
   shadowOutcomes: ShadowOutcome[]
-  // ANALYST_MIRROR + ZONE_MID only -- the fixed canonical baseline for the aggregate
-  // stats sections (period comparison, Since Platform Launch, By Market), independent
-  // of which system tab is selected. Filtered upstream in shadow/page.tsx.
+  // ANALYST_MIRROR + ZONE_MID only, fixed regardless of the system tab -- kept for
+  // API-compatibility with shadow/page.tsx; not read anywhere in this component
+  // (AnalystShadowBreakdown, the one consumer that needs a fixed ANALYST_MIRROR
+  // baseline, is fed its own separate data via getShadowBreakdownData in page.tsx,
+  // not this prop).
   canonicalShadowOutcomes: ShadowOutcome[]
   actualTrades: ActualTrade[]
   actualPublications: ActualPublication[]
@@ -206,6 +210,19 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
     shadowOutcomes.filter(o => (o.shadow_trade?.shadow_system ?? 'ANALYST_MIRROR') === system),
     [shadowOutcomes, system])
 
+  // Canonical outcomes for the currently-selected system tab: ZONE_MID only, within
+  // whichever shadow_system is active. Used by the aggregate stats sections (period
+  // comparison, Since Platform Launch, By Market) so those totals respond to the
+  // system tab instead of always reading ANALYST_MIRROR. The canonicalShadowOutcomes
+  // prop (ANALYST_MIRROR + ZONE_MID, fixed) remains separately available and is used
+  // only by AnalystShadowBreakdown's like-for-like analyst-vs-shadow comparison.
+  const systemCanonicalOutcomes = useMemo(() =>
+    shadowOutcomes.filter(o =>
+      (o.shadow_trade?.shadow_system ?? 'ANALYST_MIRROR') === system
+      && (o.shadow_trade?.entry_variant ?? 'ZONE_MID') === 'ZONE_MID'
+    ),
+    [shadowOutcomes, system])
+
   // Simple aggregate comparison: all shadow trade outcomes vs all analyst actual
   // trades for the period, grouped by date only -- not restricted to markets
   // triggered by both. A prior version keyed both sides by `marketId::date`, which
@@ -213,12 +230,10 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
   // as a given shadow setup, and could double-count analyst R when multiple shadow
   // outcomes existed for the same market/date.
   //
-  // Scoped to canonicalShadowOutcomes (ANALYST_MIRROR + ZONE_MID only) -- fixed,
-  // independent of the system tab below, so these totals stay a clean 1:1 read
-  // against the pre-variant methodology rather than summing across all 3 entry
-  // variants x 2 systems (which is what systemFilteredOutcomes -- the system tab's
-  // own scope -- would do; that dataset is used only by the trade table further
-  // down, not here). See Variant Performance for the per-variant breakdown.
+  // Scoped to systemCanonicalOutcomes (ZONE_MID only, within the selected system
+  // tab) -- these totals respond to the system tab rather than summing across all
+  // 3 entry variants (which is what systemFilteredOutcomes -- the trade table's
+  // own scope -- would do). See Variant Performance for the per-variant breakdown.
   const dailyComparison = useMemo(() => {
     const cutoff = new Date(Date.now() - comparisonWindow * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
@@ -231,7 +246,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
     }
 
     const dailyData = new Map<string, { date: string; shadowR: number; analystR: number; count: number }>()
-    for (const outcome of canonicalShadowOutcomes) {
+    for (const outcome of systemCanonicalOutcomes) {
       const opp = outcome.shadow_trade?.opportunity
       if (!opp?.date || opp.date < cutoff) continue
       const shadowR = shadowResultR(outcome) ?? 0
@@ -260,14 +275,14 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
         count: d.count,
       }
     })
-  }, [canonicalShadowOutcomes, actualTrades, comparisonWindow])
+  }, [systemCanonicalOutcomes, actualTrades, comparisonWindow])
 
   const totalShadowR = dailyComparison.length > 0 ? dailyComparison[dailyComparison.length - 1]!.cumulativeShadowR : 0
   const totalAnalystR = dailyComparison.length > 0 ? dailyComparison[dailyComparison.length - 1]!.cumulativeAnalystR : 0
   const deltaR = totalShadowR - totalAnalystR
 
   const byMarket = new Map<string, { symbol: string; assetClass: string; total: number; triggered: number; wins: number; totalR: number; avgRr: number; rrCount: number }>()
-  for (const o of canonicalShadowOutcomes) {
+  for (const o of systemCanonicalOutcomes) {
     const st = o.shadow_trade
     const symbol = st?.opportunity?.market?.symbol
     const assetClass = st?.opportunity?.market?.asset_class ?? ''
@@ -506,11 +521,10 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
         </section>
       ) : (
       <>
-      {/* Fix 2: system tab -- scopes only the grouped trade table further down
-          (systemFilteredOutcomes). Period comparison, Since Platform Launch, and
-          By Market read from canonicalShadowOutcomes instead (ANALYST_MIRROR +
-          ZONE_MID, fixed), independent of which system tab is selected -- see
-          that prop's declaration comment. */}
+      {/* System tab -- scopes the grouped trade table further down
+          (systemFilteredOutcomes) AND the aggregate stats sections below
+          (Period comparison, Since Platform Launch, By Market), which read
+          from systemCanonicalOutcomes (ZONE_MID within the selected system). */}
       <div className="flex items-center gap-1">
         <button
           onClick={() => { setSystem('ANALYST_MIRROR'); setExpandedGroupKey(null) }}
@@ -608,7 +622,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
       </section>
 
       <ShadowSinceLaunchStats
-        shadowOutcomes={canonicalShadowOutcomes}
+        shadowOutcomes={systemCanonicalOutcomes}
         actualTrades={actualTrades}
         actualPublications={actualPublications}
       />
