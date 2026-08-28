@@ -40,8 +40,10 @@ export default async function ManagementPerformancePage() {
     .select(`
       trade_outcome_status,
       result_r,
-      shadow_trade:shadow_trade_id ( rr )
+      shadow_trade:shadow_trade_id!inner ( rr )
     `)
+    .eq('shadow_trade.shadow_system', 'ANALYST_MIRROR')
+    .eq('shadow_trade.entry_variant', 'MID')
   if (shadowOutcomesError) console.error('[ManagementPerformancePage] Failed to fetch shadow_trade_outcomes:', shadowOutcomesError.message)
 
   // Supabase/PostgREST caps responses at 1000 rows server-side regardless of .limit() --
@@ -114,8 +116,10 @@ export default async function ManagementPerformancePage() {
     .select(`
       trade_outcome_status,
       result_r,
-      shadow_trade:shadow_trade_id ( rr, generated_at )
+      shadow_trade:shadow_trade_id!inner ( rr, generated_at )
     `)
+    .eq('shadow_trade.shadow_system', 'ANALYST_MIRROR')
+    .eq('shadow_trade.entry_variant', 'MID')
   if (shadowOutcomesAllError) console.error('[ManagementPerformancePage] Failed to fetch shadow_trade_outcomes (all):', shadowOutcomesAllError.message)
   const shadowOutcomesRecent = ((shadowOutcomesAll ?? []) as any[]).filter(o =>
     o.shadow_trade?.generated_at && o.shadow_trade.generated_at.slice(0, 10) >= thirtyDaysAgo
