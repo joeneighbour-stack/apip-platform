@@ -216,13 +216,22 @@ async function main() {
     .map(t => (t.recommendation_version as any)?.opportunity_id)
     .filter(Boolean)
 
-  // Load direction and recommended zone from opportunities
-  const { data: oppRows } = await db
-    .from('opportunities')
-    .select('opportunity_id, direction, preferred_entry_zone')
-    .in('opportunity_id', oppIds)
-  const directionByOppId = new Map((oppRows ?? []).map(o => [o.opportunity_id, o.direction]))
-  const zoneByOppId = new Map((oppRows ?? []).map(o => [o.opportunity_id, o.preferred_entry_zone]))
+  // Load direction and recommended zone from opportunities. Fetched in chunks --
+  // oppIds can exceed 460+ entries, and PostgREST's .in() filter silently truncates
+  // or fails for large arrays (same URL-length issue other batched queries in this
+  // codebase already work around, e.g. management/page.tsx's allReviews/allDisputes).
+  const CHUNK_SIZE = 100
+  const allOppRows: any[] = []
+  for (let i = 0; i < oppIds.length; i += CHUNK_SIZE) {
+    const chunk = oppIds.slice(i, i + CHUNK_SIZE)
+    const { data: chunkRows } = await db
+      .from('opportunities')
+      .select('opportunity_id, direction, preferred_entry_zone')
+      .in('opportunity_id', chunk)
+    if (chunkRows) allOppRows.push(...chunkRows)
+  }
+  const directionByOppId = new Map(allOppRows.map(o => [o.opportunity_id, o.direction]))
+  const zoneByOppId = new Map(allOppRows.map(o => [o.opportunity_id, o.preferred_entry_zone]))
 
   let created = 0, skipped = 0
 
