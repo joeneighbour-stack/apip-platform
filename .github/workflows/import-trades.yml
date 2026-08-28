@@ -6,12 +6,15 @@
 # those firings used to trigger the ENTIRE engine-daily.yml workflow, queuing runs ahead
 # of the low-frequency engine jobs that need to run at a precise time. Isolated here so
 # it can't delay them.
+#
+# The market-hours schedule (formerly */15 4-20 * * 1-5 here) moved to Railway's cron
+# (engine-trigger/index.js) for more reliable timing than GitHub Actions' best-effort
+# native schedule. Only the off-hours cron remains here -- Railway has no equivalent
+# for it yet.
 name: Import Actual Trades
 
 on:
   schedule:
-    # Every 15 minutes 04:00-20:00 UTC (05:00-21:00 UK)
-    - cron: '*/15 4-20 * * 1-5'
     # Every 4 hours outside market hours
     - cron: '0 0,21,23 * * 1-5'
   workflow_dispatch:
@@ -22,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'schedule' && (github.event.schedule == '*/15 4-20 * * 1-5' || github.event.schedule == '0 0,21,23 * * 1-5')
+      github.event_name == 'schedule' && github.event.schedule == '0 0,21,23 * * 1-5'
     defaults:
       run:
         working-directory: intelligence-engine

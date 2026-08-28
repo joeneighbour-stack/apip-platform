@@ -3,10 +3,18 @@ import cron from 'node-cron'
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN
 const OWNER = 'joeneighbour-stack'
 const REPO = 'apip-platform'
-const WORKFLOW = 'engine-daily.yml'
 
-async function triggerWorkflow(job) {
-  const url = `https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/${WORKFLOW}/dispatches`
+// workflow defaults to engine-daily.yml (every job below except import-actual-trades
+// and shadow-monitor dispatches into it, with `job` selecting which step to run --
+// see engine-daily.yml's workflow_dispatch inputs). import-trades.yml and
+// shadow-monitor.yml are standalone single-job workflows with no inputs, so they're
+// dispatched with a bare { ref } body instead.
+async function triggerWorkflow(job, workflow = 'engine-daily.yml') {
+  const url = `https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/${workflow}/dispatches`
+
+  const body = workflow === 'engine-daily.yml'
+    ? JSON.stringify({ ref: 'master', inputs: { job } })
+    : JSON.stringify({ ref: 'master' })
 
   const res = await fetch(url, {
     method: 'POST',
@@ -16,10 +24,7 @@ async function triggerWorkflow(job) {
       'X-GitHub-Api-Version': '2022-11-28',
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      ref: 'master',
-      inputs: { job }
-    })
+    body,
   })
 
   if (res.status === 204) {
@@ -77,21 +82,19 @@ cron.schedule('13 22 * * 1-5', () => triggerWorkflow('derive-regime'))
 // post-trade reviews: 22:28
 cron.schedule('28 22 * * 1-5', () => triggerWorkflow('generate-post-trade-reviews'))
 
-// Shadow breakdown cache warm -- every 15 minutes, 05:00-21:00 UTC (matches
-// shadow-monitor.yml's own 5-21 UTC trading-hours window for the same reasoning: no
-// point warming a cache whose data source, monitorShadowTrades.ts, only runs in that
-// window too). getShadowBreakdownData()'s cache has a 10-minute TTL
-// (lib/shadowBreakdown.ts) -- warming every 15 minutes keeps the row at most ~5 minutes
-// past its own TTL before the next warm call, rather than riding out a full day on
-// whichever manager's page load happens to trigger the recompute. Direct fetch rather
-// than triggerWorkflow(): this hits the Railway app's own API route, not a GitHub
-// Actions workflow, so it doesn't go through the dispatch mechanism every other
-// schedule in this file uses.
-cron.schedule('*/15 5-21 * * 1-5', () => {
-  fetch('https://apip-platform-production.up.railway.app/api/shadow/warm-cache', {
-    headers: { 'x-warm-cache-secret': process.env.ANALYTICS_WARM_CACHE_SECRET }
-  }).catch(err => console.error('Shadow cache warm failed:', err))
-})
+// Import actual trades: every 15 minutes, 04:00-20:00 UTC Mon-Fri -- moved here from
+// import-trades.yml's own on.schedule trigger (now removed from that file, keeping
+// only its off-hours cron) since GitHub Actions' native schedule is best-effort and
+// can be delayed or silently skipped under platform load (the same reason
+// import-watchdog.yml exists as a backstop) -- Railway's cron is the reliable trigger
+// for every other job in this file already.
+cron.schedule('*/15 4-20 * * 1-5', () => triggerWorkflow('import-actual-trades', 'import-trades.yml'))
+
+// Shadow monitor: every 5 minutes, 05:00-21:00 UTC Mon-Fri -- moved here from
+// shadow-monitor.yml's own on.schedule trigger (now removed from that file entirely,
+// leaving only workflow_dispatch), same reliability reasoning as import-actual-trades
+// above.
+cron.schedule('*/5 5-21 * * 1-5', () => triggerWorkflow('shadow-monitor', 'shadow-monitor.yml'))
 
 // ── Weekly Monday jobs (mirrors engine-daily.yml's remaining on.schedule entries) ──
 // generate-profiles: Monday 04:58 UTC
@@ -127,7 +130,8 @@ console.log('  13:05 engine-apac (Mon-Thu)')
 console.log('  21:58 populate-daily (evening)')
 console.log('  22:13 derive-regime (evening)')
 console.log('  22:28 post-trade-reviews')
-console.log('  05:00-21:00 every 15 min: shadow cache warm')
+console.log('  04:00-20:00 every 15 min: import-actual-trades')
+console.log('  05:00-21:00 every 5 min: shadow-monitor')
 console.log('  Monday only:')
 console.log('  04:58 generate-profiles')
 console.log('  05:15 derive-regime (weekly)')

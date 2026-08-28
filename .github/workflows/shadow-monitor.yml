@@ -6,20 +6,20 @@
 # cron trigger fires the whole workflow, not just the one job it's meant for) -- queuing
 # dozens of runs a day ahead of the low-frequency engine jobs that actually need to run
 # at a precise time. Isolated here so it can't delay them.
+#
+# No longer has its own on.schedule -- moved to Railway's cron (engine-trigger/index.js)
+# for more reliable timing than GitHub Actions' best-effort native schedule, which can
+# be delayed or silently skipped under platform load. Only workflow_dispatch remains
+# here; Railway is the trigger source now, same as engine-daily.yml.
 name: Shadow Trade Monitor
 
 on:
-  schedule:
-    - cron: '*/5 5-21 * * 1-5'
   workflow_dispatch:
 
 jobs:
   shadow-lifecycle:
     name: Shadow Trade Monitor
     runs-on: ubuntu-latest
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'schedule' && github.event.schedule == '*/5 5-21 * * 1-5'
     defaults:
       run:
         working-directory: intelligence-engine
