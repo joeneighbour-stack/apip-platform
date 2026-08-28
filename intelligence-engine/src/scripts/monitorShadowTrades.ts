@@ -570,6 +570,39 @@ async function main() {
         }
 
         if (!closed) {
+          // Force-expire if past expiry time, even if no bar reached expiresAt.
+          // This handles illiquid markets (e.g. USDTRY) where Finnhub may have no
+          // bars at or after the exact expiry timestamp -- the bar loop above only
+          // ever checks `barTime >= expiresAt` against bars that actually exist, so
+          // a symbol with a data gap spanning expiresAt would otherwise sit
+          // TRIGGERED forever, re-scanning the same stale bars every 5-minute run.
+          if (now >= expiresAt) {
+            const barsBeforeExpiry = bars.filter(b => new Date(b.ts * 1000) < expiresAt)
+            const lastBar = barsBeforeExpiry[barsBeforeExpiry.length - 1]
+            const exitPrice = lastBar?.c ?? null
+            const resultR = exitPrice !== null
+              ? calcResultR(dir, trade.entry, exitPrice, trade.stop)
+              : null
+            await db.from('shadow_trade_outcomes').update({
+              trade_outcome_status: exitPrice !== null ? (resultR! >= 0 ? 'CLOSED_PROFIT' : 'CLOSED_LOSS') : 'EXPIRY',
+              closed_at: expiresAt.toISOString(),
+              exit_price: exitPrice,
+              exit_reason: exitPrice !== null ? 'EXPIRY_WITH_PRICE' : 'EXPIRY_PRICE_UNAVAILABLE',
+              result_r: resultR,
+              mfe_r: finiteOrNull(currentMfeR),
+              mae_r: finiteOrNull(currentMaeR),
+              mfe_price: currentMfePrice,
+              mae_price: currentMaePrice,
+              bars_to_close: barsSinceTrigger,
+              monitor_run_id: monitorRunId,
+            }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
+            console.log(`  ${symbol}: FORCE-EXPIRED (past expiry, no bar at expiry time), R=${resultR?.toFixed(2) ?? 'null'}`)
+            summary.expired++
+            closed = true
+          }
+        }
+
+        if (!closed) {
           console.log(`  ${symbol}: TRIGGERED, monitoring P&L`)
           // Fix 4: persist running MFE/MAE so it survives to the next monitor run --
           // only when at least one post-trigger bar was actually processed this run,
