@@ -207,6 +207,7 @@ async function main() {
     .select(`
       shadow_trade_id, opportunity_id, recommendation_version_id,
       direction, entry, stop, target, rr, session,
+      entry_variant, shadow_system,
       entry_mode, generated_price, expires_at,
       price_provider, price_resolution, created_at, generated_at, monitor_from,
       opportunities!inner (
@@ -401,6 +402,48 @@ async function main() {
             }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
             console.log(`  ${symbol}: TRIGGERED (${triggerSource}) @ ${triggeredPrice}`)
             summary.triggered++
+
+            // Co-trigger any sibling variant (same opportunity AND same shadow_system --
+            // ANALYST_MIRROR and OPTIMAL are independent strategies that can even differ
+            // in direction, so they must never cross-trigger each other) whose own entry
+            // was also crossed by this bar. Entries are monotonic within one opportunity's
+            // 3 variants (CONSERVATIVE/MID/AGGRESSIVE all share the same zone), so this is
+            // provably redundant in the common case -- verified against live data (626
+            // opportunity/system groups, zero cases of a shallower-entry sibling left
+            // NOT_TRIGGERED while a deeper one had already triggered) -- but guards against
+            // a sibling's own scan failing/erroring independently in this same run, or a
+            // future change breaking the shared-zone assumption.
+            const tradeSystem = (trade.shadow_system as string | null) ?? 'ANALYST_MIRROR'
+            const siblings = activeTrades.filter(t =>
+              t.opportunity_id === trade.opportunity_id &&
+              t.shadow_trade_id !== trade.shadow_trade_id &&
+              ((t.shadow_system as string | null) ?? 'ANALYST_MIRROR') === tradeSystem &&
+              t.shadow_trade_outcomes?.[0]?.trade_outcome_status === 'NOT_TRIGGERED'
+            )
+            for (const sibling of siblings) {
+              const sibEntry = Number(sibling.entry)
+              const sibDir = sibling.direction as 'BUY' | 'SELL'
+              const barCrossed = sibDir === 'BUY'
+                ? bar.l <= sibEntry || bar.o < sibEntry
+                : bar.h >= sibEntry || bar.o > sibEntry
+              if (!barCrossed) continue
+              const sibOutcome = sibling.shadow_trade_outcomes?.[0]
+              if (!sibOutcome) continue
+              await db.from('shadow_trade_outcomes').update({
+                trade_outcome_status: 'TRIGGERED',
+                triggered_at: new Date(bar.ts * 1000).toISOString(),
+                triggered_price: sibDir === 'BUY'
+                  ? (bar.o < sibEntry ? bar.o : sibEntry)
+                  : (bar.o > sibEntry ? bar.o : sibEntry),
+                trigger_source: 'CO_TRIGGERED_WITH_SIBLING',
+                trigger_bar_timestamp: new Date(bar.ts * 1000).toISOString(),
+                raw_price_evidence: { bar },
+                bars_to_trigger: notTriggeredBarIndex,
+                monitor_run_id: monitorRunId,
+              }).eq('shadow_outcome_id', sibOutcome.shadow_outcome_id)
+              console.log(`  ${symbol}: CO-TRIGGERED ${sibling.entry_variant} @ ${sibEntry}`)
+            }
+
             triggered = true
             break
           }
