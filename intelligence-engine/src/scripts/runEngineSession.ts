@@ -369,10 +369,17 @@ async function main() {
       },
     }))
 
+    // session === null on an analyst_availability row means a whole-day absence (see
+    // app/api/absence/request/route.ts's `session: session ?? null`) -- .eq('session',
+    // session) alone would never match those rows (NULL never equals a value in SQL),
+    // silently ignoring the absence for this run. This file (unlike preallocateDay.ts)
+    // only ever processes one session per invocation, so there's no per-session Set to
+    // expand into -- .or() pulls in both the session-specific and whole-day rows in one
+    // query instead.
     const { data: availabilityRows } = await db.from('analyst_availability')
       .select('analyst_id, available, workload_cap')
       .eq('date', today)
-      .eq('session', session)
+      .or(`session.eq.${session},session.is.null`)
 
     const unavailableIds = new Set(
       (availabilityRows ?? []).filter(a => !a.available).map(a => a.analyst_id)

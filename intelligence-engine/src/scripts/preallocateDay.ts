@@ -126,9 +126,20 @@ async function main() {
     .select('analyst_id, session, available')
     .eq('date', today)
 
-  const unavailableBySessionAnalyst = new Set(
-    (availabilityRows ?? []).filter(a => !a.available).map(a => `${a.session}::${a.analyst_id}`)
-  )
+  // session === null means a whole-day absence (see app/api/absence/request/route.ts's
+  // `session: session ?? null`) -- expand it to every session this script schedules
+  // (SESSION_ORDER, not a hardcoded list, since this file only pre-allocates US/APAC)
+  // rather than leaving it as a `null::${analyst_id}` key that never matches any
+  // session-specific lookup below.
+  const unavailableBySessionAnalyst = new Set<string>()
+  for (const a of (availabilityRows ?? [])) {
+    if (a.available) continue
+    if (a.session === null) {
+      for (const session of SESSION_ORDER) unavailableBySessionAnalyst.add(`${session}::${a.analyst_id}`)
+    } else {
+      unavailableBySessionAnalyst.add(`${a.session}::${a.analyst_id}`)
+    }
+  }
 
   // Session-eligible analysts per session (active + sessions[] membership + not
   // marked unavailable for that specific session -- opt-out model, same as
