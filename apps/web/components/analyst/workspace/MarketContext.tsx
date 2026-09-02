@@ -12,6 +12,9 @@ export function MarketContext({ newsHeadline }: Props) {
     <div>
       <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Market Context</p>
       <p className="text-sm text-foreground mt-0.5">{newsHeadline}</p>
+      <p className="text-xs text-muted-foreground mt-1">
+        Market context as of {new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })} UK
+      </p>
     </div>
   )
 }
