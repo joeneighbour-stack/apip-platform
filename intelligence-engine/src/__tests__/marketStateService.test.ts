@@ -133,9 +133,52 @@ describe('MarketStateService — existing contract', () => {
     });
     const expectedAtr = (13 * 0.001 + 0.20) / 14;
     expect(result.atr14).toBeCloseTo(expectedAtr, 10);
+    // Legacy (no sessionAnchors) path has no previousClose concept -- fallback
+    // still centres on currentPrice, unchanged from before bandFallback existed.
     expect(result.lowerBand).toBeCloseTo(1.10 - expectedAtr / 2, 10);
     expect(result.upperBand).toBeCloseTo(1.10 + expectedAtr / 2, 10);
     expect(result.lowerBand!).toBeLessThan(result.upperBand!);
+    expect(result.bandFallback).toBe(true);
+  });
+
+  it('does not set bandFallback on a normal, non-inverted band', () => {
+    const f = GBPUSD_FIXTURE;
+    const result = buildMarketState({
+      marketId: 'GBPUSD', ohlcSeries: [],
+      currentPrice: { price: f.currentPrice, capturedAt: '2026-07-15T08:00:00Z' },
+      parameters: { atrPeriod: 20, zoneCount: 4 },
+      sessionAnchors: {
+        previousClose:    f.previousClose,
+        todayHighSoFar:   f.todayHighSoFar,
+        todayLowSoFar:    f.todayLowSoFar,
+        precomputedAtr20: f.atr20,
+      },
+    });
+    expect(result.bandFallback).toBe(false);
+  });
+
+  it('inverted band with sessionAnchors falls back to previousClose ± ATR20/2, not currentPrice', () => {
+    // A strong intraday move: session_high (1.50) far exceeds previousClose
+    // (1.10), so topAnchor=1.50, bottomAnchor=1.10 -- with atr20=0.05,
+    // lowerBand = 1.50-0.05 = 1.45, upperBand = 1.10+0.05 = 1.15 -> inverted.
+    // currentPrice (1.48) is deliberately far from previousClose (1.10) so the
+    // two possible fallback centres produce clearly different bands.
+    const result = buildMarketState({
+      marketId: 'TEST', ohlcSeries: [],
+      currentPrice: { price: 1.48, capturedAt: '2026-01-14T00:00:00Z' },
+      parameters: { atrPeriod: 14, zoneCount: 4 },
+      sessionAnchors: {
+        previousClose:    1.10,
+        todayHighSoFar:   1.50,
+        todayLowSoFar:    1.10,
+        precomputedAtr20: 0.05,
+      },
+    });
+    expect(result.bandFallback).toBe(true);
+    expect(result.lowerBand).toBeCloseTo(1.10 - 0.025, 10); // previousClose - ATR20/2
+    expect(result.upperBand).toBeCloseTo(1.10 + 0.025, 10); // previousClose + ATR20/2
+    // Not centred on currentPrice (1.48) -- would give lowerBand ~1.455 instead.
+    expect(result.lowerBand!).toBeLessThan(1.2);
   });
 });
 

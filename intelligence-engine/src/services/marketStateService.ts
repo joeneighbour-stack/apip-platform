@@ -83,6 +83,10 @@ export interface MarketStateOutput {
   currentZone: AtrZone | null;
   currentPrice: number;
   stateGeneratedAt: string;
+  // True when a strong intraday move inverted the band (upperBand <= lowerBand)
+  // and the fallback below was used instead -- lets callers flag the
+  // recommendation as built on a less reliable band.
+  bandFallback: boolean;
 }
 
 /**
@@ -131,6 +135,7 @@ interface AtrZoneBands {
   zone3Top: number | null;
   upperBand: number | null;
   currentZone: AtrZone | null;
+  bandFallback: boolean;
 }
 
 /**
@@ -140,6 +145,15 @@ interface AtrZoneBands {
  * upper_band   = bottomAnchor + atr
  * lower_band   = topAnchor   - atr
  * Zone numbering: ZONE_1 cheapest (near lower_band), ZONE_4 most expensive (near upper_band).
+ *
+ * fallbackCentre: the price the collapse-guard fallback below centres on when the
+ * band inverts. Callers with SessionAnchors should pass previousClose here (a
+ * strong intraday move -- session_high/session_low pushed far past previousClose
+ * -- is exactly what inverts the band, so centring the fallback on the still-solid
+ * previousClose is more meaningful than centring on the same current price that
+ * may have just caused the inversion). Legacy callers with no SessionAnchors (no
+ * previousClose concept at all) fall back to currentPrice, matching this guard's
+ * original behaviour.
  */
 function calculateAtrZones(
   bottomAnchor: number,
@@ -147,21 +161,25 @@ function calculateAtrZones(
   atr: number | null,
   currentPrice: number,
   zoneCount: number,
+  marketId: string,
+  fallbackCentre: number = currentPrice,
 ): AtrZoneBands {
   if (atr === null || atr <= 0 || !Number.isFinite(bottomAnchor) || !Number.isFinite(topAnchor)) {
-    return { lowerBand: null, zone1Top: null, zone2Top: null, zone3Top: null, upperBand: null, currentZone: null };
+    return { lowerBand: null, zone1Top: null, zone2Top: null, zone3Top: null, upperBand: null, currentZone: null, bandFallback: false };
   }
 
   const lowerBand = topAnchor    - atr;   // top_anchor    - ATR
   const upperBand = bottomAnchor + atr;   // bottom_anchor + ATR
 
-  // Band-collapse guard: if ATR <= (topAnchor - bottomAnchor) / 2 the bands invert.
-  // Fall back to centring on current price.
+  // Band-collapse guard: if ATR <= (topAnchor - bottomAnchor) / 2 the bands invert
+  // (e.g. a strong intraday move has pushed session_high/session_low far enough
+  // past previousClose that topAnchor/bottomAnchor cross). Falls back to centring
+  // on fallbackCentre ± ATR/2 instead.
   if (upperBand <= lowerBand) {
-    const centred = currentPrice;
+    console.warn(`[marketStateService] Inverted band detected for ${marketId} -- falling back to fallback centre ± ATR/2`);
     const halfAtr = atr / 2;
-    const fb_lower = centred - halfAtr;
-    const fb_upper = centred + halfAtr;
+    const fb_lower = fallbackCentre - halfAtr;
+    const fb_upper = fallbackCentre + halfAtr;
     const step = (fb_upper - fb_lower) / zoneCount;
     return {
       lowerBand: fb_lower,
@@ -170,6 +188,7 @@ function calculateAtrZones(
       zone3Top: fb_lower + 3 * step,
       upperBand: fb_upper,
       currentZone: classifyZone(currentPrice, fb_lower, fb_upper, step),
+      bandFallback: true,
     };
   }
 
@@ -181,6 +200,7 @@ function calculateAtrZones(
   return {
     lowerBand, zone1Top, zone2Top, zone3Top, upperBand,
     currentZone: classifyZone(currentPrice, lowerBand, upperBand, step),
+    bandFallback: false,
   };
 }
 
@@ -203,6 +223,7 @@ export function buildMarketState(input: MarketStateInput): MarketStateOutput {
       upperBand: null, currentZone: null,
       currentPrice: currentPrice.price,
       stateGeneratedAt: new Date().toISOString(),
+      bandFallback: false,
     };
   }
 
@@ -218,12 +239,16 @@ export function buildMarketState(input: MarketStateInput): MarketStateOutput {
   let bottomAnchor: number;
   let topAnchor: number;
   let atrForZones: number | null;
+  let fallbackCentre: number;
 
   if (sessionAnchors) {
     // Pine-style: anchors incorporate previous session close
     bottomAnchor = Math.min(sessionAnchors.previousClose, sessionAnchors.todayLowSoFar);
     topAnchor    = Math.max(sessionAnchors.previousClose, sessionAnchors.todayHighSoFar);
     atrForZones  = atr20;
+    // A strong intraday move is exactly what inverts the band -- centre the
+    // fallback on the still-solid previousClose rather than currentPrice.
+    fallbackCentre = sessionAnchors.previousClose;
   } else {
     // Backward-compat: use latest bar's raw high/low
     const latest = ohlcSeries[ohlcSeries.length - 1];
@@ -234,17 +259,20 @@ export function buildMarketState(input: MarketStateInput): MarketStateOutput {
         upperBand: null, currentZone: null,
         currentPrice: currentPrice.price,
         stateGeneratedAt: new Date().toISOString(),
+        bandFallback: false,
       };
     }
     // Legacy formula: top=latestHigh, bottom=latestLow
     topAnchor    = latest.high;
     bottomAnchor = latest.low;
     atrForZones  = atr14;   // backward compat: use primary ATR period
+    fallbackCentre = currentPrice.price; // no previousClose concept on this path
   }
 
   const zones = calculateAtrZones(
     bottomAnchor, topAnchor, atrForZones,
     currentPrice.price, parameters.zoneCount,
+    marketId, fallbackCentre,
   );
 
   return {

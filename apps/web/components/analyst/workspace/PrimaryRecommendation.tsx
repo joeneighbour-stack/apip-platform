@@ -48,6 +48,11 @@ export function PrimaryRecommendation({ row }: Props) {
             ↙ Counter-trend
           </span>
         )}
+        {row.bandFallback && (
+          <span className="text-[9px] font-medium px-1 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200 whitespace-nowrap">
+            ⚠ Volatile session — levels based on yesterday&apos;s close
+          </span>
+        )}
       </div>
       {row.isDoNotUse && (
         <p className="text-xs font-medium text-red-600 mt-1">Levels outdated — awaiting recalculation.</p>

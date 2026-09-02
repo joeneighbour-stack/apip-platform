@@ -1039,6 +1039,10 @@ async function main() {
             analystAtrProfileUsed: diagnostics.analystAtrProfileUsed ?? false,
             lowerBand: marketState.lowerBand,
             upperBand: marketState.upperBand,
+            // Set by marketStateService.ts's band-collapse guard when a strong
+            // intraday move inverted the band today -- the analyst workspace reads
+            // this to show a warning badge on the recommendation.
+            bandFallback: marketState.bandFallback,
           },
         }, { onConflict: 'recommendation_version_id' }).select('recommendation_version_id').single()
 
@@ -1095,6 +1099,7 @@ async function main() {
             recommendationValidityStatus: validityOverride ?? rv.recommendationValidityStatus,
             volatilityWarning: rv.volatilityWarning ?? '',
             shownAt: generatedAt,
+            bandFallback: marketState.bandFallback,
           })
 
           await db.from('coaching_recommendations').upsert({

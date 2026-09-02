@@ -69,6 +69,10 @@ export interface CoachingInput {
   recommendationValidityStatus: string;
   volatilityWarning: string;
   shownAt: string;
+  // True when marketStateService.ts's band-collapse guard fired for this market
+  // today (a strong intraday move inverted the band, so the levels shown are
+  // built off previousClose ± ATR20/2 rather than today's session range).
+  bandFallback?: boolean;
 }
 
 /** Maps to the coaching_recommendations table. */
@@ -174,6 +178,9 @@ export function generateCoachingNote(input: CoachingInput): string {
   }
   if (input.eventWarning) {
     text += ` Event risk: ${input.eventWarning}`
+  }
+  if (input.bandFallback) {
+    text += ' Note: an unusually large intraday move today means these levels are based on yesterday\'s close rather than today\'s session range -- treat with extra caution.'
   }
   if (input.recommendationValidityStatus !== 'ENTRY_ALREADY_PASSED') {
     text += ' Treat this as a coaching range rather than an instruction; execution judgement remains important.'

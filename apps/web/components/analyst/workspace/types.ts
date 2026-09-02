@@ -105,6 +105,11 @@ export interface WorkspaceRow {
   // NOT recomputed from row.regime/row.direction client-side, so the stated
   // reason always matches what actually drove the allocation.
   directionAlignment: 'TREND_ALIGNED' | 'COUNTER_TREND' | 'NEUTRAL' | 'NONE' | null
+  // Set by marketStateService.ts's band-collapse guard (via runEngineSession.ts's
+  // regime_tags write) when a strong intraday move inverted the band today, so
+  // levels were built off previousClose ± ATR20/2 rather than today's session
+  // range. Drives PrimaryRecommendation's "Volatile session" warning badge.
+  bandFallback: boolean
   // Section 4 Block 4 ("Why You're Seeing This") -- derived from analyst_profiles
   // only, never fabricated. Null when there's no meaningful differentiation to
   // report (caller falls back to a neutral, still-honest statement in that case).

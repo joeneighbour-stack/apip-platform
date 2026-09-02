@@ -562,6 +562,12 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
     const directionAlignment: WorkspaceRow['directionAlignment'] =
       (rv?.regime_tags as { directionAlignment?: string } | null)?.directionAlignment as WorkspaceRow['directionAlignment'] ?? null
 
+    // Set by runEngineSession.ts's regime_tags write when marketStateService.ts's
+    // band-collapse guard fired for this market today. Absent on recommendations
+    // generated before this field existed, hence the default.
+    const bandFallback: boolean =
+      (rv?.regime_tags as { bandFallback?: boolean } | null)?.bandFallback ?? false
+
     return {
       recommendationId: rec.recommendation_id,
       opportunityId: rec.opportunity_id ?? null,
@@ -606,6 +612,7 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
         : { tier: 'none', avgR: null, winRate: null, trades: 0, quality: null, regimeLabel: null },
       evidenceTier,
       directionAlignment,
+      bandFallback,
       personalisation: marketId ? personalisationMessage(marketId, direction, trendState) : null,
       coachingNote: rec.coaching_note || null,
       shownAt: rec.shown_at,

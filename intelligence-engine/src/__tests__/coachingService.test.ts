@@ -88,6 +88,17 @@ describe('generateCoachingNote', () => {
     expect(note).toContain('110.5 to 111');
     expect(note).not.toContain('110.50000');
   });
+
+  it('appends a band-fallback note when bandFallback is true, omits it otherwise', () => {
+    const withFallback = generateCoachingNote(baseInput({ bandFallback: true }));
+    expect(withFallback).toContain("yesterday's close rather than today's session range");
+
+    const withoutFallback = generateCoachingNote(baseInput({ bandFallback: false }));
+    expect(withoutFallback).not.toContain("yesterday's close");
+
+    const defaulted = generateCoachingNote(baseInput());
+    expect(defaulted).not.toContain("yesterday's close");
+  });
 });
 
 describe('buildCoachingRecommendation', () => {
