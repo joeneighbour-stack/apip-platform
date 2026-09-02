@@ -133,16 +133,16 @@ export async function POST(req: NextRequest) {
       new Date(b.time_utc_publication).getTime() - new Date(a.time_utc_publication).getTime()
     )
 
-    const headlineBySymbol: Record<string, string> = {}
+    const newsBySymbol: Record<string, { headline: string; publishedAt: string }> = {}
     for (const article of sorted) {
       if (!article.acuity_id || !article.headline) continue
       const sym = idToSymbol.get(article.acuity_id)
-      if (sym && !headlineBySymbol[sym]) {
-        headlineBySymbol[sym] = article.headline
+      if (sym && !newsBySymbol[sym]) {
+        newsBySymbol[sym] = { headline: article.headline, publishedAt: article.time_utc_publication }
       }
     }
 
-    return NextResponse.json(headlineBySymbol)
+    return NextResponse.json(newsBySymbol)
   } catch (err: any) {
     console.error('Acuity news error:', err.message)
     return NextResponse.json({}, { status: 500 })

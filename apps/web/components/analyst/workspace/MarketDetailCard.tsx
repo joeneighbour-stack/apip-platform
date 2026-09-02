@@ -4,11 +4,13 @@ import { MajorEventWarning } from './MajorEventWarning'
 import { RecommendationSynthesis } from './RecommendationSynthesis'
 import { EvidencePillars } from './EvidencePillars'
 import { SupportingEvidence } from './SupportingEvidence'
+import type { MarketNewsItem } from '@/hooks/useMarketNews'
 import type { WorkspaceRow } from './types'
 
 interface Props {
   row: WorkspaceRow
-  newsHeadline: string | null
+  news: MarketNewsItem | null
+  newsLastFetched: Date | null
   recommendationsGeneratedToday: number
   marketsAllocatedToday: number
 }
@@ -21,11 +23,11 @@ interface Props {
 // already have TradingView for that; this card's value is opportunity
 // selection, analyst-specific evidence, objective conditions, and a starting
 // structure, not charting.
-export function MarketDetailCard({ row, newsHeadline, recommendationsGeneratedToday, marketsAllocatedToday }: Props) {
+export function MarketDetailCard({ row, news, newsLastFetched, recommendationsGeneratedToday, marketsAllocatedToday }: Props) {
   return (
     <div className="border-t border-border bg-muted/20 p-5 space-y-4">
       <PrimaryRecommendation row={row} />
-      <MarketContext newsHeadline={newsHeadline} />
+      <MarketContext news={news} lastFetched={newsLastFetched} />
       <MajorEventWarning eventRiskItems={row.eventRiskItems} />
       <RecommendationSynthesis row={row} />
       <EvidencePillars row={row} />

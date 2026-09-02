@@ -1,7 +1,8 @@
 'use client'
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { MarketDetailCard } from './MarketDetailCard'
+import { useMarketNews } from '@/hooks/useMarketNews'
 import {
   coverageZoneLabel,
   regimeTrendLabel, confidenceBadgeLabel, estimateSessionEnd, countdownLabel, deriveAlignment,
@@ -22,26 +23,13 @@ interface Props {
 
 export function CoverageStrip({ rows, recommendationsGeneratedToday = 0 }: Props) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  // Headline per symbol, fetched lazily on expand -- undefined means "not
-  // fetched yet", null means "fetched, nothing available". Lifted up here
-  // (rather than fetched independently inside MarketDetailCard) so the strip's
-  // slim summary row and the detail card's News section share one fetch
-  // instead of both hitting the news endpoint for the same symbol.
-  const [newsBySymbol, setNewsBySymbol] = useState<Record<string, string | null>>({})
 
-  useEffect(() => {
-    if (!expandedId) return
-    const row = rows.find(r => r.recommendationId === expandedId)
-    if (!row || newsBySymbol[row.symbol] !== undefined) return
-    fetch('/api/news/acuity', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbols: [row.symbol] }),
-    })
-      .then(r => r.json())
-      .then(data => setNewsBySymbol(prev => ({ ...prev, [row.symbol]: data[row.symbol] ?? null })))
-      .catch(() => setNewsBySymbol(prev => ({ ...prev, [row.symbol]: null })))
-  }, [expandedId, rows, newsBySymbol])
+  // All symbols in today's session, fetched together in one call on mount and
+  // polled every 30 minutes -- not per-row as each one is expanded, so every
+  // market has fresh context simultaneously and an analyst doesn't need to
+  // refresh the page to see updated news partway through the session.
+  const symbols = useMemo(() => [...new Set(rows.map(r => r.symbol))], [rows])
+  const { news, lastFetched } = useMarketNews(symbols)
 
   if (rows.length === 0) {
     return (
@@ -75,7 +63,7 @@ export function CoverageStrip({ rows, recommendationsGeneratedToday = 0 }: Props
               const zoneLabel = coverageZoneLabel(row.currentZone, row.preferredZone, row.direction)
               const precision = row.displayPrecision ?? 4
               const sessionEnd = estimateSessionEnd(row.session, row.assetClass, row.sessionEndIso)
-              const headline = newsBySymbol[row.symbol]
+              const rowNews = news[row.symbol] ?? null
               return (
                 <Fragment key={row.recommendationId}>
                   <tr
@@ -148,7 +136,8 @@ export function CoverageStrip({ rows, recommendationsGeneratedToday = 0 }: Props
                       <td colSpan={10} className="p-0">
                         <MarketDetailCard
                           row={row}
-                          newsHeadline={headline ?? null}
+                          news={rowNews}
+                          newsLastFetched={lastFetched}
                           recommendationsGeneratedToday={recommendationsGeneratedToday}
                           marketsAllocatedToday={rows.length}
                         />
