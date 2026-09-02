@@ -924,13 +924,15 @@ async function main() {
         }
       }
 
-      // EUROPEAN only: the real, final per-market assignment (post analyst-first +
-      // fallback allocation) overwrites daily_coverage_plan for session='EUROPEAN'
-      // once this loop finishes, superseding preallocateDay.ts's earlier forecast
-      // for this session -- see that script's header comment, which no longer
-      // pre-allocates EUROPEAN at all for this exact reason. US/APAC still rely on
-      // preallocateDay.ts's forecast; only EUROPEAN's plan is overwritten with reality.
-      const europeanCoveragePlanRows: { market_id: string; analyst_id: string }[] = []
+      // The real, final per-market assignment (post analyst-first + fallback
+      // allocation) overwrites daily_coverage_plan for this session once this loop
+      // finishes, superseding preallocateDay.ts's earlier forecast -- see that
+      // script's header comment (it never pre-allocates EUROPEAN at all, since
+      // EUROPEAN's own engine run follows so soon after 04:20 that a forecast would
+      // just be overwritten ~28 minutes later; US/APAC still get pre-allocated
+      // there, since their real runs are hours out, but this same overwrite below
+      // now applies to all three sessions once each one's engine run reaches here).
+      const coveragePlanRows: { market_id: string; analyst_id: string }[] = []
 
       for (const item of generatedItems) {
         const { market, marketState, opp, rv, hidden, diagnostics, validityOverride, triggerProbability, trendState } = item
@@ -983,9 +985,7 @@ async function main() {
 
         if (oppErr || !oppRow) { console.error(`  ${market.symbol} opp error: ${oppErr?.message}`); continue }
         opportunitiesCreated++
-        if (session === 'EUROPEAN') {
-          europeanCoveragePlanRows.push({ market_id: market.market_id, analyst_id: allocation.assignedAnalystId })
-        }
+        coveragePlanRows.push({ market_id: market.market_id, analyst_id: allocation.assignedAnalystId })
 
         const { data: rvRow, error: rvErr } = await db.from('recommendation_versions').upsert({
           recommendation_version_id: item.rvId,
@@ -1384,24 +1384,24 @@ async function main() {
         }
       }
 
-      // Overwrite daily_coverage_plan for session='EUROPEAN' with this run's real
+      // Overwrite daily_coverage_plan for this session with this run's real
       // assignments, one batch upsert after the loop above rather than per-market --
-      // see europeanCoveragePlanRows' declaration comment. Only markets that got a
-      // real assignment this run are touched; a EUROPEAN market that produced no
-      // opportunity this run (skipped/errored above) keeps whatever row already
-      // exists (preallocateDay.ts's forecast, or a previous day's engine run),
-      // rather than being deleted.
-      if (session === 'EUROPEAN' && europeanCoveragePlanRows.length > 0) {
+      // see coveragePlanRows' declaration comment. Only markets that got a real
+      // assignment this run are touched; a market that produced no opportunity
+      // this run (skipped/errored above) keeps whatever row already exists
+      // (preallocateDay.ts's forecast, or a previous day's engine run), rather
+      // than being deleted -- deliberately no delete-then-upsert here.
+      if (coveragePlanRows.length > 0) {
         const { error: coveragePlanError } = await db.from('daily_coverage_plan').upsert(
-          europeanCoveragePlanRows.map(r => ({
-            date: today, market_id: r.market_id, analyst_id: r.analyst_id, session: 'EUROPEAN',
+          coveragePlanRows.map(r => ({
+            date: today, market_id: r.market_id, analyst_id: r.analyst_id, session,
           })),
           { onConflict: 'date,market_id,session' },
         )
         if (coveragePlanError) {
           console.error(`  daily_coverage_plan overwrite failed: ${coveragePlanError.message}`)
         } else {
-          console.log(`  daily_coverage_plan: ${europeanCoveragePlanRows.length} EUROPEAN row(s) overwritten with real assignments`)
+          console.log(`  daily_coverage_plan: ${coveragePlanRows.length} ${session} row(s) overwritten with real assignments`)
         }
       }
 
