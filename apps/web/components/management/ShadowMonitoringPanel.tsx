@@ -178,6 +178,178 @@ function VariantCell({ outcome }: { outcome: ShadowOutcome | null }) {
   )
 }
 
+// ── Stop & Target Optimisation simulation ───────────────────────────────────
+// "What would a wider/narrower stop or target have produced?", replayed against
+// each closed ANALYST_MIRROR+variant trade's recorded MFE/MAE (max favourable/
+// adverse excursion, on the original 1R basis -- see monitorShadowTrades.ts's own
+// comment on calculateR()). This is necessarily an approximation, not a re-run of
+// history: once a trade's real stop/target/expiry closes it, no further price
+// action is recorded, so a wider stop/target that the real trade never reached
+// falls back to the trade's actual recorded outcome rather than a genuine
+// simulation of what happens next (unknowable from this data).
+
+const MULTIPLIERS = Array.from({ length: 21 }, (_, i) => 0.5 + i * 0.05)
+
+interface SimPoint {
+  multiplier: number
+  avgR: number
+  winRate: number
+  maxDrawdown: number
+  tradeCount: number
+}
+
+interface StopSimPoint extends SimPoint {
+  falseStopped: number
+}
+
+function simulateStopWidth(trades: ShadowOutcome[], multiplier: number): StopSimPoint {
+  const threshold = -multiplier // e.g. -0.75 at 75% of the original stop distance
+  let totalR = 0, wins = 0, falseStopped = 0
+  let equity = 0, peak = 0, maxDD = 0
+
+  for (const o of trades) {
+    const mae = o.mae_r as number
+    const rr = Number((o.shadow_trade as any)?.rr ?? 2)
+    const originalStatus = o.trade_outcome_status
+
+    let simR: number
+    if (mae < threshold) {
+      // Price breached the simulated stop level before anything else happened.
+      simR = threshold
+      if (['TARGET_HIT', 'CLOSED_PROFIT'].includes(originalStatus)) falseStopped++
+    } else {
+      // Simulated stop never breached -- outcome depends on what actually happened.
+      if (['TARGET_HIT', 'CLOSED_PROFIT'].includes(originalStatus)) {
+        // Tighter stop, same price-distance target -> larger R-multiple on a winner
+        // (and vice versa for a wider stop); rr/originalStatus already reflect the
+        // real outcome, so no separate real-vs-planned distinction is needed here.
+        simR = rr / multiplier
+      } else if (['STOP_HIT', 'CLOSED_LOSS'].includes(originalStatus)) {
+        // The real trade did stop out, but at a level this wider simulated stop
+        // never reached -- what happens next is unrecorded, so this conservatively
+        // assumes it eventually reaches the new (wider) stop too.
+        simR = threshold
+      } else {
+        // EXPIRY -- scale the actual expiry result the same way a winner is scaled.
+        const actual = (o.result_r as number) ?? 0
+        simR = actual === 0 ? 0 : actual / multiplier
+      }
+    }
+
+    totalR += simR
+    if (simR > 0) wins++
+    equity += simR
+    if (equity > peak) peak = equity
+    const dd = equity - peak
+    if (dd < maxDD) maxDD = dd
+  }
+
+  return {
+    multiplier,
+    avgR: trades.length > 0 ? totalR / trades.length : 0,
+    winRate: trades.length > 0 ? wins / trades.length : 0,
+    maxDrawdown: maxDD,
+    falseStopped,
+    tradeCount: trades.length,
+  }
+}
+
+function simulateTargetWidth(trades: ShadowOutcome[], multiplier: number): SimPoint {
+  let totalR = 0, wins = 0
+  let equity = 0, peak = 0, maxDD = 0
+
+  for (const o of trades) {
+    const mfe = o.mfe_r as number
+    const rr = Number((o.shadow_trade as any)?.rr ?? 2)
+    const newTarget = rr * multiplier
+
+    let simR: number
+    if (['STOP_HIT', 'CLOSED_LOSS'].includes(o.trade_outcome_status)) {
+      simR = -1 // stop hits are unaffected by a target-width change
+    } else if (mfe >= newTarget) {
+      simR = newTarget // price reached the new target level
+      wins++
+    } else {
+      // Never reached the new target -- what happens next is unrecorded, so this
+      // falls back to the trade's actual recorded result rather than a genuine
+      // simulation of continued price action.
+      simR = (o.result_r as number) ?? 0
+      if (simR > 0) wins++
+    }
+
+    totalR += simR
+    equity += simR
+    if (equity > peak) peak = equity
+    const dd = equity - peak
+    if (dd < maxDD) maxDD = dd
+  }
+
+  return {
+    multiplier,
+    avgR: trades.length > 0 ? totalR / trades.length : 0,
+    winRate: trades.length > 0 ? wins / trades.length : 0,
+    maxDrawdown: maxDD,
+    tradeCount: trades.length,
+  }
+}
+
+function fmtR(v: number): string {
+  return `${v > 0 ? '+' : ''}${v.toFixed(2)}R`
+}
+function fmtPct(v: number): string {
+  return `${Math.round(v * 100)}%`
+}
+function fmtDeltaPct(v: number): string {
+  const pp = Math.round(v * 100)
+  return `${pp > 0 ? '+' : ''}${pp}pp`
+}
+
+// Current (1.0x) vs the simulated optimum (highest avg R across the curve), for
+// either the stop-width or target-width curve -- same table shape either way.
+function OptimisationSummaryTable({ curve }: { curve: SimPoint[] }) {
+  if (curve.length === 0) return null
+  const current = curve.find(c => Math.abs(c.multiplier - 1.0) < 0.001) ?? curve[Math.floor(curve.length / 2)]!
+  const optimal = curve.reduce((best, c) => (c.avgR > best.avgR ? c : best), curve[0]!)
+  const deltaAvgR = optimal.avgR - current.avgR
+  const deltaWinRate = optimal.winRate - current.winRate
+  const deltaDrawdown = optimal.maxDrawdown - current.maxDrawdown
+
+  return (
+    <div className="rounded-lg border border-border overflow-hidden">
+      <table className="w-full text-sm">
+        <thead className="bg-muted/50">
+          <tr>
+            <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground"></th>
+            <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Current (1.0&times;)</th>
+            <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Optimal ({optimal.multiplier.toFixed(2)}&times;)</th>
+            <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Delta</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border">
+          <tr>
+            <td className="px-3 py-2 text-xs font-medium">Avg R</td>
+            <td className={`px-3 py-2 text-xs tabular-nums ${current.avgR >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmtR(current.avgR)}</td>
+            <td className={`px-3 py-2 text-xs tabular-nums ${optimal.avgR >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmtR(optimal.avgR)}</td>
+            <td className={`px-3 py-2 text-xs tabular-nums font-medium ${deltaAvgR >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmtR(deltaAvgR)}</td>
+          </tr>
+          <tr>
+            <td className="px-3 py-2 text-xs font-medium">Win Rate</td>
+            <td className="px-3 py-2 text-xs tabular-nums">{fmtPct(current.winRate)}</td>
+            <td className="px-3 py-2 text-xs tabular-nums">{fmtPct(optimal.winRate)}</td>
+            <td className={`px-3 py-2 text-xs tabular-nums font-medium ${deltaWinRate >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmtDeltaPct(deltaWinRate)}</td>
+          </tr>
+          <tr>
+            <td className="px-3 py-2 text-xs font-medium">Drawdown</td>
+            <td className="px-3 py-2 text-xs tabular-nums text-red-700">{fmtR(current.maxDrawdown)}</td>
+            <td className="px-3 py-2 text-xs tabular-nums text-red-700">{fmtR(optimal.maxDrawdown)}</td>
+            <td className={`px-3 py-2 text-xs tabular-nums font-medium ${deltaDrawdown >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmtR(deltaDrawdown)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes, actualTrades, actualPublications, breakdownSlot }: Props) {
   // Live prices for TRIGGERED shadow trades
   const triggeredSymbols = [...new Set(shadowOutcomes
@@ -191,7 +363,7 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
   // tab underneath it) vs the new Variant Performance summary (Fix 5) -- separate
   // from, and unaffected by, the system tab, since it deliberately spans both
   // systems (one row per variant x system).
-  const [pageTab, setPageTab] = useState<'MONITOR' | 'VARIANTS'>('MONITOR')
+  const [pageTab, setPageTab] = useState<'MONITOR' | 'VARIANTS' | 'OPTIMISATION'>('MONITOR')
   // System tab: which shadow_system every section in the Trade Monitor tab is
   // scoped to. Defaults to ANALYST_MIRROR since that's the pre-existing single
   // shadow system this whole panel was built around.
@@ -413,6 +585,37 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
       .sort((x, y) => (y.avgR ?? -Infinity) - (x.avgR ?? -Infinity))
   }, [shadowOutcomes, vpAssetFilter, vpDirectionFilter])
 
+  // Optimisation tab -- ANALYST_MIRROR only (this simulates the live production
+  // system's own stop/target geometry, not the OPTIMAL research variant), scoped
+  // to one entry_variant at a time (stop/target distances differ by variant) plus
+  // the same asset-class/direction filters as Variant Performance above. Null
+  // shadow_system/entry_variant coalesce the same way systemFilteredOutcomes/
+  // systemCanonicalOutcomes already do above (pre-061 rows predate the column).
+  const [optVariant, setOptVariant] = useState<EntryVariant>('MID')
+  const [optAssetClass, setOptAssetClass] = useState('ALL')
+  const [optDirection, setOptDirection] = useState<'ALL' | 'BUY' | 'SELL'>('ALL')
+
+  const optTrades = useMemo(() => {
+    return shadowOutcomes.filter(o => {
+      const st = o.shadow_trade as any
+      if ((st?.shadow_system ?? 'ANALYST_MIRROR') !== 'ANALYST_MIRROR') return false
+      if ((st?.entry_variant ?? 'MID') !== optVariant) return false
+      if (optAssetClass !== 'ALL' && st?.opportunity?.market?.asset_class !== optAssetClass) return false
+      if (optDirection !== 'ALL' && st?.direction !== optDirection) return false
+      if (!['TARGET_HIT', 'STOP_HIT', 'CLOSED_PROFIT', 'CLOSED_LOSS', 'EXPIRY'].includes(o.trade_outcome_status)) return false
+      if (o.mae_r === null || o.mfe_r === null) return false
+      return true
+    })
+  }, [shadowOutcomes, optVariant, optAssetClass, optDirection])
+
+  const stopCurve = useMemo(() =>
+    MULTIPLIERS.map(m => simulateStopWidth(optTrades, m)),
+    [optTrades])
+
+  const targetCurve = useMemo(() =>
+    MULTIPLIERS.map(m => simulateTargetWidth(optTrades, m)),
+    [optTrades])
+
   return (
     <div className="space-y-6">
       <div className="rounded-lg border border-amber-200 bg-amber-50/50 px-4 py-3">
@@ -446,6 +649,16 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
           }`}
         >
           Variant Performance
+        </button>
+        <button
+          onClick={() => setPageTab('OPTIMISATION')}
+          className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+            pageTab === 'OPTIMISATION'
+              ? 'border-foreground text-foreground'
+              : 'border-transparent text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          Optimisation
         </button>
       </div>
 
@@ -519,6 +732,103 @@ export function ShadowMonitoringPanel({ shadowOutcomes, canonicalShadowOutcomes,
                 ))}
               </tbody>
             </table>
+          </div>
+        </section>
+      ) : pageTab === 'OPTIMISATION' ? (
+        <section className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-medium">Stop &amp; Target Optimisation</h2>
+            <div className="flex items-center gap-2">
+              <select value={optVariant} onChange={e => setOptVariant(e.target.value as EntryVariant)}
+                className="text-xs px-2 py-1.5 rounded-md border border-border bg-background">
+                <option value="CONSERVATIVE">Conservative</option>
+                <option value="MID">Mid</option>
+                <option value="AGGRESSIVE">Aggressive</option>
+              </select>
+              <select value={optDirection} onChange={e => setOptDirection(e.target.value as 'ALL' | 'BUY' | 'SELL')}
+                className="text-xs px-2 py-1.5 rounded-md border border-border bg-background">
+                <option value="ALL">Both directions</option>
+                <option value="BUY">BUY</option>
+                <option value="SELL">SELL</option>
+              </select>
+              <select value={optAssetClass} onChange={e => setOptAssetClass(e.target.value)}
+                className="text-xs px-2 py-1.5 rounded-md border border-border bg-background">
+                <option value="ALL">All classes</option>
+                <option value="FX">FX</option>
+                <option value="INDEX">Index</option>
+                <option value="COMMODITY">Commodity</option>
+                <option value="CRYPTO">Crypto</option>
+              </select>
+            </div>
+          </div>
+
+          <p className="text-xs text-muted-foreground">
+            Simulates widening or narrowing the stop or target by a multiplier of the original distance, replayed
+            against each closed trade&apos;s recorded MFE/MAE. Analyst Mirror system only, one entry variant at a
+            time (stop/target distances differ by variant).
+          </p>
+
+          {optTrades.length < 30 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50/50 px-4 py-3">
+              <p className="text-xs text-amber-800 font-medium">
+                Results based on {optTrades.length} trades — interpret with caution. Patterns will become clearer
+                as data accumulates.
+              </p>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <h3 className="text-sm font-medium">Stop Width Simulation</h3>
+            <div className="rounded-lg border border-border bg-card p-4">
+              <div className="h-56">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={stopCurve} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                    <XAxis dataKey="multiplier" type="number" domain={[0.5, 1.5]}
+                      tick={{ fontSize: 10 }} axisLine={false} tickLine={false}
+                      tickFormatter={m => `${Math.round(Number(m) * 100)}%`} />
+                    <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <Tooltip
+                      labelFormatter={m => `${Math.round(Number(m) * 100)}% of original stop`}
+                      formatter={(v: any, name: string) => [Number(v).toFixed(2), name]}
+                      contentStyle={{ fontSize: 11 }} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <ReferenceLine x={1.0} stroke="hsl(var(--border))" strokeDasharray="3 3"
+                      label={{ value: 'Current', fontSize: 10, position: 'top' }} />
+                    <Line type="monotone" dataKey="avgR" name="Avg R" stroke="#6366f1" strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey={(d: any) => d.winRate * 3} name="Win Rate (×3)" stroke="#22c55e" strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="maxDrawdown" name="Max Drawdown" stroke="#ef4444" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+            <OptimisationSummaryTable curve={stopCurve} />
+          </div>
+
+          <div className="space-y-2">
+            <h3 className="text-sm font-medium">Target Width Simulation</h3>
+            <div className="rounded-lg border border-border bg-card p-4">
+              <div className="h-56">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={targetCurve} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                    <XAxis dataKey="multiplier" type="number" domain={[0.5, 1.5]}
+                      tick={{ fontSize: 10 }} axisLine={false} tickLine={false}
+                      tickFormatter={m => `${Math.round(Number(m) * 100)}%`} />
+                    <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <Tooltip
+                      labelFormatter={m => `${Math.round(Number(m) * 100)}% of original target`}
+                      formatter={(v: any, name: string) => [Number(v).toFixed(2), name]}
+                      contentStyle={{ fontSize: 11 }} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <ReferenceLine x={1.0} stroke="hsl(var(--border))" strokeDasharray="3 3"
+                      label={{ value: 'Current', fontSize: 10, position: 'top' }} />
+                    <Line type="monotone" dataKey="avgR" name="Avg R" stroke="#6366f1" strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey={(d: any) => d.winRate * 3} name="Win Rate (×3)" stroke="#22c55e" strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="maxDrawdown" name="Max Drawdown" stroke="#ef4444" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+            <OptimisationSummaryTable curve={targetCurve} />
           </div>
         </section>
       ) : (
