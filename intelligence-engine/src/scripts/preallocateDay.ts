@@ -85,7 +85,13 @@ function workloadAdjustedScore(
   totalAnalysts: number,
 ): number {
   const targetPerAnalyst = Math.max(MIN_MARKETS_PER_ANALYST, Math.ceil(totalMarkets / totalAnalysts))
-  const analystFirstCap = Math.ceil(totalMarkets / totalAnalysts) + 1
+  // Fair cap: floor split + 1 buffer, not ceil split + 1 -- matches
+  // runEngineSession.ts's own workloadAdjustedScore() exactly (see its comment
+  // for the worked example). A tighter cap leaves more room for analysts who
+  // haven't yet reached their own session floor (see analystSessionFloor below)
+  // before a top scorer exhausts the market list.
+  const evenSplit = Math.floor(totalMarkets / totalAnalysts)
+  const analystFirstCap = evenSplit + 1
   const hardCap = Math.min(MAX_MARKETS_PER_ANALYST, analystFirstCap)
 
   if (currentWorkload >= hardCap) return -1
@@ -97,6 +103,23 @@ function workloadAdjustedScore(
   }
 
   return baseScore
+}
+
+// Every valid session type -- used below to count how many sessions an
+// analyst covers in total, distinct from this script's own SESSION_ORDER
+// above (which is deliberately US+APAC only, since this script never
+// pre-allocates EUROPEAN). An analyst's total session coverage still spans
+// all three, and the floor below needs that full count.
+const ALL_SESSION_TYPES = ['EUROPEAN', 'US', 'APAC'] as const
+
+// Minimum markets this analyst must receive from ONE session to be on track
+// for the daily minimum (MIN_MARKETS_PER_ANALYST) across every session they
+// cover -- same formula and reasoning as runEngineSession.ts's own
+// sessionFloor(). e.g. an analyst covering EUROPEAN+APAC needs ceil(8/2)=4
+// from each; one covering all 3 needs ceil(8/3)=3 from each.
+function sessionFloor(analystSessions: string[]): number {
+  const eligibleSessionCount = analystSessions.filter(s => (ALL_SESSION_TYPES as readonly string[]).includes(s)).length
+  return Math.ceil(MIN_MARKETS_PER_ANALYST / Math.max(1, eligibleSessionCount))
 }
 
 async function main() {
@@ -155,6 +178,15 @@ async function main() {
   const analystNameById = new Map((analystRows ?? []).map(a => [a.analyst_id, a.display_name]))
   const allEligibleToday = new Set([...eligibleBySession.values()].flat())
   console.log(`Analysts eligible for at least one session today: ${allEligibleToday.size}`)
+
+  // Each analyst's minimum-markets floor for a single session (see sessionFloor()
+  // above) -- based on their full sessions[] list, not just US/APAC eligibility,
+  // since e.g. an analyst also covering EUROPEAN still only needs a fraction of
+  // MIN_MARKETS_PER_ANALYST from US or APAC individually.
+  const analystSessionFloor = new Map<string, number>()
+  for (const a of (analystRows ?? [])) {
+    analystSessionFloor.set(a.analyst_id, sessionFloor(a.sessions ?? []))
+  }
 
   // Seed workload from YESTERDAY's European engine allocation as a proxy
   // for today's expected European load. The pre-allocator runs at 04:20 UTC,
@@ -270,6 +302,16 @@ async function main() {
 
   for (const session of SESSION_ORDER) {
     const sessionEligible = eligibleBySession.get(session) ?? []
+
+    // Reset per session -- deliberately NOT the combined `workload` map above,
+    // which is a whole-day running total seeded from yesterday's European
+    // allocation and carried over from the previous session in this same loop.
+    // Checking the floor against that combined total would show an analyst as
+    // already "at floor" from US before APAC (processed next in SESSION_ORDER)
+    // has given them any markets at all.
+    const thisSessionWorkload = new Map<string, number>()
+    for (const analystId of sessionEligible) thisSessionWorkload.set(analystId, 0)
+
     for (const symbol of SESSION_MARKETS[session]!) {
       const market = marketBySymbol.get(symbol)
       if (!market) { console.log(`  ${session}/${symbol}: not in markets table`); continue }
@@ -298,6 +340,13 @@ async function main() {
 
       const eligible = scored.filter(s => s.adjustedValue >= 0)
       const selected = eligible.sort((a, b) => {
+        // Session floor reservation: an analyst still under their own session
+        // floor outranks one who has already met it, regardless of raw score --
+        // guarantees every analyst reaches their fair share of THIS session
+        // before anyone takes a market beyond the fair cap above.
+        const underFloorA = (thisSessionWorkload.get(a.score.analystId) ?? 0) < (analystSessionFloor.get(a.score.analystId) ?? 0)
+        const underFloorB = (thisSessionWorkload.get(b.score.analystId) ?? 0) < (analystSessionFloor.get(b.score.analystId) ?? 0)
+        if (underFloorA !== underFloorB) return underFloorA ? -1 : 1
         if (b.adjustedValue !== a.adjustedValue) return b.adjustedValue - a.adjustedValue
         const workloadA = workload.get(a.score.analystId) ?? 0
         const workloadB = workload.get(b.score.analystId) ?? 0
@@ -307,6 +356,7 @@ async function main() {
       if (selected) {
         const analystId = selected.score.analystId
         workload.set(analystId, (workload.get(analystId) ?? 0) + 1)
+        thisSessionWorkload.set(analystId, (thisSessionWorkload.get(analystId) ?? 0) + 1)
         assignments.push({ marketId: market.market_id, symbol, session, analystId })
         const name = analystNameById.get(analystId) ?? analystId
         console.log(`  ${session}/${symbol}: ${name} (${selected.score.profileTier}, avgR=${selected.score.avgR.toFixed(3)})`)
