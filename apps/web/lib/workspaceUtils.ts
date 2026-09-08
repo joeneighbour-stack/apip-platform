@@ -5,6 +5,11 @@ import { formatR, formatPercent } from './format'
 
 export type AtrZone = 'TOO_DEEP' | 'ZONE_1' | 'ZONE_2' | 'ZONE_3' | 'ZONE_4' | 'TOO_HIGH'
 
+// Markets with a genuine, separately-traded futures contract alongside spot --
+// flagged in the coverage strip and drill-down so analysts remember to check
+// the futures contract too, not just the spot price this platform tracks.
+export const FUTURES_MARKETS = new Set(['Gold', 'Oil', 'DOW', 'SP500', 'NASDAQ', 'US2000'])
+
 // Ladder order matches the visual spec: highest price on the left.
 export const ZONE_LADDER_ORDER: AtrZone[] = ['TOO_HIGH', 'ZONE_4', 'ZONE_3', 'ZONE_2', 'ZONE_1', 'TOO_DEEP']
 

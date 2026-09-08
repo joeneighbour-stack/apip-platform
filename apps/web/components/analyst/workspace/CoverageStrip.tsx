@@ -6,6 +6,7 @@ import { useMarketNews } from '@/hooks/useMarketNews'
 import {
   coverageZoneLabel,
   regimeTrendLabel, confidenceBadgeLabel, estimateSessionEnd, countdownLabel, deriveAlignment,
+  FUTURES_MARKETS,
 } from '@/lib/workspaceUtils'
 import type { WorkspaceRow } from './types'
 
@@ -78,7 +79,14 @@ export function CoverageStrip({ rows, recommendationsGeneratedToday = 0 }: Props
                       i % 2 === 1 ? 'bg-muted/10' : ''
                     } ${row.isDoNotUse ? 'opacity-60' : ''} ${isExpanded ? 'bg-muted/60' : 'hover:bg-muted/40'}`}
                   >
-                    <td className="py-2 px-3 font-medium">{row.symbol}</td>
+                    <td className="py-2 px-3 font-medium">
+                      {row.symbol}
+                      {FUTURES_MARKETS.has(row.symbol) && (
+                        <span className="ml-1.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200">
+                          FUTURES
+                        </span>
+                      )}
+                    </td>
                     <td className="py-2 px-3">
                       <span className={`font-medium ${row.direction === 'BUY' ? 'text-green-700' : 'text-red-700'}`}>
                         {row.direction ?? '—'}

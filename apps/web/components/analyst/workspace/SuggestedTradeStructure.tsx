@@ -1,3 +1,4 @@
+import { FUTURES_MARKETS } from '@/lib/workspaceUtils'
 import type { WorkspaceRow } from './types'
 
 interface Props {
@@ -33,6 +34,11 @@ export function SuggestedTradeStructure({ row }: Props) {
         <LevelRow label="Stop" value={row.riskRange || '—'} accentClass="bg-red-400" showDivider />
         <LevelRow label="Target" value={row.targetRange || '—'} accentClass="bg-green-500" showDivider={false} />
       </div>
+      {FUTURES_MARKETS.has(row.symbol) && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 mt-2">
+          ⚠ Futures coverage also required — ensure the relevant futures contract is reviewed alongside spot.
+        </p>
+      )}
       {(row.volatilityWarning || row.isEntryPassed) && (
         <p className="text-xs text-amber-700 mt-2">{row.volatilityWarning || 'Price beyond entry range'}</p>
       )}
