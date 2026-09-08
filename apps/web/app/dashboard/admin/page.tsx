@@ -7,7 +7,9 @@ import { MarketManagementPanel } from '@/components/admin/MarketManagementPanel'
 import { AnalystManagementPanel } from '@/components/admin/AnalystManagementPanel'
 import { ThresholdsPanel } from '@/components/admin/ThresholdsPanel'
 import { ManualTradeEntryPanel } from '@/components/admin/ManualTradeEntryPanel'
+import { MonthlyCoverageHours } from '@/components/admin/MonthlyCoverageHours'
 import { NotificationsPanel } from '@/components/management/NotificationsPanel'
+import { getCoverageHoursForMonth } from '@/app/actions/coverageHours'
 
 interface PageProps {
   // Populated by DisputeQueue's "Add manual trade entry" link on a MISSED_TRIGGER
@@ -42,6 +44,20 @@ export default async function AdminCentrePage({ searchParams }: PageProps) {
   const manualEntryPrefill = parsePrefill(prefill)
 
   const supabase = await createClient()
+
+  // Monthly Coverage Hours -- current month, server-rendered as the initial
+  // state for the client-side month selector (same server action either way,
+  // so the two never disagree on how the numbers are computed).
+  const now = new Date()
+  const currentYear = now.getFullYear()
+  const currentMonth = now.getMonth() + 1
+  const coverageHoursResult = await getCoverageHoursForMonth(currentYear, currentMonth)
+  if (!coverageHoursResult.success) {
+    console.error('[AdminCentrePage] Failed to fetch coverage hours:', coverageHoursResult.error)
+  }
+  const initialCoverageHours = coverageHoursResult.success
+    ? coverageHoursResult.data
+    : { analystHours: [], totalMarkets: 0, totalHoursDisplay: '0m' }
 
   // Engine runs -- last 20
   const { data: engineRuns } = await supabase
@@ -85,6 +101,11 @@ export default async function AdminCentrePage({ searchParams }: PageProps) {
         </p>
       </div>
 
+      <MonthlyCoverageHours
+        initialYear={currentYear}
+        initialMonth={currentMonth}
+        initialData={initialCoverageHours}
+      />
       <NotificationsPanel notifications={notifications ?? []} showAll={true} />
       <EngineRunsPanel runs={engineRuns ?? []} />
       <ManualTradeEntryPanel analysts={(analysts as any[]) ?? []} markets={(markets as any[]) ?? []} initialValues={manualEntryPrefill} />
