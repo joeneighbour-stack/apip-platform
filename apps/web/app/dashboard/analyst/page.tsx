@@ -63,6 +63,21 @@ export default async function AnalystWorkspacePage() {
     .order('session')
   if (coveragePlanError) console.error('[AnalystWorkspacePage] Failed to fetch daily_coverage_plan:', coveragePlanError.message)
 
+  // Which sessions have had their real engine run complete today -- distinct from
+  // hasRecommendations below (this analyst's own row presence in `rows`): a session
+  // can finish its engine run and still leave this specific analyst with zero
+  // markets (all reassigned elsewhere during real allocation), which would read as
+  // "not yet run" under hasRecommendations alone. engine_runs has no `date` column,
+  // only started_at, hence the range filter rather than .eq('date', today).
+  const { data: engineRuns, error: engineRunsError } = await supabase
+    .from('engine_runs')
+    .select('session, status')
+    .gte('started_at', today + 'T00:00:00Z')
+    .lte('started_at', today + 'T23:59:59Z')
+    .eq('status', 'SUCCESS')
+  if (engineRunsError) console.error('[AnalystWorkspacePage] Failed to fetch engine_runs:', engineRunsError.message)
+  const confirmedSessions = new Set((engineRuns ?? []).map(r => r.session as string))
+
   // Use actual engine allocation when available, fall back to the advisory plan
   // (and, failing that, to however many recommendations have generated so far).
   const marketsToday = (opportunitiesCount ?? 0) > 0
@@ -155,11 +170,17 @@ export default async function AnalystWorkspacePage() {
             {SESSION_ORDER.filter(s => coverageBySession.has(s)).map(session => {
               const hasRecommendations = rows.some(r => r.session === session)
               const sessionTime = session === 'APAC' ? '14:05 UK' : session === 'US' ? '09:49 UK' : null
+              const isConfirmed = confirmedSessions.has(session)
 
               return (
                 <div key={session} className="space-y-0.5">
                   <p className="text-sm">
                     <span className="font-medium">{SESSION_LABELS[session]}:</span>{' '}
+                    {!isConfirmed && (
+                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200 mr-1">
+                        Forecast
+                      </span>
+                    )}
                     <span className="text-muted-foreground">
                       {coverageBySession.get(session)!.join(', ')}
                     </span>
