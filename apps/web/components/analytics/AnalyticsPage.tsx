@@ -23,6 +23,7 @@ import { RollingPerformanceTable } from './RollingPerformanceTable'
 import { MonthlyPerformanceMatrix } from './MonthlyPerformanceMatrix'
 import { AttributionTable } from './AttributionTable'
 import { BestPerformers } from './BestPerformers'
+import { PatternsTab } from './PatternsTab'
 
 // ReportBuilder mounts report/PerformanceReport.tsx, which pulls in a second copy of
 // the four recharts components above -- dynamic-importing it here keeps that whole
@@ -51,6 +52,13 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
+
+  // Patterns tab is independent of everything below -- its own component does its
+  // own fetch (pattern_trades, via /api/analytics/patterns), unrelated to the
+  // trades/publications data this page otherwise loads. Rendered outside the
+  // loading/error short-circuits below so switching to it works regardless of
+  // the Performance tab's own fetch state.
+  const [pageTab, setPageTab] = useState<'PERFORMANCE' | 'PATTERNS'>('PERFORMANCE')
 
   const [filters, setFilters] = useState<AnalyticsFilterState>(() => {
     const initial = filtersFromSearchParams(searchParams)
@@ -272,25 +280,76 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
     setReportOpen(true)
   }
 
+  // Patterns is a management-only tab: pattern_trades has no ANALYST RLS grant
+  // at all (migrations/065_pattern_trades.sql -- ADMIN/MANAGER/RESEARCH only),
+  // and this same AnalyticsPage component is also rendered for the analyst-
+  // facing "My Performance" page with lockedAnalystId set (see that prop's own
+  // comment). The tab (and the ability to ever reach the Patterns branch below)
+  // only exists when lockedAnalystId is unset -- the management view.
+  const showPatternsTab = !lockedAnalystId
+
+  // Styled to match ShadowMonitoringPanel.tsx's border-b-2/-mb-px underline tab
+  // pattern -- the existing convention elsewhere in the management dashboard for
+  // this exact "outer tab spanning otherwise-separate sections" shape.
+  const tabBar = showPatternsTab ? (
+    <div className="flex items-center gap-1 border-b border-border print:hidden">
+      <button
+        onClick={() => setPageTab('PERFORMANCE')}
+        className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+          pageTab === 'PERFORMANCE'
+            ? 'border-foreground text-foreground'
+            : 'border-transparent text-muted-foreground hover:text-foreground'
+        }`}
+      >
+        Performance
+      </button>
+      <button
+        onClick={() => setPageTab('PATTERNS')}
+        className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+          pageTab === 'PATTERNS'
+            ? 'border-foreground text-foreground'
+            : 'border-transparent text-muted-foreground hover:text-foreground'
+        }`}
+      >
+        Patterns
+      </button>
+    </div>
+  ) : null
+
+  if (showPatternsTab && pageTab === 'PATTERNS') {
+    return (
+      <div className="space-y-6 print:hidden">
+        {tabBar}
+        <PatternsTab />
+      </div>
+    )
+  }
+
   if (loading) {
     return (
-      <div className="rounded-lg border border-border p-12 text-center space-y-3">
-        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
-        <p className="text-sm text-muted-foreground">
-          {!rawDataLoaded && !isDefaultView ? 'Loading trade data for filtering...' : 'Loading performance data...'}
-        </p>
+      <div className="space-y-6 print:hidden">
+        {tabBar}
+        <div className="rounded-lg border border-border p-12 text-center space-y-3">
+          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
+          <p className="text-sm text-muted-foreground">
+            {!rawDataLoaded && !isDefaultView ? 'Loading trade data for filtering...' : 'Loading performance data...'}
+          </p>
+        </div>
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="rounded-lg border border-red-200 bg-red-50 p-6">
-        <p className="text-sm text-red-700">{error}</p>
-        <button onClick={() => { setError(null); setLoading(true); loadData() }}
-          className="mt-2 text-xs text-red-600 underline">
-          Try again
-        </button>
+      <div className="space-y-6 print:hidden">
+        {tabBar}
+        <div className="rounded-lg border border-red-200 bg-red-50 p-6">
+          <p className="text-sm text-red-700">{error}</p>
+          <button onClick={() => { setError(null); setLoading(true); loadData() }}
+            className="mt-2 text-xs text-red-600 underline">
+            Try again
+          </button>
+        </div>
       </div>
     )
   }
@@ -303,6 +362,7 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
         so nesting the report inside a print:hidden wrapper would hide it under print
         media too (confirmed via Playwright print-media screenshot during verification). */}
     <div className="space-y-6 print:hidden">
+      {tabBar}
       <AnalyticsFilters filters={filters} onChange={updateFilters} analysts={analysts} markets={markets} hideAnalystFilter={!!lockedAnalystId} />
 
       <div className="flex items-start justify-between gap-4">

@@ -3,7 +3,8 @@
 // Actual Trade Importer — Acuity Performance API
 // ============================================================================
 // Fetches analyst trades from the n8n webhook, normalises them, and upserts
-// into actual_trades. Filters to ReportType=Analyst only (Pattern support TBD).
+// into actual_trades. ReportType=Analyst records go there; ReportType=Pattern
+// records are routed to pattern_trades instead (migration 065).
 //
 // Usage:
 //   npx tsx src/scripts/importActualTrades.ts --dry-run
@@ -560,6 +561,66 @@ async function main() {
       // already counted above
     }
 
+    // ── Pattern trades ─────────────────────────────────────────────────────────
+    // The webhook returns both ReportType='Analyst' (handled above) and
+    // ReportType='Pattern' in the same response -- previously only counted via
+    // patternCount above and discarded. Routed to pattern_trades (migration 065)
+    // instead. onConflict + ignoreDuplicates means an existing report_id is never
+    // overwritten (only new ones are inserted), which is deliberate: this is the
+    // same upsert shape backfillPatternTrades.ts uses for its one-time full-history
+    // run, so the two can never conflict or double-count re-running either one.
+    const patternRows = rawTrades
+      .filter(t => t.ReportType === 'Pattern' && t.ReportId)
+      .map(t => ({
+        report_id:       t.ReportId as string,
+        symbol:          (t.Symbol as string ?? '').replace('/', ''),
+        asset_class:     t.AssetClass ?? null,
+        direction:       t.Direction ?? null,
+        family:          t.Family ?? null,
+        granularity:     t.Granularity ?? null,
+        status:          t.Status ?? null,
+        published_at:    t.PublicationDate ?? null,
+        exit_date:       t.ExitDate ?? null,
+        expiry:          t.Expiry ?? null,
+        entry:           t.Entry ?? null,
+        stop_loss:       t.StopLoss ?? null,
+        take_profit:     t.TakeProfit ?? null,
+        exit_price:      t.ExitPrice ?? null,
+        rr:              t.RR ?? null,
+        triggered:       t.Triggered ?? false,
+        points:          t.Points ?? null,
+        return_pct:      t.Return ?? null,
+        source_system:   'ACUITY_PERFORMANCE_API',
+        import_batch_id: batchId,
+      }))
+
+    let patternInserted = 0
+    let patternDuplicates = 0
+    if (!isDryRun && patternRows.length > 0) {
+      const PATTERN_BATCH = 200
+      for (let i = 0; i < patternRows.length; i += PATTERN_BATCH) {
+        const batch = patternRows.slice(i, i + PATTERN_BATCH)
+        // .select('report_id') is what makes "inserted" accurate here: ON CONFLICT DO
+        // NOTHING (ignoreDuplicates: true) only returns rows it actually wrote, so an
+        // already-imported report_id is silently absent from the response rather than
+        // flagged -- without this, every row in the batch would count as "upserted"
+        // even when most are duplicates, which happens on every normal run since the
+        // 48-hour incremental window intentionally overlaps the previous run's.
+        const { data, error } = await db
+          .from('pattern_trades')
+          .upsert(batch, { onConflict: 'report_id', ignoreDuplicates: true })
+          .select('report_id')
+        if (error) {
+          console.error(`  Pattern batch error at ${i}: ${error.message}`)
+        } else {
+          const inserted = data?.length ?? 0
+          patternInserted += inserted
+          patternDuplicates += batch.length - inserted
+        }
+      }
+      console.log(`  Patterns upserted: ${patternInserted} new, ${patternDuplicates} already existed (of ${patternRows.length})`)
+    }
+
     // ── Re-apply resolved dispute overrides ──────────────────────────────────
     // Belt-and-braces alongside the protectedSourceRecordIds skip above: re-applies
     // every resolved-dispute correction immediately after this run's upsert, in case
@@ -675,6 +736,7 @@ async function main() {
     console.log('\n=== SUMMARY ===')
     console.log(`Total fetched:    ${rawTrades.length}`)
     console.log(`Analyst trades:   ${analystTrades.length}`)
+    console.log(`Pattern trades:   ${patternRows.length} (${patternInserted} new, ${patternDuplicates} already existed)`)
     console.log(`Inserted:         ${successRows}`)
     console.log(`Updated:          ${duplicateRows}`)
     console.log(`Out of scope:     ${outOfScopeRows} (equities not in APIP universe)`)
