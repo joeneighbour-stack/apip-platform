@@ -37,7 +37,7 @@ export function CombinedCumulativeChart({ data, caption }: Props) {
   return (
     <div className="rounded-lg border border-border bg-card p-4 space-y-3">
       <p className="text-xs font-medium text-muted-foreground print:uppercase print:tracking-wide">
-        {indexed ? 'Normalised Equity Curves — Indexed (final = 100)' : 'Cumulative Performance by Signal Type (R)'}
+        {indexed ? 'Normalised Equity Curves — Indexed (start = 100)' : 'Cumulative Performance by Signal Type (R)'}
       </p>
       <div className="h-72 print:h-64">
         <ResponsiveContainer width="100%" height="100%">

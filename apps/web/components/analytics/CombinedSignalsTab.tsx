@@ -38,6 +38,15 @@ interface CombinedApiResponse {
   }
 }
 
+function round2(n: number): number {
+  return Math.round(n * 100) / 100
+}
+
+// Computed, not hardcoded to 2026 -- this code will still be running in 2027+, and a
+// literal year check would silently mislabel every future "current year" row as a plain
+// completed year instead of "YTD".
+const CURRENT_YEAR = new Date().getUTCFullYear()
+
 function dateRangeLabel(first: string | null, last: string | null): string {
   if (!first || !last) return 'No signals yet'
   return `${formatDate(first)} – ${formatDate(last)}`
@@ -141,7 +150,7 @@ export function CombinedSignalsTab() {
       const first = data[key].summary.firstSignalDate
       return `${TYPE_LABELS[key]}: ${first ? monthYear(first) : 'no data yet'}`
     })
-    return `Indexed to 100 at end of track record for comparability. ${parts.join(', ')}.`
+    return `All series rebased to 100 at start. A value of 150 = +50% relative growth from inception. ${parts.join(', ')}.`
   }, [data])
 
   const maxAbsYearR = useMemo(() => {
@@ -282,22 +291,29 @@ export function CombinedSignalsTab() {
               <table className="w-full text-sm">
                 <thead className="bg-muted/50">
                   <tr>
-                    {['Year', 'Analyst', 'Pattern', 'AI'].map(h => (
+                    {['Year', 'Analyst', 'Pattern', 'AI', 'Combined'].map(h => (
                       <th key={h} className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {data.byYear.map(row => (
-                    <tr key={row.year}>
-                      <td className="px-4 py-2.5 font-medium whitespace-nowrap">{row.year}</td>
-                      {([['analyst', row.analyst], ['pattern', row.pattern], ['ai', row.ai]] as const).map(([col, value]) => (
-                        <td key={col} className={`px-4 py-2.5 tabular-nums whitespace-nowrap ${yearCellClass(value, maxAbsYearR)} ${value === null ? 'text-muted-foreground' : positivityClass(value)}`}>
-                          {value === null ? '—' : formatR(value)}
+                  {data.byYear.map(row => {
+                    const combinedValues = [row.analyst, row.pattern, row.ai].filter((v): v is number => v !== null)
+                    const combinedTotal = combinedValues.length > 0 ? round2(combinedValues.reduce((a, b) => a + b, 0)) : null
+                    return (
+                      <tr key={row.year}>
+                        <td className="px-4 py-2.5 font-medium whitespace-nowrap">{row.year === CURRENT_YEAR ? `${row.year} YTD` : row.year}</td>
+                        {([['analyst', row.analyst], ['pattern', row.pattern], ['ai', row.ai]] as const).map(([col, value]) => (
+                          <td key={col} className={`px-4 py-2.5 tabular-nums whitespace-nowrap ${yearCellClass(value, maxAbsYearR)} ${value === null ? 'text-muted-foreground' : positivityClass(value)}`}>
+                            {value === null ? '—' : formatR(value)}
+                          </td>
+                        ))}
+                        <td className={`px-4 py-2.5 tabular-nums font-medium whitespace-nowrap ${combinedTotal === null ? 'text-muted-foreground' : positivityClass(combinedTotal)}`}>
+                          {combinedTotal !== null ? formatR(combinedTotal) : '—'}
                         </td>
-                      ))}
-                    </tr>
-                  ))}
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>

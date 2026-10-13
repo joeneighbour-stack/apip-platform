@@ -132,20 +132,23 @@ export interface IndexPoint {
   value: number
 }
 
-// Scales a series so its FINAL point = 100 -- each series is indexed to its OWN end
-// point (not a shared baseline), which is what makes three tracks of very different
-// absolute R totals and different start dates visually comparable on one chart: a
-// shorter, smaller-total track and a longer, larger-total track both read as "0 to 100"
-// over their own history. Guards the degenerate case where the final value is <= 0 (no
-// positive end point to index against -- dividing by a non-positive number would invert
-// or blow up every earlier point into a meaningless shape) by returning the series
-// unscaled rather than producing a misleading chart; none of this app's three signal
-// types hit that case today; this is defence-in-depth, not an expected path.
+// Rebases a series to START at 100 -- every series's FIRST point reads 100 regardless of
+// sign or magnitude (shifted by its own first value, then scaled by the magnitude of its
+// own total move), which is what makes three tracks of very different absolute R totals
+// and different start dates into directly comparable growth curves: the winner's own
+// final point lands at exactly 200, the loser's at exactly 0, and every point in between
+// reads as relative growth from a shared 100 baseline. Shifting by firstVal before
+// scaling (rather than dividing by the final value the way an earlier version of this
+// function did) means it no longer matters whether the series' first, last, or any
+// intermediate point is negative -- only a perfectly flat series (first === last) needs
+// a special case, handled below by pinning every point to 100.
 export function normaliseToIndex(points: { date: string; value: number }[]): IndexPoint[] {
   if (points.length === 0) return []
-  const final = points[points.length - 1]!.value
-  if (final <= 0) return points.map(p => ({ date: p.date, value: p.value }))
-  return points.map(p => ({ date: p.date, value: round2((p.value / final) * 100) }))
+  const firstVal = points[0]!.value
+  const lastVal = points[points.length - 1]!.value
+  const span = lastVal - firstVal
+  if (span === 0) return points.map(p => ({ date: p.date, value: 100 }))
+  return points.map(p => ({ date: p.date, value: round2(100 + ((p.value - firstVal) / Math.abs(span)) * 100) }))
 }
 
 export interface CombinedCumulativePoint {
@@ -282,6 +285,23 @@ function poolAcrossTypes(maps: Map<string, KeyedAggregate>[]): Map<string, Keyed
 // Fix 2 -- By Asset Class
 // ---------------------------------------------------------------------------
 
+// Analyst signals get their asset_class from a real DB join (markets.asset_class, via
+// the market_id embed in /api/analytics/combined/route.ts) -- which stores it UPPERCASE
+// ('COMMODITY', 'INDEX', 'CRYPTO'), while pattern_trades/ai_trades store it Title Case
+// ('Commodity', 'Index', 'Crypto'). Without normalising, the same real-world asset class
+// would silently split into two separate rows (one per casing) instead of merging across
+// signal types, which defeats the entire point of this breakdown. Falls back to the raw
+// value, Title-Cased, for anything outside this known set rather than dropping it.
+const ASSET_CLASS_CANONICAL: Record<string, string> = {
+  FX: 'FX', EQUITY: 'Equity', COMMODITY: 'Commodity', CRYPTO: 'Crypto', INDEX: 'Index',
+}
+
+function canonicalAssetClass(raw: string | null): string | null {
+  if (!raw) return null
+  const upper = raw.toUpperCase()
+  return ASSET_CLASS_CANONICAL[upper] ?? (raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase())
+}
+
 export interface CombinedAssetClassRow {
   assetClass: string
   // Each type's OWN total R contribution within this asset class (null if that type has
@@ -297,9 +317,9 @@ export interface CombinedAssetClassRow {
 export function buildAssetClassBreakdown(
   analyst: EnrichedSignal[], patterns: EnrichedSignal[], ai: EnrichedSignal[]
 ): CombinedAssetClassRow[] {
-  const aMap = aggregateByKey(analyst, s => s.assetClass)
-  const pMap = aggregateByKey(patterns, s => s.assetClass)
-  const iMap = aggregateByKey(ai, s => s.assetClass)
+  const aMap = aggregateByKey(analyst, s => canonicalAssetClass(s.assetClass))
+  const pMap = aggregateByKey(patterns, s => canonicalAssetClass(s.assetClass))
+  const iMap = aggregateByKey(ai, s => canonicalAssetClass(s.assetClass))
   const allClasses = [...new Set([...aMap.keys(), ...pMap.keys(), ...iMap.keys()])].sort()
 
   return allClasses
