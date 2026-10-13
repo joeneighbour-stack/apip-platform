@@ -6,17 +6,17 @@ import {
   triggeredTrades, totalR, winRate, avgR, maxDrawdown, cumulativeSeries, drawdownSeries, monthlyMatrix,
   attributionBy, type MetricsTrade, type RollingRow, type AttributionRow,
 } from '@/lib/metrics'
-import { SINCE_INCEPTION_FLOOR, type DateRange } from '@/lib/dateRanges'
-import { formatR, formatPercent, formatDate, positivityClass } from '@/lib/format'
+import { formatR, formatPercent, positivityClass } from '@/lib/format'
 import { CumulativePerformanceChart, DrawdownChart, ContributionChart } from './LazyCharts'
 import { RollingPerformanceTable } from './RollingPerformanceTable'
 import { MonthlyPerformanceMatrix } from './MonthlyPerformanceMatrix'
 import { AttributionTable } from './AttributionTable'
 
-// Same reasoning as AnalyticsPage.tsx's own ReportBuilder import: keeps recharts (via
-// PerformanceReport's own chart copies) out of the initial bundle until the user
-// actually clicks "Generate Report".
-const ReportBuilder = dynamic(() => import('./ReportBuilder').then(m => ({ default: m.ReportBuilder })), {
+// Pattern reports use their own component (PatternReportBuilder), not the shared
+// analyst ReportBuilder -- see that file's own header comment for why. Dynamic-imported
+// for the same reason as AnalyticsPage.tsx's own ReportBuilder: keeps recharts out of
+// the initial bundle until the user actually clicks "Generate Report".
+const PatternReportBuilder = dynamic(() => import('./PatternReportBuilder').then(m => ({ default: m.PatternReportBuilder })), {
   ssr: false,
 })
 
@@ -199,32 +199,11 @@ export function PatternsTab() {
     [analyticsTrades]
   )
 
-  const reportDateRange: DateRange = useMemo(() => {
-    const preset = DATE_RANGES.find(r => r.key === dateRange)!
-    if (preset.days === null) return { start: SINCE_INCEPTION_FLOOR, end: today }
-    const start = new Date(Date.now() - preset.days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-    return { start, end: today }
-  }, [dateRange, today])
-
-  const reportSubtitle = useMemo(() => {
-    const parts = [DATE_RANGES.find(r => r.key === dateRange)!.label]
-    if (granularity !== 'ALL') parts.push(granularity)
-    if (direction !== 'ALL') parts.push(direction === 'BUY' ? 'Buy' : 'Sell')
-    if (assetClass !== 'ALL') parts.push(assetClass)
-    return parts.join(' • ')
-  }, [dateRange, granularity, direction, assetClass])
-
-  const dataThroughDate = useMemo(() => {
-    if (trades.length === 0) return formatDate(today)
-    const latest = trades.reduce((max, t) => t.published_at > max ? t.published_at : max, trades[0]!.published_at)
-    return formatDate(latest.slice(0, 10))
-  }, [trades, today])
-
   return (
     <>
     {/* print:hidden is scoped to the dashboard chrome only, matching AnalyticsPage.tsx's
-        own root return -- ReportBuilder (and the PerformanceReport it mounts) renders as
-        a sibling below, outside this div, since a display:none ancestor can't be
+        own root return -- PatternReportBuilder (and the print layout it mounts) renders
+        as a sibling below, outside this div, since a display:none ancestor can't be
         overridden by a descendant's print:static rule. */}
     <div className="space-y-6 print:hidden">
       {/* KPI strip -- Total Patterns/Win Rate/Avg R are the server-computed, status-based
@@ -256,8 +235,8 @@ export function PatternsTab() {
             <p className="text-2xl font-semibold tabular-nums text-red-700">{trades.length > 0 ? formatR(maxDD) : '—'}</p>
           </div>
         </div>
-        <button onClick={() => setReportOpen(true)}
-          className="shrink-0 text-xs px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
+        <button onClick={() => setReportOpen(true)} disabled={!summary || trades.length === 0}
+          className="shrink-0 text-xs px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors">
           Generate Report
         </button>
       </div>
@@ -334,14 +313,10 @@ export function PatternsTab() {
       )}
     </div>
 
-    {reportOpen && (
-      <ReportBuilder
-        trades={analyticsTrades} pubs={[]} historyTrades={analyticsTrades}
-        previousTrades={null} previousPubs={[]}
-        dateRange={reportDateRange} comparisonLabel=""
-        defaultTitle="Pattern Performance Report"
-        defaultSubtitle={reportSubtitle}
-        dataThroughDate={dataThroughDate}
+    {reportOpen && summary && (
+      <PatternReportBuilder
+        trades={analyticsTrades} summary={summary}
+        familyRows={familyRows} granularityRows={granularityRows} assetClassRows={assetClassRows}
         onClose={() => setReportOpen(false)}
       />
     )}
