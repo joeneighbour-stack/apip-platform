@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic'
 import type { PatternSummary, PatternBreakdownRow, PatternTradePoint } from '@/lib/patternAnalytics'
 import {
   triggeredTrades, totalR, winRate, avgR, maxDrawdown, cumulativeSeries, drawdownSeries, monthlyMatrix,
-  attributionBy, type MetricsTrade, type RollingRow, type AttributionRow,
+  attributionBy, rankAttribution, type MetricsTrade, type RollingRow, type AttributionRow,
 } from '@/lib/metrics'
 import { formatR, formatPercent, positivityClass } from '@/lib/format'
 import { CumulativePerformanceChart, DrawdownChart, ContributionChart } from './LazyCharts'
@@ -125,15 +125,109 @@ function toAttributionRow(row: PatternBreakdownRow): AttributionRow {
   }
 }
 
-// rankAttribution() in lib/metrics.ts ranks by Total R (by design, for "which markets
-// moved the needle"). The task here asks for best/worst families by AVERAGE R with a
-// minimum-sample floor -- a different, equally valid ranking ("most skillful per trade"
-// vs "biggest total contributor") -- so this is a small local sort rather than a reuse
-// of rankAttribution, to avoid silently answering the wrong question.
-function rankByAvgR(rows: AttributionRow[], minTrades: number, direction: 'best' | 'worst', n: number): AttributionRow[] {
-  const qualifying = rows.filter(r => r.trades >= minTrades && r.avgR !== null)
-  const sorted = qualifying.sort((a, b) => direction === 'best' ? (b.avgR! - a.avgR!) : (a.avgR! - b.avgR!))
-  return sorted.slice(0, n)
+// Best/worst families are ranked by Total R (lib/metrics.ts's rankAttribution(), the
+// same ranking used for markets elsewhere in the app) -- a high-volume, modest-per-trade
+// family is a genuine "best" contributor by total R even if a low-volume family has a
+// flashier average R. Ranking by average R instead (an earlier version of this file did)
+// put low-R, high-volume families like Flag in the "worst" list purely because their
+// average R is unremarkable, despite being the single biggest total contributor.
+
+type AttributionSortCol = 'trades' | 'winRate' | 'totalR' | 'avgR' | 'profitFactor'
+interface AttributionSort { col: AttributionSortCol; dir: 'asc' | 'desc' }
+
+const SORTABLE_COLUMNS: { key: AttributionSortCol; label: string }[] = [
+  { key: 'trades', label: 'Trades' },
+  { key: 'winRate', label: 'Win %' },
+  { key: 'totalR', label: 'Total R' },
+  { key: 'avgR', label: 'Avg R' },
+  { key: 'profitFactor', label: 'Profit Factor' },
+]
+
+function sortAttributionRows(rows: AttributionRow[], sort: AttributionSort): AttributionRow[] {
+  return rows.slice().sort((a, b) => {
+    const av = a[sort.col]
+    const bv = b[sort.col]
+    if (av === null && bv === null) return 0
+    if (av === null) return 1
+    if (bv === null) return -1
+    return sort.dir === 'asc' ? av - bv : bv - av
+  })
+}
+
+// AttributionTable (used elsewhere in the app) has no sort support, so this is a
+// click-to-sort replacement for the By Pattern Family/Granularity/Asset Class tables.
+// Column set/widths match AttributionTable's own showMaxDD={false} layout for visual
+// consistency, minus Max DD -- the task's column list for this table is exactly
+// Trades/Win %/Total R/Avg R/Profit Factor, so Max DD isn't part of this table at all
+// (it's still shown on the By Market and Best/Worst tables, which keep using the plain
+// AttributionTable).
+const SORTABLE_COL_WIDTHS = ['26%', '12%', '12%', '18%', '16%', '16%']
+
+function SortableAttributionTable({ title, rows, minTrades = 0, entityLabel = 'Rows', sort, onSortChange }: {
+  title: string
+  rows: AttributionRow[]
+  minTrades?: number
+  entityLabel?: string
+  sort: AttributionSort
+  onSortChange: (sort: AttributionSort) => void
+}) {
+  const qualifying = rows.filter(r => r.trades >= minTrades)
+  const visible = useMemo(() => sortAttributionRows(qualifying, sort), [qualifying, sort])
+  const excludedCount = rows.length - qualifying.length
+
+  function toggleSort(col: AttributionSortCol) {
+    onSortChange(sort.col === col ? { col, dir: sort.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: 'desc' })
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-medium text-muted-foreground print:uppercase print:tracking-wide">{title}</p>
+      {visible.length === 0 ? (
+        <p className="text-xs text-muted-foreground">Insufficient data.</p>
+      ) : (
+        <>
+          <div className="rounded-lg border border-border overflow-hidden">
+            <table className="w-full text-sm" style={{ tableLayout: 'fixed' }}>
+              <colgroup>
+                {SORTABLE_COL_WIDTHS.map((w, i) => <col key={i} style={{ width: w }} />)}
+              </colgroup>
+              <thead className="bg-muted/50">
+                <tr>
+                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground whitespace-nowrap" />
+                  {SORTABLE_COLUMNS.map(col => (
+                    <th key={col.key} className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground whitespace-nowrap">
+                      <button onClick={() => toggleSort(col.key)}
+                        className="flex items-center gap-1 hover:text-foreground transition-colors">
+                        {col.label}
+                        {sort.col === col.key && <span>{sort.dir === 'asc' ? '↑' : '↓'}</span>}
+                      </button>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {visible.map((row, i) => (
+                  <tr key={row.key} className={`hover:bg-muted/30 transition-colors ${i % 2 === 1 ? 'print:bg-black/[0.03]' : ''}`}>
+                    <td className="px-4 py-2.5 font-medium truncate">{row.label}</td>
+                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground whitespace-nowrap">{row.trades.toLocaleString()}</td>
+                    <td className="px-4 py-2.5 tabular-nums whitespace-nowrap">{formatPercent(row.winRate)}</td>
+                    <td className={`px-4 py-2.5 tabular-nums font-medium whitespace-nowrap ${positivityClass(row.totalR)}`}>{formatR(row.totalR)}</td>
+                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground whitespace-nowrap">{formatR(row.avgR)}</td>
+                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground whitespace-nowrap">{row.profitFactor !== null ? row.profitFactor.toFixed(2) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {minTrades > 0 && excludedCount > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {entityLabel} with fewer than {minTrades} triggered trades excluded.
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  )
 }
 
 export function PatternsTab() {
@@ -147,6 +241,9 @@ export function PatternsTab() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [reportOpen, setReportOpen] = useState(false)
+  const [familySort, setFamilySort] = useState<AttributionSort>({ col: 'totalR', dir: 'desc' })
+  const [granularitySort, setGranularitySort] = useState<AttributionSort>({ col: 'totalR', dir: 'desc' })
+  const [assetClassSort, setAssetClassSort] = useState<AttributionSort>({ col: 'totalR', dir: 'desc' })
 
   const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
 
@@ -186,8 +283,8 @@ export function PatternsTab() {
   const familyRows = useMemo(() => summary ? summary.byFamily.map(toAttributionRow) : [], [summary])
   const granularityRows = useMemo(() => summary ? summary.byGranularity.map(toAttributionRow) : [], [summary])
   const assetClassRows = useMemo(() => summary ? summary.byAssetClass.map(toAttributionRow) : [], [summary])
-  const bestFamilies = useMemo(() => rankByAvgR(familyRows, MIN_TRADES_FOR_FAMILY_RANKING, 'best', 5), [familyRows])
-  const worstFamilies = useMemo(() => rankByAvgR(familyRows, MIN_TRADES_FOR_FAMILY_RANKING, 'worst', 5), [familyRows])
+  const bestFamilies = useMemo(() => rankAttribution(familyRows, MIN_TRADES_FOR_FAMILY_RANKING, 'best', 5), [familyRows])
+  const worstFamilies = useMemo(() => rankAttribution(familyRows, MIN_TRADES_FOR_FAMILY_RANKING, 'worst', 5), [familyRows])
   const familyContributionRows = useMemo(() => familyRows.map(r => ({ ...r, label: truncateLabel(r.label) })), [familyRows])
 
   // By-symbol breakdown, computed directly from the trade series (unlike the Family/
@@ -294,10 +391,13 @@ export function PatternsTab() {
           <RollingPerformanceTable rows={rolling} />
           <MonthlyPerformanceMatrix rows={monthly} />
 
-          <AttributionTable title="By Pattern Family" rows={familyRows} entityLabel="Patterns" />
+          <SortableAttributionTable title="By Pattern Family" rows={familyRows} entityLabel="Patterns"
+            sort={familySort} onSortChange={setFamilySort} />
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <AttributionTable title="By Granularity" rows={granularityRows} entityLabel="Patterns" />
-            <AttributionTable title="By Asset Class" rows={assetClassRows} entityLabel="Patterns" />
+            <SortableAttributionTable title="By Granularity" rows={granularityRows} entityLabel="Patterns"
+              sort={granularitySort} onSortChange={setGranularitySort} />
+            <SortableAttributionTable title="By Asset Class" rows={assetClassRows} entityLabel="Patterns"
+              sort={assetClassSort} onSortChange={setAssetClassSort} />
           </div>
           <AttributionTable title="By Market" rows={byMarket} minTrades={10} entityLabel="Markets" />
 
