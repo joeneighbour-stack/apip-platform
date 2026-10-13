@@ -79,7 +79,7 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
   // view worth serving from the server-side cache (see lib/analyticsCache.ts). Never true
   // for the analyst-locked view: a locked analyst is itself a filter.
   const isDefaultView = !lockedAnalystId &&
-    filters.datePreset === 'SINCE_INCEPTION' && filters.product === 'ALL' &&
+    filters.datePreset === 'SINCE_INCEPTION' &&
     filters.analystIds.length === 0 && filters.assetClasses.length === 0 &&
     filters.marketIds.length === 0 && filters.directions.length === 0 &&
     filters.sessions.length === 0 && filters.triggerStatus === 'ALL'
@@ -303,7 +303,7 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
             : 'border-transparent text-muted-foreground hover:text-foreground'
         }`}
       >
-        Performance
+        Analyst Signals
       </button>
       <button
         onClick={() => setPageTab('PATTERNS')}
@@ -341,9 +341,13 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
   }
 
   if (showManagementTabs && pageTab === 'AI_SIGNALS') {
+    // AiSignalsTab manages its own print:hidden scoping internally (its Report Builder/
+    // print layout must render outside any print:hidden ancestor -- see its own
+    // comment, same as PatternsTab's) -- only tabBar, not AiSignalsTab itself, is
+    // wrapped here.
     return (
-      <div className="space-y-6 print:hidden">
-        {tabBar}
+      <div className="space-y-6">
+        <div className="print:hidden">{tabBar}</div>
         <AiSignalsTab />
       </div>
     )

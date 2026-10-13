@@ -2,21 +2,12 @@ import type { DatePresetKey, DateRange } from './dateRanges'
 import type { MetricsTrade, MetricsPublication } from './metrics'
 import { formatDate } from './format'
 
-export type ProductStrategy = 'ALL' | 'HUMAN_ANALYST' | 'PATTERN' | 'AI'
 export type TriggerStatusFilter = 'ALL' | 'TRIGGERED' | 'NOT_TRIGGERED'
-
-export const PRODUCT_OPTIONS: { key: ProductStrategy; label: string }[] = [
-  { key: 'ALL', label: 'All' },
-  { key: 'HUMAN_ANALYST', label: 'Human Analyst' },
-  { key: 'PATTERN', label: 'Pattern' },
-  { key: 'AI', label: 'AI' },
-]
 
 export interface AnalyticsFilterState {
   datePreset: DatePresetKey
   customStart: string | null
   customEnd: string | null
-  product: ProductStrategy
   analystIds: string[]
   assetClasses: string[]
   marketIds: string[]
@@ -29,7 +20,6 @@ export const DEFAULT_FILTERS: AnalyticsFilterState = {
   datePreset: 'SINCE_INCEPTION',
   customStart: null,
   customEnd: null,
-  product: 'ALL',
   analystIds: [],
   assetClasses: [],
   marketIds: [],
@@ -43,7 +33,6 @@ export function filtersToSearchParams(filters: AnalyticsFilterState): URLSearchP
   if (filters.datePreset !== DEFAULT_FILTERS.datePreset) params.set('date', filters.datePreset)
   if (filters.customStart) params.set('from', filters.customStart)
   if (filters.customEnd) params.set('to', filters.customEnd)
-  if (filters.product !== 'ALL') params.set('product', filters.product)
   if (filters.analystIds.length) params.set('analysts', filters.analystIds.join(','))
   if (filters.assetClasses.length) params.set('assetClasses', filters.assetClasses.join(','))
   if (filters.marketIds.length) params.set('markets', filters.marketIds.join(','))
@@ -58,7 +47,6 @@ export function filtersFromSearchParams(params: URLSearchParams): AnalyticsFilte
     datePreset: (params.get('date') as DatePresetKey) ?? DEFAULT_FILTERS.datePreset,
     customStart: params.get('from'),
     customEnd: params.get('to'),
-    product: (params.get('product') as ProductStrategy) ?? 'ALL',
     analystIds: params.get('analysts')?.split(',').filter(Boolean) ?? [],
     assetClasses: params.get('assetClasses')?.split(',').filter(Boolean) ?? [],
     marketIds: params.get('markets')?.split(',').filter(Boolean) ?? [],
@@ -69,20 +57,19 @@ export function filtersFromSearchParams(params: URLSearchParams): AnalyticsFilte
 }
 
 export function hasActiveFilters(filters: AnalyticsFilterState): boolean {
-  return filters.datePreset !== DEFAULT_FILTERS.datePreset || filters.product !== 'ALL' ||
+  return filters.datePreset !== DEFAULT_FILTERS.datePreset ||
     filters.analystIds.length > 0 || filters.assetClasses.length > 0 || filters.marketIds.length > 0 ||
     filters.directions.length > 0 || filters.sessions.length > 0 || filters.triggerStatus !== 'ALL'
 }
 
-// "Human Analyst" is the only product bucket with real data today (source_system on
-// actual_trades is ingestion source, not a strategy classification -- see plan).
-// Pattern/AI filters intentionally yield zero rows rather than fabricating data.
+// This tab now only ever loads actual_trades (human-analyst trades) -- Pattern and AI
+// signals live in their own separate tabs/tables (pattern_trades/ai_trades) with their
+// own fetch and filter UI, so there's no "product/strategy" dimension left to filter by
+// here.
 export function filterTrades(trades: MetricsTrade[], filters: AnalyticsFilterState, range: DateRange): MetricsTrade[] {
   return trades.filter(t => {
     const d = t.published_at.slice(0, 10)
     if (d < range.start || d > range.end) return false
-    if (filters.product === 'HUMAN_ANALYST' && !['ACUITY_PERFORMANCE_API', 'MANUAL_BACKFILL'].includes(t.source_system)) return false
-    if (filters.product === 'PATTERN' || filters.product === 'AI') return false
     if (filters.analystIds.length > 0 && !filters.analystIds.includes(t.analyst_id)) return false
     if (filters.assetClasses.length > 0 && !filters.assetClasses.includes(t.asset_class)) return false
     if (filters.marketIds.length > 0 && !filters.marketIds.includes(t.market_id)) return false
@@ -102,7 +89,6 @@ export function filterPublications(
   return (pubs ?? []).filter(p => {
     const d = p.published_at.slice(0, 10)
     if (d < range.start || d > range.end) return false
-    if (filters.product === 'PATTERN' || filters.product === 'AI') return false
     if (filters.analystIds.length > 0 && !filters.analystIds.includes(p.analyst_id)) return false
     if (filters.marketIds.length > 0 && (!p.market_id || !filters.marketIds.includes(p.market_id))) return false
     if (filters.assetClasses.length > 0) {
@@ -120,15 +106,14 @@ export interface UniverseDescription {
   analystSegment: string | null
 }
 
-function productLabel(product: ProductStrategy): string {
-  return PRODUCT_OPTIONS.find(p => p.key === product)?.label ?? 'All'
-}
-
 export function describeUniverse(
   filters: AnalyticsFilterState, range: DateRange,
   markets: { market_id: string; symbol: string }[], analysts: { analyst_id: string; display_name: string }[]
 ): UniverseDescription {
-  const title = `${filters.product === 'ALL' ? 'All Product' : productLabel(filters.product)} Performance`
+  // Fixed title -- this tab only ever covers human-analyst trades now (see
+  // filterTrades's own comment), so there's no product/strategy dimension left to
+  // name here the way "All Product"/"Pattern"/"AI" used to.
+  const title = 'Analyst Signals Performance'
   const periodLabel = `${formatDate(range.start)} – ${formatDate(range.end)}`
 
   const segments: string[] = []

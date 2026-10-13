@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { MultiSelect } from '@/components/ui/MultiSelect'
 import { MARKET_GROUPS, marketGroupSymbols } from '@/lib/marketGroups'
 import { DATE_PRESET_OPTIONS } from '@/lib/dateRanges'
-import { PRODUCT_OPTIONS, hasActiveFilters, DEFAULT_FILTERS, type AnalyticsFilterState } from '@/lib/analyticsFilters'
+import { hasActiveFilters, DEFAULT_FILTERS, type AnalyticsFilterState } from '@/lib/analyticsFilters'
 
 interface Analyst { analyst_id: string; display_name: string; active: boolean }
 interface Market { market_id: string; symbol: string; asset_class: string }
@@ -77,15 +77,8 @@ export function AnalyticsFilters({ filters, onChange, analysts, markets, hideAna
         )}
       </div>
 
-      {/* Product / Analyst / Asset class / Market */}
-      <div className={`grid grid-cols-2 gap-3 ${hideAnalystFilter ? 'sm:grid-cols-3' : 'sm:grid-cols-4'}`}>
-        <div>
-          <p className="text-xs text-muted-foreground mb-1">Product / Strategy</p>
-          <select value={filters.product} onChange={e => set('product', e.target.value as AnalyticsFilterState['product'])}
-            className="w-full text-xs px-2 py-2 rounded-md border border-border bg-background">
-            {PRODUCT_OPTIONS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
-          </select>
-        </div>
+      {/* Analyst / Asset class / Market */}
+      <div className={`grid grid-cols-2 gap-3 ${hideAnalystFilter ? 'sm:grid-cols-2' : 'sm:grid-cols-3'}`}>
         {!hideAnalystFilter && (
           <MultiSelect label="Analyst (internal only)"
             options={analysts.filter(a => a.active).map(a => ({ value: a.analyst_id, label: a.display_name }))}

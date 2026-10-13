@@ -114,7 +114,7 @@ async function computeDefaultAnalyticsView() {
   console.log(`Deduped ${trades.length - dedupedTrades.length} trades (MANUAL_BACKFILL authoritative before ${LIVE_API_START})`)
 
   const today = new Date().toISOString().slice(0, 10)
-  const filters: AnalyticsFilterState = DEFAULT_FILTERS // product/analyst/market/direction/session/trigger all unfiltered
+  const filters: AnalyticsFilterState = DEFAULT_FILTERS // analyst/market/direction/session/trigger all unfiltered
   const range = { start: SINCE_INCEPTION_FLOOR, end: today }
 
   const summary = computeSummary(dedupedTrades, pubs)

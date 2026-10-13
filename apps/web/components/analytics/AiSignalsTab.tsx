@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
+import dynamic from 'next/dynamic'
 import type { AiSignalSummary, AiBreakdownRow, AiTradePoint } from '@/lib/aiSignalAnalytics'
 import {
   triggeredTrades, totalR, winRate, avgR, maxDrawdown, cumulativeSeries, drawdownSeries, monthlyMatrix,
@@ -10,6 +11,15 @@ import { CumulativePerformanceChart, DrawdownChart, ContributionChart } from './
 import { RollingPerformanceTable } from './RollingPerformanceTable'
 import { MonthlyPerformanceMatrix } from './MonthlyPerformanceMatrix'
 import { AttributionTable } from './AttributionTable'
+
+// AI Signals reports use their own component (AiSignalsReportBuilder), not
+// PatternReportBuilder or the shared analyst ReportBuilder -- see that file's own
+// header comment for why. Dynamic-imported for the same reason as PatternsTab.tsx's
+// own PatternReportBuilder import: keeps recharts out of the initial bundle until the
+// user actually clicks "Generate Report".
+const AiSignalsReportBuilder = dynamic(() => import('./AiSignalsReportBuilder').then(m => ({ default: m.AiSignalsReportBuilder })), {
+  ssr: false,
+})
 
 // Same structure as PatternsTab.tsx, adapted for ai_trades (migrations/066_ai_trades.sql):
 // confidence replaces family/granularity (AI signals have no pattern family or chart
@@ -247,6 +257,7 @@ export function AiSignalsTab() {
   const [assetClassSort, setAssetClassSort] = useState<AttributionSort>({ col: 'totalR', dir: 'desc' })
   const [directionSort, setDirectionSort] = useState<AttributionSort>({ col: 'totalR', dir: 'desc' })
   const [showAllMarkets, setShowAllMarkets] = useState(false)
+  const [reportOpen, setReportOpen] = useState(false)
 
   const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
 
@@ -321,32 +332,43 @@ export function AiSignalsTab() {
   )
 
   return (
+    <>
+    {/* print:hidden is scoped to the dashboard chrome only, matching PatternsTab.tsx's
+        own root return -- AiSignalsReportBuilder (and the print layout it mounts)
+        renders as a sibling below, outside this div, since a display:none ancestor
+        can't be overridden by a descendant's print:static rule. */}
     <div className="space-y-6 print:hidden">
       {/* KPI strip -- exactly the 4 summary fields lib/aiSignalAnalytics.ts computes
           (total, win rate, avg R, cumulative R). No Max Drawdown tile here (unlike
           PatternsTab) since it isn't part of AiSignalSummary -- still computed below
           for the drawdown chart, just not surfaced as a headline KPI. */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <div className="rounded-lg border border-border bg-card p-4 space-y-1">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Total Signals</p>
-          <p className="text-2xl font-semibold tabular-nums">{summary ? summary.totalSignals : '—'}</p>
+      <div className="flex items-start justify-between gap-4">
+        <div className="grid grow grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="rounded-lg border border-border bg-card p-4 space-y-1">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Total Signals</p>
+            <p className="text-2xl font-semibold tabular-nums">{summary ? summary.totalSignals : '—'}</p>
+          </div>
+          <div className="rounded-lg border border-border bg-card p-4 space-y-1">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Win Rate</p>
+            <p className="text-2xl font-semibold tabular-nums">{summary ? formatPercent(summary.winRate) : '—'}</p>
+          </div>
+          <div className="rounded-lg border border-border bg-card p-4 space-y-1">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Avg R</p>
+            <p className={`text-2xl font-semibold tabular-nums ${summary ? positivityClass(summary.avgR) : ''}`}>
+              {summary ? formatR(summary.avgR) : '—'}
+            </p>
+          </div>
+          <div className="rounded-lg border border-border bg-card p-4 space-y-1">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Cumulative R</p>
+            <p className={`text-2xl font-semibold tabular-nums ${summary ? positivityClass(cumulativeRTotal) : ''}`}>
+              {summary ? formatR(cumulativeRTotal) : '—'}
+            </p>
+          </div>
         </div>
-        <div className="rounded-lg border border-border bg-card p-4 space-y-1">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Win Rate</p>
-          <p className="text-2xl font-semibold tabular-nums">{summary ? formatPercent(summary.winRate) : '—'}</p>
-        </div>
-        <div className="rounded-lg border border-border bg-card p-4 space-y-1">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Avg R</p>
-          <p className={`text-2xl font-semibold tabular-nums ${summary ? positivityClass(summary.avgR) : ''}`}>
-            {summary ? formatR(summary.avgR) : '—'}
-          </p>
-        </div>
-        <div className="rounded-lg border border-border bg-card p-4 space-y-1">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Cumulative R</p>
-          <p className={`text-2xl font-semibold tabular-nums ${summary ? positivityClass(cumulativeRTotal) : ''}`}>
-            {summary ? formatR(cumulativeRTotal) : '—'}
-          </p>
-        </div>
+        <button onClick={() => setReportOpen(true)} disabled={!summary || trades.length === 0}
+          className="shrink-0 text-xs px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors">
+          Generate Report
+        </button>
       </div>
 
       {/* Filters -- no granularity filter: AI signals have no chart-timeframe concept. */}
@@ -428,5 +450,15 @@ export function AiSignalsTab() {
         </div>
       )}
     </div>
+
+    {reportOpen && summary && (
+      <AiSignalsReportBuilder
+        trades={analyticsTrades} summary={summary}
+        confidenceRows={confidenceRows} assetClassRows={assetClassRows} directionRows={directionRows}
+        byMarket={byMarket}
+        onClose={() => setReportOpen(false)}
+      />
+    )}
+    </>
   )
 }
