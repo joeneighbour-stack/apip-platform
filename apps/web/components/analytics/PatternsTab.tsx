@@ -1,17 +1,36 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
+import dynamic from 'next/dynamic'
 import type { PatternSummary, PatternBreakdownRow, PatternTradePoint } from '@/lib/patternAnalytics'
 import {
   triggeredTrades, totalR, winRate, avgR, maxDrawdown, cumulativeSeries, drawdownSeries, monthlyMatrix,
-  type MetricsTrade, type RollingRow, type AttributionRow,
+  attributionBy, type MetricsTrade, type RollingRow, type AttributionRow,
 } from '@/lib/metrics'
-import { formatR, formatPercent, positivityClass } from '@/lib/format'
+import { SINCE_INCEPTION_FLOOR, type DateRange } from '@/lib/dateRanges'
+import { formatR, formatPercent, formatDate, positivityClass } from '@/lib/format'
 import { CumulativePerformanceChart, DrawdownChart, ContributionChart } from './LazyCharts'
 import { RollingPerformanceTable } from './RollingPerformanceTable'
 import { MonthlyPerformanceMatrix } from './MonthlyPerformanceMatrix'
 import { AttributionTable } from './AttributionTable'
 
+// Same reasoning as AnalyticsPage.tsx's own ReportBuilder import: keeps recharts (via
+// PerformanceReport's own chart copies) out of the initial bundle until the user
+// actually clicks "Generate Report".
+const ReportBuilder = dynamic(() => import('./ReportBuilder').then(m => ({ default: m.ReportBuilder })), {
+  ssr: false,
+})
+
 type PatternsApiResponse = PatternSummary & { trades: PatternTradePoint[] }
+
+// ContributionChart's YAxis category width is a fixed 90px with no prop to widen it, so
+// long family names (e.g. "Sym. Triangle (Bull Reversal)") get clipped -- truncate
+// before handing rows to the chart. Only applied to the chart's own copy of the rows;
+// AttributionTable gets the untruncated labels since its label column already
+// text-truncates with real column width to spare.
+const MAX_CONTRIBUTION_LABEL_LENGTH = 20
+function truncateLabel(label: string): string {
+  return label.length > MAX_CONTRIBUTION_LABEL_LENGTH ? `${label.slice(0, MAX_CONTRIBUTION_LABEL_LENGTH - 1)}…` : label
+}
 
 type DateRangeKey = '30D' | '90D' | '12M' | 'ALL'
 const DATE_RANGES: { key: DateRangeKey; label: string; days: number | null }[] = [
@@ -127,6 +146,7 @@ export function PatternsTab() {
   const [trades, setTrades] = useState<PatternTradePoint[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [reportOpen, setReportOpen] = useState(false)
 
   const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
 
@@ -168,38 +188,78 @@ export function PatternsTab() {
   const assetClassRows = useMemo(() => summary ? summary.byAssetClass.map(toAttributionRow) : [], [summary])
   const bestFamilies = useMemo(() => rankByAvgR(familyRows, MIN_TRADES_FOR_FAMILY_RANKING, 'best', 5), [familyRows])
   const worstFamilies = useMemo(() => rankByAvgR(familyRows, MIN_TRADES_FOR_FAMILY_RANKING, 'worst', 5), [familyRows])
+  const familyContributionRows = useMemo(() => familyRows.map(r => ({ ...r, label: truncateLabel(r.label) })), [familyRows])
+
+  // By-symbol breakdown, computed directly from the trade series (unlike the Family/
+  // Granularity/Asset Class tables above, there's no server-computed PatternBreakdownRow
+  // equivalent keyed by symbol) -- same attributionBy() + AttributionTable minTrades
+  // pattern already used for AnalyticsPage.tsx's own "By Market" table.
+  const byMarket = useMemo(
+    () => attributionBy(analyticsTrades, t => ({ key: t.symbol, label: t.symbol })),
+    [analyticsTrades]
+  )
+
+  const reportDateRange: DateRange = useMemo(() => {
+    const preset = DATE_RANGES.find(r => r.key === dateRange)!
+    if (preset.days === null) return { start: SINCE_INCEPTION_FLOOR, end: today }
+    const start = new Date(Date.now() - preset.days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    return { start, end: today }
+  }, [dateRange, today])
+
+  const reportSubtitle = useMemo(() => {
+    const parts = [DATE_RANGES.find(r => r.key === dateRange)!.label]
+    if (granularity !== 'ALL') parts.push(granularity)
+    if (direction !== 'ALL') parts.push(direction === 'BUY' ? 'Buy' : 'Sell')
+    if (assetClass !== 'ALL') parts.push(assetClass)
+    return parts.join(' • ')
+  }, [dateRange, granularity, direction, assetClass])
+
+  const dataThroughDate = useMemo(() => {
+    if (trades.length === 0) return formatDate(today)
+    const latest = trades.reduce((max, t) => t.published_at > max ? t.published_at : max, trades[0]!.published_at)
+    return formatDate(latest.slice(0, 10))
+  }, [trades, today])
 
   return (
-    <div className="space-y-6">
-      {/* KPI strip -- Total Patterns/Trigger Rate/Win Rate/Avg R are the server-computed,
-          status-based PatternSummary figures (see lib/patternAnalytics.ts); Max Drawdown
-          is computed client-side from the trade series via lib/metrics.ts, since
-          PatternSummary has no drawdown concept. PerformanceKpiStrip isn't reused here --
-          its METRIC_DEFS hardcodes a fixed 6-metric set (Triggered Trades/Profit Factor
-          instead of Total Patterns) that doesn't match this tab's 5 requested metrics. */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        <div className="rounded-lg border border-border bg-card p-4 space-y-1">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Total Patterns</p>
-          <p className="text-2xl font-semibold tabular-nums">{summary ? summary.totalPatterns : '—'}</p>
+    <>
+    {/* print:hidden is scoped to the dashboard chrome only, matching AnalyticsPage.tsx's
+        own root return -- ReportBuilder (and the PerformanceReport it mounts) renders as
+        a sibling below, outside this div, since a display:none ancestor can't be
+        overridden by a descendant's print:static rule. */}
+    <div className="space-y-6 print:hidden">
+      {/* KPI strip -- Total Patterns/Win Rate/Avg R are the server-computed, status-based
+          PatternSummary figures (see lib/patternAnalytics.ts); Max Drawdown is computed
+          client-side from the trade series via lib/metrics.ts, since PatternSummary has
+          no drawdown concept. Trigger Rate is intentionally omitted: pattern trades are
+          only published once already triggered, so it's always ~100% and carries no
+          signal. PerformanceKpiStrip isn't reused here -- its METRIC_DEFS hardcodes a
+          fixed 6-metric set (Triggered Trades/Profit Factor instead of Total Patterns)
+          that doesn't match this tab's metrics. */}
+      <div className="flex items-start justify-between gap-4">
+        <div className="grid grow grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="rounded-lg border border-border bg-card p-4 space-y-1">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Total Patterns</p>
+            <p className="text-2xl font-semibold tabular-nums">{summary ? summary.totalPatterns : '—'}</p>
+          </div>
+          <div className="rounded-lg border border-border bg-card p-4 space-y-1">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Win Rate</p>
+            <p className="text-2xl font-semibold tabular-nums">{summary ? formatPercent(summary.winRate) : '—'}</p>
+          </div>
+          <div className="rounded-lg border border-border bg-card p-4 space-y-1">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Avg R</p>
+            <p className={`text-2xl font-semibold tabular-nums ${summary ? positivityClass(summary.avgR) : ''}`}>
+              {summary ? formatR(summary.avgR) : '—'}
+            </p>
+          </div>
+          <div className="rounded-lg border border-border bg-card p-4 space-y-1">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Max Drawdown</p>
+            <p className="text-2xl font-semibold tabular-nums text-red-700">{trades.length > 0 ? formatR(maxDD) : '—'}</p>
+          </div>
         </div>
-        <div className="rounded-lg border border-border bg-card p-4 space-y-1">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Trigger Rate</p>
-          <p className="text-2xl font-semibold tabular-nums">{summary ? formatPercent(summary.triggerRate) : '—'}</p>
-        </div>
-        <div className="rounded-lg border border-border bg-card p-4 space-y-1">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Win Rate</p>
-          <p className="text-2xl font-semibold tabular-nums">{summary ? formatPercent(summary.winRate) : '—'}</p>
-        </div>
-        <div className="rounded-lg border border-border bg-card p-4 space-y-1">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Avg R</p>
-          <p className={`text-2xl font-semibold tabular-nums ${summary ? positivityClass(summary.avgR) : ''}`}>
-            {summary ? formatR(summary.avgR) : '—'}
-          </p>
-        </div>
-        <div className="rounded-lg border border-border bg-card p-4 space-y-1">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Max Drawdown</p>
-          <p className="text-2xl font-semibold tabular-nums text-red-700">{trades.length > 0 ? formatR(maxDD) : '—'}</p>
-        </div>
+        <button onClick={() => setReportOpen(true)}
+          className="shrink-0 text-xs px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
+          Generate Report
+        </button>
       </div>
 
       {/* Filters */}
@@ -260,8 +320,9 @@ export function PatternsTab() {
             <AttributionTable title="By Granularity" rows={granularityRows} entityLabel="Patterns" />
             <AttributionTable title="By Asset Class" rows={assetClassRows} entityLabel="Patterns" />
           </div>
+          <AttributionTable title="By Market" rows={byMarket} minTrades={10} entityLabel="Markets" />
 
-          <ContributionChart title="Contribution by Pattern Family" rows={familyRows} />
+          <ContributionChart title="Contribution by Pattern Family" rows={familyContributionRows} />
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <AttributionTable title={`Best Performing Families (min. ${MIN_TRADES_FOR_FAMILY_RANKING} trades)`}
@@ -272,5 +333,18 @@ export function PatternsTab() {
         </div>
       )}
     </div>
+
+    {reportOpen && (
+      <ReportBuilder
+        trades={analyticsTrades} pubs={[]} historyTrades={analyticsTrades}
+        previousTrades={null} previousPubs={[]}
+        dateRange={reportDateRange} comparisonLabel=""
+        defaultTitle="Pattern Performance Report"
+        defaultSubtitle={reportSubtitle}
+        dataThroughDate={dataThroughDate}
+        onClose={() => setReportOpen(false)}
+      />
+    )}
+    </>
   )
 }

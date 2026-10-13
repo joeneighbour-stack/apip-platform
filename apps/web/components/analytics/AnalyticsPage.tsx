@@ -317,9 +317,12 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
   ) : null
 
   if (showPatternsTab && pageTab === 'PATTERNS') {
+    // PatternsTab manages its own print:hidden scoping internally (its Report Builder/
+    // PerformanceReport must render outside any print:hidden ancestor -- see its own
+    // comment) -- only tabBar, not PatternsTab itself, is wrapped here.
     return (
-      <div className="space-y-6 print:hidden">
-        {tabBar}
+      <div className="space-y-6">
+        <div className="print:hidden">{tabBar}</div>
         <PatternsTab />
       </div>
     )
