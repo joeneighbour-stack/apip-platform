@@ -25,6 +25,7 @@ import { AttributionTable } from './AttributionTable'
 import { BestPerformers } from './BestPerformers'
 import { PatternsTab } from './PatternsTab'
 import { AiSignalsTab } from './AiSignalsTab'
+import { CombinedSignalsTab } from './CombinedSignalsTab'
 
 // ReportBuilder mounts report/PerformanceReport.tsx, which pulls in a second copy of
 // the four recharts components above -- dynamic-importing it here keeps that whole
@@ -60,7 +61,7 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
   // the trades/publications data this page otherwise loads. Rendered outside the
   // loading/error short-circuits below so switching to either works regardless of
   // the Performance tab's own fetch state.
-  const [pageTab, setPageTab] = useState<'PERFORMANCE' | 'PATTERNS' | 'AI_SIGNALS'>('PERFORMANCE')
+  const [pageTab, setPageTab] = useState<'PERFORMANCE' | 'PATTERNS' | 'AI_SIGNALS' | 'ALL_SIGNALS'>('PERFORMANCE')
 
   const [filters, setFilters] = useState<AnalyticsFilterState>(() => {
     const initial = filtersFromSearchParams(searchParams)
@@ -325,6 +326,16 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
       >
         AI Signals
       </button>
+      <button
+        onClick={() => setPageTab('ALL_SIGNALS')}
+        className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+          pageTab === 'ALL_SIGNALS'
+            ? 'border-foreground text-foreground'
+            : 'border-transparent text-muted-foreground hover:text-foreground'
+        }`}
+      >
+        All Signals
+      </button>
     </div>
   ) : null
 
@@ -349,6 +360,17 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
       <div className="space-y-6">
         <div className="print:hidden">{tabBar}</div>
         <AiSignalsTab />
+      </div>
+    )
+  }
+
+  if (showManagementTabs && pageTab === 'ALL_SIGNALS') {
+    // Same print:hidden scoping as the Patterns/AI Signals branches above --
+    // CombinedSignalsTab manages it internally for its own Report Builder.
+    return (
+      <div className="space-y-6">
+        <div className="print:hidden">{tabBar}</div>
+        <CombinedSignalsTab />
       </div>
     )
   }

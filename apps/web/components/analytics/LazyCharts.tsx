@@ -35,3 +35,8 @@ export const CumulativePerformanceChart = dynamic(
   () => import('./CumulativePerformanceChart').then(m => ({ default: m.CumulativePerformanceChart })),
   { ssr: false, loading: ChartLoading },
 )
+
+export const CombinedCumulativeChart = dynamic(
+  () => import('./CombinedCumulativeChart').then(m => ({ default: m.CombinedCumulativeChart })),
+  { ssr: false, loading: ChartLoading },
+)
