@@ -11,6 +11,9 @@ import { CumulativePerformanceChart, DrawdownChart, ContributionChart } from './
 import { RollingPerformanceTable } from './RollingPerformanceTable'
 import { MonthlyPerformanceMatrix } from './MonthlyPerformanceMatrix'
 import { AttributionTable } from './AttributionTable'
+import { Tooltip } from '@/components/ui/Tooltip'
+
+const REITERATION_TOOLTIP = 'A reiteration is published when the model identifies a continuing opportunity on a symbol that already has an open signal. Reiterations are recorded but excluded from performance statistics.'
 
 // AI Signals reports use their own component (AiSignalsReportBuilder), not
 // PatternReportBuilder or the shared analyst ReportBuilder -- see that file's own
@@ -27,7 +30,16 @@ const AiSignalsReportBuilder = dynamic(() => import('./AiSignalsReportBuilder').
 // for, and this tab's own headline finding (confidence doesn't predict outcome) is
 // already front-and-centre in the dashboard itself.
 
-type AiSignalsApiResponse = AiSignalSummary & { trades: AiTradePoint[] }
+// totalSignals/uniqueSignals/reiterations are layered on top of AiSignalSummary by the
+// route (see its own comment) -- totalSignals here means ALL signals including
+// reiterations, shadowing AiSignalSummary's own "dedup count" meaning of that field.
+type AiSignalsApiResponse = AiSignalSummary & {
+  totalSignals: number
+  uniqueSignals: number
+  reiterations: number
+  trades: AiTradePoint[]
+}
+type AiSignalsSummaryState = Omit<AiSignalsApiResponse, 'trades'>
 
 type DateRangeKey = '30D' | '90D' | '12M' | 'ALL'
 const DATE_RANGES: { key: DateRangeKey; label: string; days: number | null }[] = [
@@ -249,7 +261,7 @@ export function AiSignalsTab() {
   const [direction, setDirection] = useState('ALL')
   const [assetClass, setAssetClass] = useState('ALL')
 
-  const [summary, setSummary] = useState<AiSignalSummary | null>(null)
+  const [summary, setSummary] = useState<AiSignalsSummaryState | null>(null)
   const [trades, setTrades] = useState<AiTradePoint[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -286,20 +298,27 @@ export function AiSignalsTab() {
       .finally(() => setLoading(false))
   }, [dateRange, direction, assetClass, today])
 
-  const analyticsTrades = useMemo(() => trades.map(toAnalyticsTrade) as unknown as MetricsTrade[], [trades])
+  // Every chart/table below is built from dedupTrades, not the raw `trades` array --
+  // reiterations are recorded data (kept in `trades` for the reiterations count/tooltip)
+  // but must never feed cumulative/drawdown/rolling/monthly/breakdowns, same as
+  // lib/aiSignalAnalytics.ts's own computeAiSignalSummary() already does server-side for
+  // win rate/avg R/total R/drawdown/breakdowns.
+  const dedupTrades = useMemo(() => trades.filter(t => !t.is_reiteration), [trades])
+  const analyticsTrades = useMemo(() => dedupTrades.map(toAnalyticsTrade) as unknown as MetricsTrade[], [dedupTrades])
   const cumulative = useMemo(() => cumulativeSeries(analyticsTrades), [analyticsTrades])
   const drawdown = useMemo(() => drawdownSeries(analyticsTrades), [analyticsTrades])
   const monthly = useMemo(() => monthlyMatrix(analyticsTrades), [analyticsTrades])
   const rolling = useMemo(() => rollingTradeWindows(analyticsTrades), [analyticsTrades])
+  const maxDD = useMemo(() => maxDrawdown(analyticsTrades).value, [analyticsTrades])
 
-  // KPI tile computed directly from the raw trades array (not summary.cumulativeR,
+  // KPI tile computed directly from the deduplicated trades array (not summary.cumulativeR,
   // which uses lib/aiSignalAnalytics.ts's status-gated "with outcome" definition for win
-  // rate/avg R) -- Cumulative R here is simply every recorded rr summed, matching the
-  // rolling table's "Since Inception" Total R row above (both now key off rr !== null
-  // via the adapter, so the two numbers agree).
+  // rate/avg R) -- Cumulative R here is simply every recorded rr summed across
+  // deduplicated signals, matching the rolling table's "Since Inception" Total R row
+  // above (both now key off rr !== null via the adapter, so the two numbers agree).
   const cumulativeRTotal = useMemo(
-    () => round2(trades.filter(t => t.rr !== null).reduce((sum, t) => sum + (t.rr ?? 0), 0)),
-    [trades]
+    () => round2(dedupTrades.filter(t => t.rr !== null).reduce((sum, t) => sum + (t.rr ?? 0), 0)),
+    [dedupTrades]
   )
 
   const confidenceRows = useMemo(() => summary ? summary.byConfidence.map(toAttributionRow) : [], [summary])
@@ -338,15 +357,23 @@ export function AiSignalsTab() {
         renders as a sibling below, outside this div, since a display:none ancestor
         can't be overridden by a descendant's print:static rule. */}
     <div className="space-y-6 print:hidden">
-      {/* KPI strip -- exactly the 4 summary fields lib/aiSignalAnalytics.ts computes
-          (total, win rate, avg R, cumulative R). No Max Drawdown tile here (unlike
-          PatternsTab) since it isn't part of AiSignalSummary -- still computed below
-          for the drawdown chart, just not surfaced as a headline KPI. */}
+      {/* KPI strip -- Total Signals shows the deduplicated (unique) count with a
+          reiterations subtitle (see REITERATION_TOOLTIP); Win Rate/Avg R/Cumulative R
+          are already deduplicated server-side (lib/aiSignalAnalytics.ts's
+          computeAiSignalSummary() filters is_reiteration out internally); Max Drawdown
+          is computed client-side from the same deduplicated trade series. */}
       <div className="flex items-start justify-between gap-4">
-        <div className="grid grow grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="grid grow grid-cols-2 gap-3 sm:grid-cols-5">
           <div className="rounded-lg border border-border bg-card p-4 space-y-1">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Total Signals</p>
-            <p className="text-2xl font-semibold tabular-nums">{summary ? summary.totalSignals : '—'}</p>
+            <p className="text-2xl font-semibold tabular-nums">{summary ? summary.uniqueSignals.toLocaleString() : '—'}</p>
+            {summary && summary.reiterations > 0 && (
+              <Tooltip content={REITERATION_TOOLTIP}>
+                <p className="text-xs text-muted-foreground cursor-help border-b border-dotted border-muted-foreground/40 inline-block">
+                  + {summary.reiterations.toLocaleString()} reiterations
+                </p>
+              </Tooltip>
+            )}
           </div>
           <div className="rounded-lg border border-border bg-card p-4 space-y-1">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Win Rate</p>
@@ -363,6 +390,10 @@ export function AiSignalsTab() {
             <p className={`text-2xl font-semibold tabular-nums ${summary ? positivityClass(cumulativeRTotal) : ''}`}>
               {summary ? formatR(cumulativeRTotal) : '—'}
             </p>
+          </div>
+          <div className="rounded-lg border border-border bg-card p-4 space-y-1">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Max Drawdown</p>
+            <p className="text-2xl font-semibold tabular-nums text-red-700">{dedupTrades.length > 0 ? formatR(maxDD) : '—'}</p>
           </div>
         </div>
         <button onClick={() => setReportOpen(true)} disabled={!summary || trades.length === 0}
@@ -451,9 +482,15 @@ export function AiSignalsTab() {
       )}
     </div>
 
+    {/* AiSignalsReportBuilder's own summary.totalSignals is written assuming
+        lib/aiSignalAnalytics.ts's original "dedup count" meaning of that field -- the
+        route now overrides totalSignals to mean ALL signals including reiterations
+        (summary.uniqueSignals is the dedup count instead), so that field has to be
+        remapped back here before handing summary off, or the report would silently
+        show an inflated "Total Signals" figure. */}
     {reportOpen && summary && (
       <AiSignalsReportBuilder
-        trades={analyticsTrades} summary={summary}
+        trades={analyticsTrades} summary={{ ...summary, totalSignals: summary.uniqueSignals }}
         confidenceRows={confidenceRows} assetClassRows={assetClassRows} directionRows={directionRows}
         byMarket={byMarket}
         onClose={() => setReportOpen(false)}

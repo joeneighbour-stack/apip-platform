@@ -21,6 +21,11 @@ export interface AiTradePoint extends AiTradeRow {
   published_at: string
   symbol: string | null
   asset_name: string | null
+  // Computed server-side by the ai_trades_with_reiteration() SQL window function
+  // (migrations/068_ai_trades_reiteration.sql) -- true when an earlier signal on the
+  // same symbol was still open at this signal's publication time. Always present on
+  // rows returned by /api/analytics/ai-signals and /api/analytics/combined.
+  is_reiteration: boolean
 }
 
 export interface AiBreakdownRow {
@@ -39,6 +44,12 @@ export interface AiBreakdownRow {
 }
 
 export interface AiSignalSummary {
+  // Count of DEDUPLICATED signals only (is_reiteration = false) -- see
+  // computeAiSignalSummary()'s own comment. The route layers its own top-level
+  // totalSignals/uniqueSignals/reiterations fields over this for the raw, all-signals
+  // count; this field keeps its pre-existing "dedup count" meaning so nothing that
+  // already reads it (e.g. AiSignalsReportBuilder.tsx) silently starts counting
+  // reiterations as real signals.
   totalSignals: number
   triggerRate: number | null
   winRate: number | null
@@ -153,7 +164,17 @@ function toBreakdownRow(key: string, label: string, rows: AiTradePoint[]): AiBre
   }
 }
 
-export function computeAiSignalSummary(rows: AiTradePoint[]): AiSignalSummary {
+// Reiterations (a continuing-opportunity signal published while an earlier signal on the
+// same symbol was still open -- see migrations/068_ai_trades_reiteration.sql) are
+// excluded from every statistic here: win rate, avg R, total R, drawdown, and all three
+// breakdowns. They're recorded data, not noise, but counting several simultaneous
+// signals on one name as independent bets overstates performance (see the deduplication
+// analysis that motivated this: Total R drops from +5,387R to +1,755R once a symbol can
+// only hold one open "position" worth of signal at a time). Callers that need the raw,
+// non-deduplicated count (e.g. the "Total Signals" KPI tile's reiteration subtitle)
+// should count the full row set themselves before calling this function.
+export function computeAiSignalSummary(allRows: AiTradePoint[]): AiSignalSummary {
+  const rows = allRows.filter(r => !r.is_reiteration)
   const overall = aggregate(rows)
 
   const byConfidenceMap = groupByConfidence(rows)

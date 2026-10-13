@@ -21,6 +21,10 @@ interface CombinedApiResponse {
   analyst: SignalTypeData
   patterns: SignalTypeData
   ai: SignalTypeData
+  // AI-only -- analyst/patterns have no reiteration concept (see /api/analytics/combined's
+  // own comment). The `ai` row's own totalSignals/winRate/avgR/totalR are already
+  // deduplicated (is_reiteration = false), same figures the AI Signals tab itself shows.
+  aiReiterations: number
   combined: {
     totalSignalsPerDay: number
     cumulativeR: { date: string; analyst: number | null; patterns: number | null; ai: number | null }[]
@@ -116,7 +120,12 @@ export function CombinedSignalsTab() {
                     return (
                       <tr key={key} className="hover:bg-muted/30 transition-colors">
                         <td className="px-4 py-2.5 font-medium whitespace-nowrap">{TYPE_LABELS[key]}</td>
-                        <td className="px-4 py-2.5 tabular-nums text-muted-foreground whitespace-nowrap">{d.summary.totalSignals.toLocaleString()}</td>
+                        <td className="px-4 py-2.5 tabular-nums text-muted-foreground whitespace-nowrap">
+                          {d.summary.totalSignals.toLocaleString()}
+                          {key === 'ai' && data.aiReiterations > 0 && (
+                            <span className="text-[11px] text-muted-foreground/70"> (+{data.aiReiterations.toLocaleString()} reiterations)</span>
+                          )}
+                        </td>
                         <td className="px-4 py-2.5 tabular-nums whitespace-nowrap">{formatPercent(d.summary.winRate)}</td>
                         <td className="px-4 py-2.5 tabular-nums text-muted-foreground whitespace-nowrap">{formatR(d.summary.avgR)}</td>
                         <td className={`px-4 py-2.5 tabular-nums font-medium whitespace-nowrap ${positivityClass(d.summary.totalR)}`}>{formatR(d.summary.totalR)}</td>

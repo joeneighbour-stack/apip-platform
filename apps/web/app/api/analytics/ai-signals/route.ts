@@ -36,14 +36,20 @@ export async function GET(req: Request) {
   const assetClass = url.searchParams.get('assetClass')   // 'FX' | 'Equity' | ... | null (ALL)
 
   const adminDb = createAdminClient()
-  const FIELDS = 'confidence, asset_class, direction, status, triggered, rr, published_at, symbol, asset_name'
 
   const allRows: AiTradePoint[] = []
   let page = 0
   let hasMore = true
 
   while (hasMore) {
-    let query = adminDb.from('ai_trades').select(FIELDS)
+    // ai_trades_with_reiteration() (migrations/068_ai_trades_reiteration.sql) computes
+    // is_reiteration via a window function over the FULL, unfiltered table -- PostgREST's
+    // plain .select() builder can't express that, hence .rpc() here instead of
+    // .from('ai_trades').select(...). from/to/direction/assetClass are applied as normal
+    // filters on the function's OUTPUT (same as any other PostgREST resource), which is
+    // deliberate: filtering before the window was computed would misclassify
+    // reiterations at the filter boundary -- see the function's own comment.
+    let query = adminDb.rpc('ai_trades_with_reiteration')
     if (from) query = query.gte('published_at', from + 'T00:00:00Z')
     if (to) query = query.lte('published_at', to + 'T23:59:59Z')
     if (direction) query = query.eq('direction', direction)
@@ -55,7 +61,7 @@ export async function GET(req: Request) {
       .range(page * 1000, page * 1000 + 999)
 
     if (error) {
-      console.error('[api/analytics/ai-signals] Failed to fetch ai_trades:', error.message)
+      console.error('[api/analytics/ai-signals] Failed to fetch ai_trades_with_reiteration:', error.message)
       hasMore = false
     } else if (!data?.length) {
       hasMore = false
@@ -68,5 +74,19 @@ export async function GET(req: Request) {
     if (allRows.length >= MAX_ROWS) break
   }
 
-  return NextResponse.json({ ...computeAiSignalSummary(allRows), trades: allRows })
+  // computeAiSignalSummary() filters to is_reiteration = false internally for every
+  // stat (win rate/avg R/total R/drawdown/breakdowns) -- totalSignals below is
+  // deliberately overridden AFTER that spread to mean the raw, all-signals count (the
+  // task's own field contract), with the dedup/excluded counts broken out explicitly
+  // alongside it so neither meaning is lost.
+  const uniqueSignals = allRows.filter(r => !r.is_reiteration).length
+  const reiterations = allRows.length - uniqueSignals
+
+  return NextResponse.json({
+    ...computeAiSignalSummary(allRows),
+    totalSignals: allRows.length,
+    uniqueSignals,
+    reiterations,
+    trades: allRows,
+  })
 }

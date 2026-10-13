@@ -88,13 +88,16 @@ export async function GET(req: Request) {
         .range(page * 1000, page * 1000 + 999),
       'pattern_trades',
     ),
-    fetchAll<{ status: string | null; rr: number | null; published_at: string | null }>(
-      page => adminDb.from('ai_trades')
-        .select('status, rr, published_at')
+    // Same window-function RPC as /api/analytics/ai-signals (migrations/
+    // 068_ai_trades_reiteration.sql) -- is_reiteration is filtered out below before
+    // building aiSignals, so the AI row in this comparison uses the same deduplicated
+    // figures as the AI Signals tab itself, not the raw (reiteration-inflated) count.
+    fetchAll<{ status: string | null; rr: number | null; published_at: string | null; is_reiteration: boolean }>(
+      page => adminDb.rpc('ai_trades_with_reiteration')
         .order('published_at', { ascending: false })
         .order('report_id', { ascending: false })
         .range(page * 1000, page * 1000 + 999),
-      'ai_trades',
+      'ai_trades_with_reiteration',
     ),
   ])
 
@@ -114,7 +117,14 @@ export async function GET(req: Request) {
       rr: t.status !== null && PATTERN_OUTCOME_STATUSES.has(t.status) && t.rr !== null ? t.rr : null,
     }))
 
-  const aiSignals: NormalisedSignal[] = aiRows
+  // Reiterations are excluded entirely here (not just from the rr/outcome calculation,
+  // the way Pattern/Analyst rows are) -- a reiteration is a stacked, non-independent
+  // signal on a symbol, so it shouldn't count toward totalSignals/firstSignalDate/
+  // lastSignalDate either, unlike a genuine signal that simply never closed with a
+  // recorded result.
+  const aiDeduped = aiRows.filter(t => !t.is_reiteration)
+  const aiReiterations = aiRows.length - aiDeduped.length
+  const aiSignals: NormalisedSignal[] = aiDeduped
     .filter(t => t.published_at)
     .map(t => ({
       date: t.published_at!.slice(0, 10),
@@ -135,6 +145,11 @@ export async function GET(req: Request) {
     analyst,
     patterns,
     ai,
+    // Not part of SignalTypeSummary (analyst/patterns have no reiteration concept) --
+    // a sibling field so the combined tab can note it on the AI row if desired, same
+    // "pass through, don't silently fold into the headline count" treatment as the AI
+    // Signals tab's own reiterations tile.
+    aiReiterations,
     combined: {
       totalSignalsPerDay: computeTotalSignalsPerDay(allSignalDates),
       cumulativeR: mergeCumulativeSeries(analyst.cumulativeR, patterns.cumulativeR, ai.cumulativeR),
