@@ -12,6 +12,16 @@ export interface PatternTradeRow {
   rr: number | null
 }
 
+// Lightweight trade-level record returned alongside the aggregated PatternSummary so
+// the Patterns tab can compute charts/rolling/monthly views client-side via
+// lib/metrics.ts, the same way the Performance tab does for actual_trades. Nullable
+// fields mirror PatternTradeRow/the real DB columns (not guaranteed non-null the way a
+// stricter adapter type might assume).
+export interface PatternTradePoint extends PatternTradeRow {
+  published_at: string
+  symbol: string | null
+}
+
 export interface PatternBreakdownRow {
   key: string
   label: string
@@ -19,6 +29,13 @@ export interface PatternBreakdownRow {
   triggerPct: number | null
   winPct: number | null
   avgR: number | null
+  // Added so the Patterns tab can render these breakdowns through AttributionTable
+  // (lib/metrics.ts's AttributionRow shape) without fabricating figures -- totalR/maxDD/
+  // profitFactor are derived from the exact same closed-trade rr values as avgR/winPct
+  // above, just summed/sequenced instead of averaged.
+  totalR: number
+  maxDD: number
+  profitFactor: number | null
 }
 
 export interface PatternSummary {
@@ -66,28 +83,60 @@ interface Aggregate {
   triggerPct: number | null
   winPct: number | null
   avgR: number | null
+  totalR: number
+  maxDD: number
+  profitFactor: number | null
 }
 
-function aggregate(rows: PatternTradeRow[]): Aggregate {
+function round2(n: number): number {
+  return Math.round(n * 100) / 100
+}
+
+// Peak-to-trough on the closed-trade rr sequence in chronological order -- same
+// approach as lib/metrics.ts's maxDrawdown(), reimplemented here because these rows
+// are keyed by rr/status, not result_r/triggered.
+function sequenceDrawdown(closedRows: PatternTradePoint[]): number {
+  const sorted = closedRows
+    .filter(r => r.rr !== null)
+    .slice()
+    .sort((a, b) => a.published_at.localeCompare(b.published_at))
+  let equity = 0, peak = 0, maxDD = 0
+  for (const r of sorted) {
+    equity += r.rr ?? 0
+    if (equity > peak) peak = equity
+    else if (equity - peak < maxDD) maxDD = equity - peak
+  }
+  return round2(maxDD)
+}
+
+function aggregate(rows: PatternTradePoint[]): Aggregate {
   const count = rows.length
   const triggeredCount = rows.filter(r => r.triggered === true).length
   const triggerPct = count > 0 ? triggeredCount / count : null
 
   const closedProfit = rows.filter(r => r.status === STATUS_CLOSED_PROFIT)
   const closedLoss = rows.filter(r => r.status === STATUS_CLOSED_LOSS)
+  const closedRows = [...closedProfit, ...closedLoss]
   const closedTotal = closedProfit.length + closedLoss.length
   const winPct = closedTotal > 0 ? closedProfit.length / closedTotal : null
 
-  const rrValues = [...closedProfit, ...closedLoss]
+  const rrValues = closedRows
     .map(r => r.rr)
     .filter((rr): rr is number => rr !== null)
   const avgR = rrValues.length > 0 ? rrValues.reduce((s, rr) => s + rr, 0) / rrValues.length : null
+  const totalR = round2(rrValues.reduce((s, rr) => s + rr, 0))
 
-  return { count, triggerPct, winPct, avgR }
+  const gains = rrValues.filter(rr => rr > 0).reduce((s, rr) => s + rr, 0)
+  const losses = rrValues.filter(rr => rr < 0).reduce((s, rr) => s + rr, 0)
+  const profitFactor = losses !== 0 ? round2(gains / Math.abs(losses)) : null
+
+  const maxDD = sequenceDrawdown(closedRows)
+
+  return { count, triggerPct, winPct, avgR, totalR, maxDD, profitFactor }
 }
 
-function groupBy(rows: PatternTradeRow[], field: 'family' | 'granularity' | 'asset_class'): Map<string, PatternTradeRow[]> {
-  const map = new Map<string, PatternTradeRow[]>()
+function groupBy(rows: PatternTradePoint[], field: 'family' | 'granularity' | 'asset_class'): Map<string, PatternTradePoint[]> {
+  const map = new Map<string, PatternTradePoint[]>()
   for (const row of rows) {
     const key = row[field]
     if (!key) continue
@@ -97,12 +146,15 @@ function groupBy(rows: PatternTradeRow[], field: 'family' | 'granularity' | 'ass
   return map
 }
 
-function toBreakdownRow(key: string, label: string, rows: PatternTradeRow[]): PatternBreakdownRow {
+function toBreakdownRow(key: string, label: string, rows: PatternTradePoint[]): PatternBreakdownRow {
   const agg = aggregate(rows)
-  return { key, label, count: agg.count, triggerPct: agg.triggerPct, winPct: agg.winPct, avgR: agg.avgR }
+  return {
+    key, label, count: agg.count, triggerPct: agg.triggerPct, winPct: agg.winPct, avgR: agg.avgR,
+    totalR: agg.totalR, maxDD: agg.maxDD, profitFactor: agg.profitFactor,
+  }
 }
 
-export function computePatternSummary(rows: PatternTradeRow[]): PatternSummary {
+export function computePatternSummary(rows: PatternTradePoint[]): PatternSummary {
   const overall = aggregate(rows)
 
   const byFamilyMap = groupBy(rows, 'family')

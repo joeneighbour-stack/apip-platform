@@ -1,6 +1,6 @@
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { computePatternSummary, type PatternTradeRow } from '@/lib/patternAnalytics'
+import { computePatternSummary, type PatternTradePoint } from '@/lib/patternAnalytics'
 
 // Same reasoning as /api/analytics/publications: pattern_trades RLS grants
 // ADMIN/MANAGER/RESEARCH only (migrations/065_pattern_trades.sql) -- no ANALYST
@@ -38,9 +38,9 @@ export async function GET(req: Request) {
   const assetClass = url.searchParams.get('assetClass')   // 'FX' | 'Equity' | ... | null (ALL)
 
   const adminDb = createAdminClient()
-  const FIELDS = 'family, granularity, asset_class, direction, status, triggered, rr'
+  const FIELDS = 'family, granularity, asset_class, direction, status, triggered, rr, published_at, symbol'
 
-  const allRows: PatternTradeRow[] = []
+  const allRows: PatternTradePoint[] = []
   let page = 0
   let hasMore = true
 
@@ -63,7 +63,7 @@ export async function GET(req: Request) {
     } else if (!data?.length) {
       hasMore = false
     } else {
-      allRows.push(...(data as unknown as PatternTradeRow[]))
+      allRows.push(...(data as unknown as PatternTradePoint[]))
       hasMore = data.length === 1000
       page++
     }
@@ -71,5 +71,5 @@ export async function GET(req: Request) {
     if (allRows.length >= MAX_ROWS) break
   }
 
-  return NextResponse.json(computePatternSummary(allRows))
+  return NextResponse.json({ ...computePatternSummary(allRows), trades: allRows })
 }
