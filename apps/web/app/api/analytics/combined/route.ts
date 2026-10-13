@@ -136,7 +136,7 @@ export async function GET(req: Request) {
     .filter(t => t.published_at)
     .map(t => ({
       date: t.published_at!.slice(0, 10),
-      rr: t.triggered === true && t.result_r !== null ? t.result_r : null,
+      rr: t.result_r ?? null,
       assetClass: t.market?.[0]?.asset_class ?? null,
       symbol: t.market?.[0]?.symbol ?? null,
     }))
