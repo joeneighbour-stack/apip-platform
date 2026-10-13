@@ -22,7 +22,18 @@ export interface NormalisedSignal {
 }
 
 export interface SignalTypeSummary {
+  // Deduplicated signal count (is_reiteration = false for AI; every row for
+  // analyst/patterns, which have no reiteration concept) -- same population every other
+  // field here (winRate/avgR/totalR/etc) is computed from.
   totalSignals: number
+  // Every row actually published, including AI reiterations -- the caller
+  // (/api/analytics/combined/route.ts) passes this in directly from the raw row count,
+  // since it deliberately covers a DIFFERENT population than totalSignals for AI.
+  totalPublished: number
+  // Rows with triggered = true, from the same raw population as totalPublished (not
+  // totalSignals) -- a reiteration can itself have triggered an entry even though it's
+  // excluded from performance stats for being stacked on an already-open position.
+  totalTriggered: number
   winRate: number | null
   avgR: number | null
   totalR: number
@@ -54,7 +65,9 @@ export interface SignalTypeData {
   cumulativeR: CumulativeRPoint[]
 }
 
-export function buildSignalTypeData(signals: NormalisedSignal[]): SignalTypeData {
+export function buildSignalTypeData(
+  signals: NormalisedSignal[], totalPublished: number, totalTriggered: number,
+): SignalTypeData {
   const totalSignals = signals.length
   const dates = signals.map(s => s.date).filter(Boolean).sort()
   const firstSignalDate = dates[0] ?? null
@@ -97,7 +110,7 @@ export function buildSignalTypeData(signals: NormalisedSignal[]): SignalTypeData
 
   return {
     summary: {
-      totalSignals, winRate, avgR, totalR: totalRSum, maxDrawdownR: round2(maxDD),
+      totalSignals, totalPublished, totalTriggered, winRate, avgR, totalR: totalRSum, maxDrawdownR: round2(maxDD),
       firstSignalDate, lastSignalDate, outcomeCount: withOutcome.length,
     },
     monthlyR,

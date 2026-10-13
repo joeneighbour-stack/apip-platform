@@ -36,11 +36,15 @@ function dateRangeLabel(first: string | null, last: string | null): string {
   return `${formatDate(first)} – ${formatDate(last)}`
 }
 
+// Headline is totalPublished (every row actually published, including AI reiterations)
+// rather than totalSignals (the deduplicated, performance-relevant count used in the
+// comparison table below) -- this strip is about signal OUTPUT, not performance.
 function SummaryTile({ label, data }: { label: string; data: SignalTypeData }) {
   return (
     <div className="rounded-lg border border-border bg-card p-4 space-y-1">
       <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{label}</p>
-      <p className="text-2xl font-semibold tabular-nums">{data.summary.totalSignals.toLocaleString()}</p>
+      <p className="text-2xl font-semibold tabular-nums">{data.summary.totalPublished.toLocaleString()}</p>
+      <p className="text-xs text-muted-foreground">{data.summary.totalTriggered.toLocaleString()} triggered</p>
       <p className="text-xs text-muted-foreground">{dateRangeLabel(data.summary.firstSignalDate, data.summary.lastSignalDate)}</p>
     </div>
   )
@@ -66,6 +70,17 @@ export function CombinedSignalsTab() {
   }, [])
 
   const callouts = useMemo(() => data ? buildKeyCallouts({ analyst: data.analyst, patterns: data.patterns, ai: data.ai }) : [], [data])
+
+  // Summed across all three types' totalPublished/totalTriggered (every published row,
+  // AI reiterations included) -- a different population than the callouts above, which
+  // pool outcomeCount (the deduplicated, performance-relevant set).
+  const triggeredSummary = useMemo(() => {
+    if (!data) return null
+    const totalPublished = data.analyst.summary.totalPublished + data.patterns.summary.totalPublished + data.ai.summary.totalPublished
+    const totalTriggered = data.analyst.summary.totalTriggered + data.patterns.summary.totalTriggered + data.ai.summary.totalTriggered
+    const pct = totalPublished > 0 ? Math.round((totalTriggered / totalPublished) * 100) : null
+    return { totalPublished, totalTriggered, pct }
+  }, [data])
 
   return (
     <>
@@ -97,10 +112,15 @@ export function CombinedSignalsTab() {
             </button>
           </div>
 
-          <div className="rounded-lg border border-border bg-muted/30 p-4">
+          <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-1.5">
             <p className="text-sm">
-              Across all signal types, Acuity publishes an average of {data.combined.totalSignalsPerDay.toFixed(1)} signals per trading day.
+              Acuity publishes an average of {data.combined.totalSignalsPerDay.toFixed(1)} signals per trading day across all signal types.
             </p>
+            {triggeredSummary && triggeredSummary.pct !== null && (
+              <p className="text-sm">
+                Of these, {triggeredSummary.totalTriggered.toLocaleString()} signals triggered entry, representing {triggeredSummary.pct}% of all published signals.
+              </p>
+            )}
           </div>
 
           <div className="space-y-2">

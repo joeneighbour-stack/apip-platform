@@ -80,9 +80,9 @@ export async function GET(req: Request) {
         .range(page * 1000, page * 1000 + 999),
       'actual_trades',
     ),
-    fetchAll<{ status: string | null; rr: number | null; published_at: string | null }>(
+    fetchAll<{ status: string | null; rr: number | null; published_at: string | null; triggered: boolean | null }>(
       page => adminDb.from('pattern_trades')
-        .select('status, rr, published_at')
+        .select('status, rr, published_at, triggered')
         .order('published_at', { ascending: false })
         .order('report_id', { ascending: false })
         .range(page * 1000, page * 1000 + 999),
@@ -90,9 +90,11 @@ export async function GET(req: Request) {
     ),
     // Same window-function RPC as /api/analytics/ai-signals (migrations/
     // 068_ai_trades_reiteration.sql) -- is_reiteration is filtered out below before
-    // building aiSignals, so the AI row in this comparison uses the same deduplicated
-    // figures as the AI Signals tab itself, not the raw (reiteration-inflated) count.
-    fetchAll<{ status: string | null; rr: number | null; published_at: string | null; is_reiteration: boolean }>(
+    // building aiSignals, so the AI row's performance figures (totalSignals/winRate/
+    // avgR/totalR) use the same deduplicated population as the AI Signals tab itself.
+    // totalPublished/totalTriggered below deliberately use the FULL aiRows (reiterations
+    // included) instead -- see buildSignalTypeData's own comment.
+    fetchAll<{ status: string | null; rr: number | null; published_at: string | null; is_reiteration: boolean; triggered: boolean | null }>(
       page => adminDb.rpc('ai_trades_with_reiteration')
         .order('published_at', { ascending: false })
         .order('report_id', { ascending: false })
@@ -131,14 +133,29 @@ export async function GET(req: Request) {
       rr: t.status !== null && AI_OUTCOME_STATUSES.has(t.status) && t.rr !== null ? t.rr : null,
     }))
 
-  const analyst: SignalTypeData = buildSignalTypeData(analystSignals)
-  const patterns: SignalTypeData = buildSignalTypeData(patternSignals)
-  const ai: SignalTypeData = buildSignalTypeData(aiSignals)
+  // totalPublished/totalTriggered are passed in from the FULL raw row count for each
+  // table (aiRows, not aiDeduped) -- "every row published" and "how many of them
+  // triggered an entry" are both questions about everything that actually got published,
+  // including AI reiterations, independent of which rows count toward performance stats.
+  const analyst: SignalTypeData = buildSignalTypeData(
+    analystSignals, analystRows.length, analystRows.filter(t => t.triggered === true).length
+  )
+  const patterns: SignalTypeData = buildSignalTypeData(
+    patternSignals, patternRows.length, patternRows.filter(t => t.triggered === true).length
+  )
+  const ai: SignalTypeData = buildSignalTypeData(
+    aiSignals, aiRows.length, aiRows.filter(t => t.triggered === true).length
+  )
 
-  const allSignalDates = [
-    ...analystSignals.map(s => s.date),
-    ...patternSignals.map(s => s.date),
-    ...aiSignals.map(s => s.date),
+  // Signal OUTPUT (how many signals, how often) is measured over every published row,
+  // including AI reiterations -- same reasoning as totalPublished above, and distinct
+  // from the deduplicated population cumulativeR/performance stats use. "Trading days"
+  // means distinct calendar days with at least one signal of any type, not the raw
+  // calendar span -- see computeTotalSignalsPerDay's own comment.
+  const allPublishedDates = [
+    ...analystRows.map(t => t.published_at).filter((d): d is string => Boolean(d)).map(d => d.slice(0, 10)),
+    ...patternRows.map(t => t.published_at).filter((d): d is string => Boolean(d)).map(d => d.slice(0, 10)),
+    ...aiRows.map(t => t.published_at).filter((d): d is string => Boolean(d)).map(d => d.slice(0, 10)),
   ]
 
   return NextResponse.json({
@@ -151,7 +168,7 @@ export async function GET(req: Request) {
     // Signals tab's own reiterations tile.
     aiReiterations,
     combined: {
-      totalSignalsPerDay: computeTotalSignalsPerDay(allSignalDates),
+      totalSignalsPerDay: computeTotalSignalsPerDay(allPublishedDates),
       cumulativeR: mergeCumulativeSeries(analyst.cumulativeR, patterns.cumulativeR, ai.cumulativeR),
     },
   })
