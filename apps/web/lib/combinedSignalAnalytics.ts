@@ -118,63 +118,6 @@ export function buildSignalTypeData(
   }
 }
 
-// US public holidays (approximate, non-exhaustive -- add years as needed). Markets this
-// app covers trade through some of these on some asset classes (Crypto never closes),
-// but this denominator is about Acuity's own typical publication calendar (Mon-Fri,
-// standard market holidays), not a per-asset-class trading calendar.
-const US_HOLIDAYS = new Set([
-  // New Year's Day
-  '2017-01-02', '2018-01-01', '2019-01-01', '2020-01-01', '2021-01-01',
-  '2022-01-03', '2023-01-02', '2024-01-01', '2025-01-01', '2026-01-01',
-  // Christmas
-  '2017-12-25', '2018-12-25', '2019-12-25', '2020-12-25', '2021-12-24',
-  '2022-12-26', '2023-12-25', '2024-12-25', '2025-12-25', '2026-12-25',
-  // Add MLK, Presidents Day, Memorial Day, Independence Day, Labor Day, Thanksgiving as needed
-])
-
-// Counts Mon-Fri dates between from/to (inclusive), excluding US_HOLIDAYS. Dates are
-// parsed/compared entirely in UTC (not the task's literal `new Date(from)` +
-// `d.getDay()`/`toISOString()` mix) -- those use the server process's LOCAL timezone for
-// getDay() while toISOString() is always UTC, which can silently misclassify the weekday
-// of a date right at a timezone boundary depending on where/when this code runs. Working
-// in UTC throughout avoids that entirely, which matters here since every date this
-// module handles elsewhere is already a plain UTC "YYYY-MM-DD" string (published_at
-// sliced to its date portion).
-function countTradingDays(fromDateStr: string, toDateStr: string): number {
-  let count = 0
-  const oneDayMs = 24 * 60 * 60 * 1000
-  let cursor = new Date(fromDateStr + 'T00:00:00Z').getTime()
-  const end = new Date(toDateStr + 'T00:00:00Z').getTime()
-  while (cursor <= end) {
-    const d = new Date(cursor)
-    const day = d.getUTCDay() // 0=Sun, 6=Sat
-    const iso = d.toISOString().slice(0, 10)
-    if (day !== 0 && day !== 6 && !US_HOLIDAYS.has(iso)) count++
-    cursor += oneDayMs
-  }
-  return count
-}
-
-// "Trading days" here means Mon-Fri dates (excluding US_HOLIDAYS) within the full
-// calendar span from the earliest to the latest signal date across the input -- not
-// distinct dates that happened to have a signal, which undercounts whenever a type
-// publishes on weekends (Crypto signals land on Saturdays/Sundays, which would otherwise
-// count as a full "trading day" and dilute the average) or simply has a quiet weekday
-// with zero signals (which would otherwise disappear from the denominator entirely).
-// Every signal's own publication date counts once in the numerator regardless of
-// whether it has a recorded outcome -- this measures signal OUTPUT, not closed-trade
-// performance. Friday has no APAC session (so Analyst Signals volume is naturally lower
-// that day) -- Fridays are still counted as trading days here; that's intentional, it
-// should average out rather than be excluded.
-export function computeTotalSignalsPerDay(allSignalDates: string[]): number {
-  if (allSignalDates.length === 0) return 0
-  const sorted = allSignalDates.slice().sort()
-  const earliest = sorted[0]!
-  const latest = sorted[sorted.length - 1]!
-  const tradingDays = countTradingDays(earliest, latest)
-  return tradingDays > 0 ? round2(allSignalDates.length / tradingDays) : 0
-}
-
 export interface CombinedCumulativePoint {
   date: string
   analyst: number | null

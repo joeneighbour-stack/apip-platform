@@ -26,7 +26,6 @@ interface CombinedApiResponse {
   // deduplicated (is_reiteration = false), same figures the AI Signals tab itself shows.
   aiReiterations: number
   combined: {
-    totalSignalsPerDay: number
     cumulativeR: { date: string; analyst: number | null; patterns: number | null; ai: number | null }[]
   }
 }
@@ -109,15 +108,13 @@ export function CombinedSignalsTab() {
             </button>
           </div>
 
-          {/* No "X% triggered" callout here -- `triggered` means something genuinely
-              different per table (a real ~35% rate for Analyst Signals, but always-true
-              on publication for Pattern/AI Signals), so pooling it into one combined
-              percentage would be misleading rather than informative. */}
-          <div className="rounded-lg border border-border bg-muted/30 p-4">
-            <p className="text-sm">
-              Acuity publishes an average of {data.combined.totalSignalsPerDay.toFixed(1)} signals per trading day across all signal types.
-            </p>
-          </div>
+          {/* No "signals per trading day" callout here -- actual_trades's historical
+              (MANUAL_BACKFILL) rows only ever recorded triggered trades, not every
+              published recommendation, so totalPublished for Analyst Signals undercounts
+              true publication volume and any per-day average built from it would be
+              understated and misleading (same reasoning already applied to the removed
+              "X% triggered" callout: don't show a number the underlying data can't
+              actually support). */}
 
           {/* Total Signals here is totalPublished (so the three rows are comparable
               signal-output figures) -- Win Rate/Avg R/Total R/Max DD still reflect each
@@ -184,7 +181,7 @@ export function CombinedSignalsTab() {
     {reportOpen && data && (
       <CombinedSignalsReportBuilder
         analyst={data.analyst} patterns={data.patterns} ai={data.ai}
-        cumulativeR={data.combined.cumulativeR} totalSignalsPerDay={data.combined.totalSignalsPerDay}
+        cumulativeR={data.combined.cumulativeR}
         onClose={() => setReportOpen(false)}
       />
     )}

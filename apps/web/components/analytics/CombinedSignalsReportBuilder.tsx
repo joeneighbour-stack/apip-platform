@@ -26,7 +26,6 @@ interface Props {
   patterns: SignalTypeData
   ai: SignalTypeData
   cumulativeR: CombinedCumulativePoint[]
-  totalSignalsPerDay: number
   onClose: () => void
 }
 
@@ -39,13 +38,12 @@ interface CombinedReportData {
   dataThroughDate: string
   types: Record<SignalTypeKey, SignalTypeData>
   cumulativeR: CombinedCumulativePoint[]
-  totalSignalsPerDay: number
   callouts: string[]
 }
 
 function buildReportData(
   analyst: SignalTypeData, patterns: SignalTypeData, ai: SignalTypeData,
-  cumulativeR: CombinedCumulativePoint[], totalSignalsPerDay: number,
+  cumulativeR: CombinedCumulativePoint[],
 ): CombinedReportData {
   const types: Record<SignalTypeKey, SignalTypeData> = { analyst, patterns, ai }
   const firstDates = TYPE_ORDER.map(k => types[k].summary.firstSignalDate).filter((d): d is string => d !== null)
@@ -58,7 +56,6 @@ function buildReportData(
     dataThroughDate: latest ? formatDate(latest) : 'N/A',
     types,
     cumulativeR,
-    totalSignalsPerDay,
     callouts: buildKeyCallouts(types),
   }
 }
@@ -137,9 +134,6 @@ function CombinedSignalsReportView({ data }: { data: CombinedReportData }) {
               )
             })}
           </div>
-          <p className="text-[9pt] leading-relaxed">
-            Across all signal types, Acuity publishes an average of {data.totalSignalsPerDay.toFixed(1)} signals per trading day.
-          </p>
         </div>
 
         <ReportFooter pageLabel="Page 1" />
@@ -214,11 +208,11 @@ function CombinedSignalsReportView({ data }: { data: CombinedReportData }) {
   )
 }
 
-export function CombinedSignalsReportBuilder({ analyst, patterns, ai, cumulativeR, totalSignalsPerDay, onClose }: Props) {
+export function CombinedSignalsReportBuilder({ analyst, patterns, ai, cumulativeR, onClose }: Props) {
   const [reportData, setReportData] = useState<CombinedReportData | null>(null)
 
   function handleGenerate() {
-    const data = buildReportData(analyst, patterns, ai, cumulativeR, totalSignalsPerDay)
+    const data = buildReportData(analyst, patterns, ai, cumulativeR)
     setReportData(data)
 
     requestAnimationFrame(() => {

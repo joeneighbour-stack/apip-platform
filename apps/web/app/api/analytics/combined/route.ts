@@ -1,7 +1,7 @@
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import {
-  buildSignalTypeData, computeTotalSignalsPerDay, mergeCumulativeSeries,
+  buildSignalTypeData, mergeCumulativeSeries,
   type NormalisedSignal, type SignalTypeData,
 } from '@/lib/combinedSignalAnalytics'
 
@@ -147,17 +147,10 @@ export async function GET(req: Request) {
     aiSignals, aiRows.length, aiRows.filter(t => t.triggered === true).length
   )
 
-  // Signal OUTPUT (how many signals, how often) is measured over every published row,
-  // including AI reiterations -- same reasoning as totalPublished above, and distinct
-  // from the deduplicated population cumulativeR/performance stats use. "Trading days"
-  // means distinct calendar days with at least one signal of any type, not the raw
-  // calendar span -- see computeTotalSignalsPerDay's own comment.
-  const allPublishedDates = [
-    ...analystRows.map(t => t.published_at).filter((d): d is string => Boolean(d)).map(d => d.slice(0, 10)),
-    ...patternRows.map(t => t.published_at).filter((d): d is string => Boolean(d)).map(d => d.slice(0, 10)),
-    ...aiRows.map(t => t.published_at).filter((d): d is string => Boolean(d)).map(d => d.slice(0, 10)),
-  ]
-
+  // No "signals per trading day" figure here -- actual_trades's historical
+  // (MANUAL_BACKFILL) rows only ever recorded triggered trades, not every published
+  // recommendation, so totalPublished for Analyst Signals undercounts true publication
+  // volume and any per-day average built from it would be understated and misleading.
   return NextResponse.json({
     analyst,
     patterns,
@@ -168,7 +161,6 @@ export async function GET(req: Request) {
     // Signals tab's own reiterations tile.
     aiReiterations,
     combined: {
-      totalSignalsPerDay: computeTotalSignalsPerDay(allPublishedDates),
       cumulativeR: mergeCumulativeSeries(analyst.cumulativeR, patterns.cumulativeR, ai.cumulativeR),
     },
   })
