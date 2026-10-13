@@ -1,8 +1,9 @@
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import {
-  buildSignalTypeData, mergeCumulativeSeries,
-  type NormalisedSignal, type SignalTypeData,
+  buildSignalTypeData, mergeCumulativeSeries, normaliseToIndex,
+  buildAssetClassBreakdown, buildDayOfWeekBreakdown, buildMonthBreakdown, buildYearGrid, buildTopMarkets,
+  type EnrichedSignal, type SignalTypeData, type CumulativeRPoint,
 } from '@/lib/combinedSignalAnalytics'
 
 // Same reasoning as /api/analytics/patterns and /api/analytics/ai-signals: pattern_trades/
@@ -53,6 +54,15 @@ async function fetchAll<T>(
   return all
 }
 
+// Indexes a raw cumulative-R series to its own final = 100 (lib's normaliseToIndex()),
+// then converts back to the {date, cumulativeR} shape mergeCumulativeSeries() expects --
+// lets both functions keep their own simple, independently-reusable signatures rather
+// than coupling normaliseToIndex() to this specific point shape.
+function toIndexedCumulative(points: CumulativeRPoint[]): CumulativeRPoint[] {
+  return normaliseToIndex(points.map(p => ({ date: p.date, value: p.cumulativeR })))
+    .map(p => ({ date: p.date, cumulativeR: p.value }))
+}
+
 export async function GET(req: Request) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -72,17 +82,28 @@ export async function GET(req: Request) {
   const adminDb = createAdminClient()
 
   const [analystRows, patternRows, aiRows] = await Promise.all([
-    fetchAll<{ triggered: boolean | null; result_r: number | null; published_at: string | null }>(
+    // actual_trades has no asset_class/symbol columns of its own -- same market_id
+    // embed /api/analytics/trades/route.ts already uses to resolve them. Supabase's
+    // (untyped, no generated schema here) client infers this embed as an array even
+    // though market_id -> markets is one-to-one -- same reason
+    // /api/analytics/trades/route.ts itself doesn't strictly type this shape either.
+    fetchAll<{
+      triggered: boolean | null; result_r: number | null; published_at: string | null
+      market: { symbol: string; asset_class: string }[] | null
+    }>(
       page => adminDb.from('actual_trades')
-        .select('triggered, result_r, published_at')
+        .select('triggered, result_r, published_at, market:market_id ( symbol, asset_class )')
         .order('published_at', { ascending: false })
         .order('trade_id', { ascending: false })
         .range(page * 1000, page * 1000 + 999),
       'actual_trades',
     ),
-    fetchAll<{ status: string | null; rr: number | null; published_at: string | null; triggered: boolean | null }>(
+    fetchAll<{
+      status: string | null; rr: number | null; published_at: string | null; triggered: boolean | null
+      asset_class: string | null; symbol: string | null
+    }>(
       page => adminDb.from('pattern_trades')
-        .select('status, rr, published_at, triggered')
+        .select('status, rr, published_at, triggered, asset_class, symbol')
         .order('published_at', { ascending: false })
         .order('report_id', { ascending: false })
         .range(page * 1000, page * 1000 + 999),
@@ -94,7 +115,10 @@ export async function GET(req: Request) {
     // avgR/totalR) use the same deduplicated population as the AI Signals tab itself.
     // totalPublished/totalTriggered below deliberately use the FULL aiRows (reiterations
     // included) instead -- see buildSignalTypeData's own comment.
-    fetchAll<{ status: string | null; rr: number | null; published_at: string | null; is_reiteration: boolean; triggered: boolean | null }>(
+    fetchAll<{
+      status: string | null; rr: number | null; published_at: string | null; is_reiteration: boolean; triggered: boolean | null
+      asset_class: string | null; symbol: string | null
+    }>(
       page => adminDb.rpc('ai_trades_with_reiteration')
         .order('published_at', { ascending: false })
         .order('report_id', { ascending: false })
@@ -105,18 +129,25 @@ export async function GET(req: Request) {
 
   // Analyst "with outcome" matches lib/metrics.ts's own triggeredTrades(): triggered AND
   // a recorded result_r. Pattern/AI use their own status whitelists (see constants above).
-  const analystSignals: NormalisedSignal[] = analystRows
+  // Enriched with assetClass/symbol for the By Asset Class/By Market breakdowns below --
+  // EnrichedSignal is still structurally a NormalisedSignal, so buildSignalTypeData
+  // (which only reads date/rr) accepts these same arrays unchanged.
+  const analystSignals: EnrichedSignal[] = analystRows
     .filter(t => t.published_at)
     .map(t => ({
       date: t.published_at!.slice(0, 10),
       rr: t.triggered === true && t.result_r !== null ? t.result_r : null,
+      assetClass: t.market?.[0]?.asset_class ?? null,
+      symbol: t.market?.[0]?.symbol ?? null,
     }))
 
-  const patternSignals: NormalisedSignal[] = patternRows
+  const patternSignals: EnrichedSignal[] = patternRows
     .filter(t => t.published_at)
     .map(t => ({
       date: t.published_at!.slice(0, 10),
       rr: t.status !== null && PATTERN_OUTCOME_STATUSES.has(t.status) && t.rr !== null ? t.rr : null,
+      assetClass: t.asset_class ?? null,
+      symbol: t.symbol ?? null,
     }))
 
   // Reiterations are excluded entirely here (not just from the rr/outcome calculation,
@@ -126,11 +157,13 @@ export async function GET(req: Request) {
   // recorded result.
   const aiDeduped = aiRows.filter(t => !t.is_reiteration)
   const aiReiterations = aiRows.length - aiDeduped.length
-  const aiSignals: NormalisedSignal[] = aiDeduped
+  const aiSignals: EnrichedSignal[] = aiDeduped
     .filter(t => t.published_at)
     .map(t => ({
       date: t.published_at!.slice(0, 10),
       rr: t.status !== null && AI_OUTCOME_STATUSES.has(t.status) && t.rr !== null ? t.rr : null,
+      assetClass: t.asset_class ?? null,
+      symbol: t.symbol ?? null,
     }))
 
   // totalPublished/totalTriggered are passed in from the FULL raw row count for each
@@ -147,6 +180,12 @@ export async function GET(req: Request) {
     aiSignals, aiRows.length, aiRows.filter(t => t.triggered === true).length
   )
 
+  const byAssetClass = buildAssetClassBreakdown(analystSignals, patternSignals, aiSignals)
+  const byDayOfWeek = buildDayOfWeekBreakdown(analystSignals, patternSignals, aiSignals)
+  const byMonth = buildMonthBreakdown(analystSignals, patternSignals, aiSignals)
+  const byYear = buildYearGrid(analystSignals, patternSignals, aiSignals)
+  const topMarkets = buildTopMarkets(analystSignals, patternSignals, aiSignals, 20)
+
   // No "signals per trading day" figure here -- actual_trades's historical
   // (MANUAL_BACKFILL) rows only ever recorded triggered trades, not every published
   // recommendation, so totalPublished for Analyst Signals undercounts true publication
@@ -160,8 +199,23 @@ export async function GET(req: Request) {
     // "pass through, don't silently fold into the headline count" treatment as the AI
     // Signals tab's own reiterations tile.
     aiReiterations,
+    byAssetClass,
+    byDayOfWeek,
+    byMonth,
+    byYear,
+    topMarkets,
     combined: {
+      // Raw (un-normalised) merged series, kept exactly as before so
+      // CombinedSignalsReportBuilder.tsx's existing, unmodified usage of this field
+      // keeps working unchanged.
       cumulativeR: mergeCumulativeSeries(analyst.cumulativeR, patterns.cumulativeR, ai.cumulativeR),
+      // New: each series indexed to its own final = 100 before merging, for the tab's
+      // normalised equity-curve chart (Fix 1) -- see toIndexedCumulative()'s own comment.
+      normalisedCumulative: mergeCumulativeSeries(
+        toIndexedCumulative(analyst.cumulativeR),
+        toIndexedCumulative(patterns.cumulativeR),
+        toIndexedCumulative(ai.cumulativeR),
+      ),
     },
   })
 }

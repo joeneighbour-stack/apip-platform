@@ -40,3 +40,8 @@ export const CombinedCumulativeChart = dynamic(
   () => import('./CombinedCumulativeChart').then(m => ({ default: m.CombinedCumulativeChart })),
   { ssr: false, loading: ChartLoading },
 )
+
+export const SignalsByPeriodChart = dynamic(
+  () => import('./SignalsByPeriodChart').then(m => ({ default: m.SignalsByPeriodChart })),
+  { ssr: false, loading: ChartLoading },
+)

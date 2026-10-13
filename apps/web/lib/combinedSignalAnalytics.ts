@@ -21,6 +21,15 @@ export interface NormalisedSignal {
   rr: number | null
 }
 
+// Extends NormalisedSignal with the two extra fields the By Asset Class/By Market
+// breakdowns need -- structurally still a NormalisedSignal (buildSignalTypeData only
+// ever reads date/rr), so the route can build ONE enriched array per signal type and
+// hand it to every function in this file instead of building separate arrays.
+export interface EnrichedSignal extends NormalisedSignal {
+  assetClass: string | null
+  symbol: string | null
+}
+
 export interface SignalTypeSummary {
   // Deduplicated signal count (is_reiteration = false for AI; every row for
   // analyst/patterns, which have no reiteration concept) -- same population every other
@@ -118,6 +127,27 @@ export function buildSignalTypeData(
   }
 }
 
+export interface IndexPoint {
+  date: string
+  value: number
+}
+
+// Scales a series so its FINAL point = 100 -- each series is indexed to its OWN end
+// point (not a shared baseline), which is what makes three tracks of very different
+// absolute R totals and different start dates visually comparable on one chart: a
+// shorter, smaller-total track and a longer, larger-total track both read as "0 to 100"
+// over their own history. Guards the degenerate case where the final value is <= 0 (no
+// positive end point to index against -- dividing by a non-positive number would invert
+// or blow up every earlier point into a meaningless shape) by returning the series
+// unscaled rather than producing a misleading chart; none of this app's three signal
+// types hit that case today; this is defence-in-depth, not an expected path.
+export function normaliseToIndex(points: { date: string; value: number }[]): IndexPoint[] {
+  if (points.length === 0) return []
+  const final = points[points.length - 1]!.value
+  if (final <= 0) return points.map(p => ({ date: p.date, value: p.value }))
+  return points.map(p => ({ date: p.date, value: round2((p.value / final) * 100) }))
+}
+
 export interface CombinedCumulativePoint {
   date: string
   analyst: number | null
@@ -128,7 +158,9 @@ export interface CombinedCumulativePoint {
 // Merges three independent cumulative-R series (each only has a point on dates it had a
 // closed signal) onto one shared date axis for a 3-line chart -- each series' value is
 // forward-filled (step function) across dates where only the OTHER series moved, which
-// is the standard way to overlay equity curves which don't move in lockstep.
+// is the standard way to overlay equity curves which don't move in lockstep. Works
+// equally well for raw-R series or normaliseToIndex()'d series -- it only cares that
+// each input point has {date, cumulativeR}.
 export function mergeCumulativeSeries(
   analyst: CumulativeRPoint[], patterns: CumulativeRPoint[], ai: CumulativeRPoint[]
 ): CombinedCumulativePoint[] {
@@ -154,8 +186,8 @@ export const TYPE_LABELS: Record<SignalTypeKey, string> = {
 }
 export const TYPE_ORDER: SignalTypeKey[] = ['analyst', 'patterns', 'ai']
 
-function monthYear(dateStr: string): string {
-  return new Date(dateStr + 'T12:00:00Z').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+export function monthYear(dateStr: string): string {
+  return new Date(dateStr + 'T12:00:00Z').toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })
 }
 
 // Shared by CombinedSignalsTab.tsx (live dashboard) and CombinedSignalsReportBuilder.tsx
@@ -198,4 +230,249 @@ export function buildKeyCallouts(types: Record<SignalTypeKey, SignalTypeData>): 
   }
 
   return callouts
+}
+
+// ---------------------------------------------------------------------------
+// Generic "group signals with an outcome by some key, sum R / count wins" primitive --
+// shared by the By Asset Class, By Day of Week, By Month of Year, and Top Markets
+// breakdowns below, which all differ only in WHAT they group by (asset class, weekday,
+// calendar month, symbol) and whether they report per-type or pooled-across-type
+// figures. Signals with no recorded outcome (rr === null) or a null key are excluded
+// entirely -- there's nothing to attribute to a bucket without a result.
+// ---------------------------------------------------------------------------
+
+interface KeyedAggregate {
+  totalR: number
+  outcomeCount: number
+  wins: number
+}
+
+function aggregateByKey<T extends NormalisedSignal>(
+  signals: T[], keyFn: (signal: T) => string | null
+): Map<string, KeyedAggregate> {
+  const map = new Map<string, KeyedAggregate>()
+  for (const s of signals) {
+    if (s.rr === null) continue
+    const key = keyFn(s)
+    if (key === null) continue
+    const cur = map.get(key) ?? { totalR: 0, outcomeCount: 0, wins: 0 }
+    cur.totalR += s.rr
+    cur.outcomeCount += 1
+    if (s.rr > 0) cur.wins += 1
+    map.set(key, cur)
+  }
+  return map
+}
+
+function poolAcrossTypes(maps: Map<string, KeyedAggregate>[]): Map<string, KeyedAggregate> {
+  const pooled = new Map<string, KeyedAggregate>()
+  for (const map of maps) {
+    for (const [key, agg] of map.entries()) {
+      const cur = pooled.get(key) ?? { totalR: 0, outcomeCount: 0, wins: 0 }
+      cur.totalR += agg.totalR
+      cur.outcomeCount += agg.outcomeCount
+      cur.wins += agg.wins
+      pooled.set(key, cur)
+    }
+  }
+  return pooled
+}
+
+// ---------------------------------------------------------------------------
+// Fix 2 -- By Asset Class
+// ---------------------------------------------------------------------------
+
+export interface CombinedAssetClassRow {
+  assetClass: string
+  // Each type's OWN total R contribution within this asset class (null if that type has
+  // no outcome-bearing signals in this class at all) -- analystR + patternR + aiR sums
+  // to combinedTotalR, so the reader can see which type drives each class.
+  analystR: number | null
+  patternR: number | null
+  aiR: number | null
+  combinedTotalR: number
+  combinedWinRate: number | null
+}
+
+export function buildAssetClassBreakdown(
+  analyst: EnrichedSignal[], patterns: EnrichedSignal[], ai: EnrichedSignal[]
+): CombinedAssetClassRow[] {
+  const aMap = aggregateByKey(analyst, s => s.assetClass)
+  const pMap = aggregateByKey(patterns, s => s.assetClass)
+  const iMap = aggregateByKey(ai, s => s.assetClass)
+  const allClasses = [...new Set([...aMap.keys(), ...pMap.keys(), ...iMap.keys()])].sort()
+
+  return allClasses
+    .map(assetClass => {
+      const a = aMap.get(assetClass), p = pMap.get(assetClass), i = iMap.get(assetClass)
+      const combinedOutcomeCount = (a?.outcomeCount ?? 0) + (p?.outcomeCount ?? 0) + (i?.outcomeCount ?? 0)
+      const combinedWins = (a?.wins ?? 0) + (p?.wins ?? 0) + (i?.wins ?? 0)
+      return {
+        assetClass,
+        analystR: a ? round2(a.totalR) : null,
+        patternR: p ? round2(p.totalR) : null,
+        aiR: i ? round2(i.totalR) : null,
+        combinedTotalR: round2((a?.totalR ?? 0) + (p?.totalR ?? 0) + (i?.totalR ?? 0)),
+        combinedWinRate: combinedOutcomeCount > 0 ? round2(combinedWins / combinedOutcomeCount) : null,
+      }
+    })
+    .sort((a, b) => b.combinedTotalR - a.combinedTotalR)
+}
+
+// ---------------------------------------------------------------------------
+// Fix 3/4 -- By Day of Week / By Month of Year (pooled across all three types)
+// ---------------------------------------------------------------------------
+
+const WEEKDAY_ORDER = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']
+const MONTH_ORDER = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+// Noon UTC avoids any DST/timezone edge case shifting a date string across a weekday
+// boundary -- every date this module handles is already a plain "YYYY-MM-DD" string.
+function weekdayKey(dateStr: string): string | null {
+  const day = new Date(dateStr + 'T12:00:00Z').getUTCDay() // 0=Sun..6=Sat
+  return day >= 1 && day <= 5 ? WEEKDAY_ORDER[day - 1]! : null // weekends excluded -- Mon-Fri only, per the task
+}
+
+function monthOfYearKey(dateStr: string): string {
+  const monthNum = Number(dateStr.slice(5, 7)) // 1-12
+  return MONTH_ORDER[monthNum - 1]!
+}
+
+export interface PeriodRow {
+  avgR: number | null
+  winRate: number | null
+  trades: number
+}
+
+function buildPooledPeriodBreakdown(
+  analyst: NormalisedSignal[], patterns: NormalisedSignal[], ai: NormalisedSignal[],
+  keyFn: (dateStr: string) => string | null, order: string[],
+): Map<string, PeriodRow> {
+  const pooled = poolAcrossTypes([
+    aggregateByKey(analyst, s => keyFn(s.date)),
+    aggregateByKey(patterns, s => keyFn(s.date)),
+    aggregateByKey(ai, s => keyFn(s.date)),
+  ])
+  const result = new Map<string, PeriodRow>()
+  for (const key of order) {
+    const agg = pooled.get(key)
+    const trades = agg?.outcomeCount ?? 0
+    result.set(key, {
+      avgR: trades > 0 ? round2(agg!.totalR / trades) : null,
+      winRate: trades > 0 ? round2(agg!.wins / trades) : null,
+      trades,
+    })
+  }
+  return result
+}
+
+export interface DayOfWeekRow extends PeriodRow {
+  day: string
+}
+
+export function buildDayOfWeekBreakdown(
+  analyst: NormalisedSignal[], patterns: NormalisedSignal[], ai: NormalisedSignal[]
+): DayOfWeekRow[] {
+  const rows = buildPooledPeriodBreakdown(analyst, patterns, ai, weekdayKey, WEEKDAY_ORDER)
+  return WEEKDAY_ORDER.map(day => ({ day, ...rows.get(day)! }))
+}
+
+export interface MonthOfYearRow extends PeriodRow {
+  month: string
+}
+
+export function buildMonthBreakdown(
+  analyst: NormalisedSignal[], patterns: NormalisedSignal[], ai: NormalisedSignal[]
+): MonthOfYearRow[] {
+  const rows = buildPooledPeriodBreakdown(analyst, patterns, ai, monthOfYearKey, MONTH_ORDER)
+  return MONTH_ORDER.map(month => ({ month, ...rows.get(month)! }))
+}
+
+// ---------------------------------------------------------------------------
+// Fix 5 -- Year-by-year grid (per type, NOT pooled -- a heat-map grid is meant to show
+// each type's own year, side by side, not a single merged figure)
+// ---------------------------------------------------------------------------
+
+export interface CombinedYearRow {
+  year: number
+  analyst: number | null
+  pattern: number | null
+  ai: number | null
+}
+
+function totalRByYear(signals: NormalisedSignal[]): Map<number, number> {
+  const map = new Map<number, number>()
+  for (const s of signals) {
+    if (s.rr === null) continue
+    const year = Number(s.date.slice(0, 4))
+    map.set(year, round2((map.get(year) ?? 0) + s.rr))
+  }
+  return map
+}
+
+// Rows span every year from 2017 (the earliest any signal type's history goes back to)
+// through the current year, even a year with zero rows for every type, so the grid reads
+// as a continuous timeline rather than skipping gaps -- a year before a type's own first
+// signal (or one with literally no outcome-bearing signals) shows as null ("—"), which
+// is indistinguishable from "didn't exist yet" by design: there's no data to show either way.
+const YEAR_GRID_START = 2017
+
+export function buildYearGrid(
+  analyst: NormalisedSignal[], patterns: NormalisedSignal[], ai: NormalisedSignal[]
+): CombinedYearRow[] {
+  const aYears = totalRByYear(analyst)
+  const pYears = totalRByYear(patterns)
+  const iYears = totalRByYear(ai)
+  const currentYear = new Date().getUTCFullYear()
+
+  const years: number[] = []
+  for (let y = YEAR_GRID_START; y <= currentYear; y++) years.push(y)
+
+  return years.map(year => ({
+    year,
+    analyst: aYears.get(year) ?? null,
+    pattern: pYears.get(year) ?? null,
+    ai: iYears.get(year) ?? null,
+  }))
+}
+
+// ---------------------------------------------------------------------------
+// Fix 6 -- Top markets combined (per type, like By Asset Class, but keyed by symbol and
+// capped to the top N by combined total R)
+// ---------------------------------------------------------------------------
+
+export interface CombinedMarketRow {
+  symbol: string
+  analystR: number | null
+  patternR: number | null
+  aiR: number | null
+  combinedTotalR: number
+  combinedWinRate: number | null
+  trades: number
+}
+
+export function buildTopMarkets(
+  analyst: EnrichedSignal[], patterns: EnrichedSignal[], ai: EnrichedSignal[], limit = 20
+): CombinedMarketRow[] {
+  const aMap = aggregateByKey(analyst, s => s.symbol)
+  const pMap = aggregateByKey(patterns, s => s.symbol)
+  const iMap = aggregateByKey(ai, s => s.symbol)
+  const allSymbols = new Set([...aMap.keys(), ...pMap.keys(), ...iMap.keys()])
+
+  const rows: CombinedMarketRow[] = [...allSymbols].map(symbol => {
+    const a = aMap.get(symbol), p = pMap.get(symbol), i = iMap.get(symbol)
+    const combinedOutcomeCount = (a?.outcomeCount ?? 0) + (p?.outcomeCount ?? 0) + (i?.outcomeCount ?? 0)
+    const combinedWins = (a?.wins ?? 0) + (p?.wins ?? 0) + (i?.wins ?? 0)
+    return {
+      symbol,
+      analystR: a ? round2(a.totalR) : null,
+      patternR: p ? round2(p.totalR) : null,
+      aiR: i ? round2(i.totalR) : null,
+      combinedTotalR: round2((a?.totalR ?? 0) + (p?.totalR ?? 0) + (i?.totalR ?? 0)),
+      combinedWinRate: combinedOutcomeCount > 0 ? round2(combinedWins / combinedOutcomeCount) : null,
+      trades: combinedOutcomeCount,
+    }
+  })
+
+  return rows.sort((a, b) => b.combinedTotalR - a.combinedTotalR).slice(0, limit)
 }
