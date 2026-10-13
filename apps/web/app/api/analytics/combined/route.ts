@@ -6,28 +6,10 @@ import {
   type EnrichedSignal, type SignalTypeData, type CumulativeRPoint,
 } from '@/lib/combinedSignalAnalytics'
 
-// Same reasoning as /api/analytics/patterns and /api/analytics/ai-signals: pattern_trades/
-// ai_trades RLS grants ADMIN/MANAGER/RESEARCH only (no ANALYST tier exists for that data
-// at all), so this route checks the role explicitly and uses the service-role client for
-// those two tables. actual_trades does have an ANALYST RLS policy, but this route is only
-// ever called from the management-only "All Signals" tab (same gate as Patterns/AI
-// Signals -- !lockedAnalystId in AnalyticsPage.tsx), so the same management-role gate is
-// applied uniformly across all three tables rather than special-casing actual_trades.
 const ALLOWED_ROLES = ['MANAGER', 'ADMIN', 'EXECUTIVE']
-
-// Safety valve only, matching the other analytics routes' own MAX_ROWS -- this route has
-// no from/to filter (the tab covers full history across all three types by design), so
-// these are simply generous enough to cover each table's full size today.
 const MAX_ROWS = 200_000
 
-// Patterns' current (intentionally unchanged -- see lib/patternAnalytics.ts, which this
-// duplicates) "with outcome" statuses: Closed-Profit/Loss only. Do NOT add 'Expired' here
-// without first re-confirming the win-rate methodology question raised for Patterns in a
-// prior task -- patterns were deliberately left alone pending that follow-up decision.
 const PATTERN_OUTCOME_STATUSES = new Set(['Closed - Profit', 'Closed - Loss'])
-
-// AI's current "with outcome" statuses (lib/aiSignalAnalytics.ts) -- includes Expired
-// signals that closed with a recorded rr, per that file's own fix.
 const AI_OUTCOME_STATUSES = new Set(['Closed - Profit', 'Closed - Loss', 'Closed - Flat', 'Expired'])
 
 async function fetchAll<T>(
@@ -54,10 +36,6 @@ async function fetchAll<T>(
   return all
 }
 
-// Indexes a raw cumulative-R series to its own final = 100 (lib's normaliseToIndex()),
-// then converts back to the {date, cumulativeR} shape mergeCumulativeSeries() expects --
-// lets both functions keep their own simple, independently-reusable signatures rather
-// than coupling normaliseToIndex() to this specific point shape.
 function toIndexedCumulative(points: CumulativeRPoint[]): CumulativeRPoint[] {
   return normaliseToIndex(points.map(p => ({ date: p.date, value: p.cumulativeR })))
     .map(p => ({ date: p.date, cumulativeR: p.value }))
@@ -81,23 +59,18 @@ export async function GET(req: Request) {
 
   const adminDb = createAdminClient()
 
-  const [analystRows, patternRows, aiRows] = await Promise.all([
-    // actual_trades has no asset_class/symbol columns of its own -- same market_id
-    // embed /api/analytics/trades/route.ts already uses to resolve them. Supabase's
-    // (untyped, no generated schema here) client infers this embed as an array even
-    // though market_id -> markets is one-to-one -- same reason
-    // /api/analytics/trades/route.ts itself doesn't strictly type this shape either.
+  const [analystRows, marketsResult, patternRows, aiRows] = await Promise.all([
     fetchAll<{
-      triggered: boolean | null; result_r: number | null; published_at: string | null
-      market: { symbol: string; asset_class: string }[] | null
+      triggered: boolean | null; result_r: number | null; published_at: string | null; market_id: string | null
     }>(
       page => adminDb.from('actual_trades')
-        .select('triggered, result_r, published_at, market:market_id ( symbol, asset_class )')
+        .select('triggered, result_r, published_at, market_id')
         .order('published_at', { ascending: false })
         .order('trade_id', { ascending: false })
         .range(page * 1000, page * 1000 + 999),
       'actual_trades',
     ),
+    adminDb.from('markets').select('market_id, symbol, asset_class'),
     fetchAll<{
       status: string | null; rr: number | null; published_at: string | null; triggered: boolean | null
       asset_class: string | null; symbol: string | null
@@ -109,12 +82,6 @@ export async function GET(req: Request) {
         .range(page * 1000, page * 1000 + 999),
       'pattern_trades',
     ),
-    // Same window-function RPC as /api/analytics/ai-signals (migrations/
-    // 068_ai_trades_reiteration.sql) -- is_reiteration is filtered out below before
-    // building aiSignals, so the AI row's performance figures (totalSignals/winRate/
-    // avgR/totalR) use the same deduplicated population as the AI Signals tab itself.
-    // totalPublished/totalTriggered below deliberately use the FULL aiRows (reiterations
-    // included) instead -- see buildSignalTypeData's own comment.
     fetchAll<{
       status: string | null; rr: number | null; published_at: string | null; is_reiteration: boolean; triggered: boolean | null
       asset_class: string | null; symbol: string | null
@@ -127,19 +94,25 @@ export async function GET(req: Request) {
     ),
   ])
 
-  // Analyst "with outcome" matches lib/metrics.ts's own triggeredTrades(): triggered AND
-  // a recorded result_r. Pattern/AI use their own status whitelists (see constants above).
-  // Enriched with assetClass/symbol for the By Asset Class/By Market breakdowns below --
-  // EnrichedSignal is still structurally a NormalisedSignal, so buildSignalTypeData
-  // (which only reads date/rr) accepts these same arrays unchanged.
+  // Build an in-memory market lookup -- avoids relying on PostgREST embed resolution
+  // which was silently returning null for the market:market_id(...) alias on the admin
+  // client. Markets table is small (~100 rows) so fetching it whole is cheap.
+  type MarketRow = { market_id: string; symbol: string; asset_class: string }
+  const marketMap = new Map<string, MarketRow>(
+    ((marketsResult.data ?? []) as MarketRow[]).map(m => [m.market_id, m])
+  )
+
   const analystSignals: EnrichedSignal[] = analystRows
     .filter(t => t.published_at)
-    .map(t => ({
-      date: t.published_at!.slice(0, 10),
-      rr: t.result_r ?? null,
-      assetClass: t.market?.[0]?.asset_class ?? null,
-      symbol: t.market?.[0]?.symbol ?? null,
-    }))
+    .map(t => {
+      const m = t.market_id ? marketMap.get(t.market_id) : null
+      return {
+        date: t.published_at!.slice(0, 10),
+        rr: t.result_r ?? null,
+        assetClass: m?.asset_class ?? null,
+        symbol: m?.symbol ?? null,
+      }
+    })
 
   const patternSignals: EnrichedSignal[] = patternRows
     .filter(t => t.published_at)
@@ -150,11 +123,6 @@ export async function GET(req: Request) {
       symbol: t.symbol ?? null,
     }))
 
-  // Reiterations are excluded entirely here (not just from the rr/outcome calculation,
-  // the way Pattern/Analyst rows are) -- a reiteration is a stacked, non-independent
-  // signal on a symbol, so it shouldn't count toward totalSignals/firstSignalDate/
-  // lastSignalDate either, unlike a genuine signal that simply never closed with a
-  // recorded result.
   const aiDeduped = aiRows.filter(t => !t.is_reiteration)
   const aiReiterations = aiRows.length - aiDeduped.length
   const aiSignals: EnrichedSignal[] = aiDeduped
@@ -166,10 +134,6 @@ export async function GET(req: Request) {
       symbol: t.symbol ?? null,
     }))
 
-  // totalPublished/totalTriggered are passed in from the FULL raw row count for each
-  // table (aiRows, not aiDeduped) -- "every row published" and "how many of them
-  // triggered an entry" are both questions about everything that actually got published,
-  // including AI reiterations, independent of which rows count toward performance stats.
   const analyst: SignalTypeData = buildSignalTypeData(
     analystSignals, analystRows.length, analystRows.filter(t => t.triggered === true).length
   )
@@ -186,18 +150,10 @@ export async function GET(req: Request) {
   const byYear = buildYearGrid(analystSignals, patternSignals, aiSignals)
   const topMarkets = buildTopMarkets(analystSignals, patternSignals, aiSignals, 20)
 
-  // No "signals per trading day" figure here -- actual_trades's historical
-  // (MANUAL_BACKFILL) rows only ever recorded triggered trades, not every published
-  // recommendation, so totalPublished for Analyst Signals undercounts true publication
-  // volume and any per-day average built from it would be understated and misleading.
   return NextResponse.json({
     analyst,
     patterns,
     ai,
-    // Not part of SignalTypeSummary (analyst/patterns have no reiteration concept) --
-    // a sibling field so the combined tab can note it on the AI row if desired, same
-    // "pass through, don't silently fold into the headline count" treatment as the AI
-    // Signals tab's own reiterations tile.
     aiReiterations,
     byAssetClass,
     byDayOfWeek,
@@ -205,12 +161,7 @@ export async function GET(req: Request) {
     byYear,
     topMarkets,
     combined: {
-      // Raw (un-normalised) merged series, kept exactly as before so
-      // CombinedSignalsReportBuilder.tsx's existing, unmodified usage of this field
-      // keeps working unchanged.
       cumulativeR: mergeCumulativeSeries(analyst.cumulativeR, patterns.cumulativeR, ai.cumulativeR),
-      // New: each series indexed to its own final = 100 before merging, for the tab's
-      // normalised equity-curve chart (Fix 1) -- see toIndexedCumulative()'s own comment.
       normalisedCumulative: mergeCumulativeSeries(
         toIndexedCumulative(analyst.cumulativeR),
         toIndexedCumulative(patterns.cumulativeR),
