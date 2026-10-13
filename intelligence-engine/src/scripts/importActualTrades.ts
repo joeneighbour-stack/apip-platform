@@ -621,6 +621,58 @@ async function main() {
       console.log(`  Patterns upserted: ${patternInserted} new, ${patternDuplicates} already existed (of ${patternRows.length})`)
     }
 
+    // ── AI trades ───────────────────────────────────────────────────────────
+    // The webhook also returns ReportType='AI' in the same response -- previously
+    // counted nowhere and discarded. Routed to ai_trades (migration 066), same
+    // onConflict + ignoreDuplicates shape as pattern trades above, for the same
+    // reason: backfillAiTrades.ts uses the identical upsert for its one-time
+    // full-history run, so the two can never conflict or double-count re-running
+    // either one.
+    const aiRows = rawTrades
+      .filter(t => t.ReportType === 'AI' && t.ReportId)
+      .map(t => ({
+        report_id:       t.ReportId as string,
+        symbol:          (t.Symbol as string ?? '').replace('/', ''),
+        asset_name:      t.Name ?? null,
+        asset_class:     t.AssetClass ?? null,
+        direction:       t.Direction ?? null,
+        status:          t.Status ?? null,
+        confidence:      t.Confidence ?? null,
+        published_at:    t.PublicationDate ?? null,
+        exit_date:       t.ExitDate ?? null,
+        expiry:          t.Expiry ?? null,
+        entry:           t.Entry ?? null,
+        stop_loss:       t.StopLoss ?? null,
+        take_profit:     t.TakeProfit ?? null,
+        exit_price:      t.ExitPrice ?? null,
+        rr:              t.RR ?? null,
+        triggered:       t.Triggered ?? false,
+        return_pct:      t.Return ?? null,
+        source_system:   'ACUITY_PERFORMANCE_API',
+        import_batch_id: batchId,
+      }))
+
+    let aiInserted = 0
+    let aiDuplicates = 0
+    if (!isDryRun && aiRows.length > 0) {
+      const AI_BATCH = 200
+      for (let i = 0; i < aiRows.length; i += AI_BATCH) {
+        const batch = aiRows.slice(i, i + AI_BATCH)
+        const { data, error } = await db
+          .from('ai_trades')
+          .upsert(batch, { onConflict: 'report_id', ignoreDuplicates: true })
+          .select('report_id')
+        if (error) {
+          console.error(`  AI batch error at ${i}: ${error.message}`)
+        } else {
+          const inserted = data?.length ?? 0
+          aiInserted += inserted
+          aiDuplicates += batch.length - inserted
+        }
+      }
+      console.log(`  AI signals upserted: ${aiInserted} new, ${aiDuplicates} already existed (of ${aiRows.length})`)
+    }
+
     // ── Re-apply resolved dispute overrides ──────────────────────────────────
     // Belt-and-braces alongside the protectedSourceRecordIds skip above: re-applies
     // every resolved-dispute correction immediately after this run's upsert, in case
@@ -737,6 +789,7 @@ async function main() {
     console.log(`Total fetched:    ${rawTrades.length}`)
     console.log(`Analyst trades:   ${analystTrades.length}`)
     console.log(`Pattern trades:   ${patternRows.length} (${patternInserted} new, ${patternDuplicates} already existed)`)
+    console.log(`AI signals:       ${aiRows.length} (${aiInserted} new, ${aiDuplicates} already existed)`)
     console.log(`Inserted:         ${successRows}`)
     console.log(`Updated:          ${duplicateRows}`)
     console.log(`Out of scope:     ${outOfScopeRows} (equities not in APIP universe)`)

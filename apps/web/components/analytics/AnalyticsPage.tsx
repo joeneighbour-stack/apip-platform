@@ -24,6 +24,7 @@ import { MonthlyPerformanceMatrix } from './MonthlyPerformanceMatrix'
 import { AttributionTable } from './AttributionTable'
 import { BestPerformers } from './BestPerformers'
 import { PatternsTab } from './PatternsTab'
+import { AiSignalsTab } from './AiSignalsTab'
 
 // ReportBuilder mounts report/PerformanceReport.tsx, which pulls in a second copy of
 // the four recharts components above -- dynamic-importing it here keeps that whole
@@ -53,12 +54,13 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
 
-  // Patterns tab is independent of everything below -- its own component does its
-  // own fetch (pattern_trades, via /api/analytics/patterns), unrelated to the
-  // trades/publications data this page otherwise loads. Rendered outside the
-  // loading/error short-circuits below so switching to it works regardless of
+  // Patterns and AI Signals tabs are independent of everything below -- each has its
+  // own component doing its own fetch (pattern_trades / ai_trades, via
+  // /api/analytics/patterns and /api/analytics/ai-signals respectively), unrelated to
+  // the trades/publications data this page otherwise loads. Rendered outside the
+  // loading/error short-circuits below so switching to either works regardless of
   // the Performance tab's own fetch state.
-  const [pageTab, setPageTab] = useState<'PERFORMANCE' | 'PATTERNS'>('PERFORMANCE')
+  const [pageTab, setPageTab] = useState<'PERFORMANCE' | 'PATTERNS' | 'AI_SIGNALS'>('PERFORMANCE')
 
   const [filters, setFilters] = useState<AnalyticsFilterState>(() => {
     const initial = filtersFromSearchParams(searchParams)
@@ -280,18 +282,18 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
     setReportOpen(true)
   }
 
-  // Patterns is a management-only tab: pattern_trades has no ANALYST RLS grant
-  // at all (migrations/065_pattern_trades.sql -- ADMIN/MANAGER/RESEARCH only),
-  // and this same AnalyticsPage component is also rendered for the analyst-
-  // facing "My Performance" page with lockedAnalystId set (see that prop's own
-  // comment). The tab (and the ability to ever reach the Patterns branch below)
-  // only exists when lockedAnalystId is unset -- the management view.
-  const showPatternsTab = !lockedAnalystId
+  // Patterns and AI Signals are management-only tabs: pattern_trades/ai_trades have no
+  // ANALYST RLS grant at all (migrations/065_pattern_trades.sql, 066_ai_trades.sql --
+  // ADMIN/MANAGER/RESEARCH only), and this same AnalyticsPage component is also
+  // rendered for the analyst-facing "My Performance" page with lockedAnalystId set (see
+  // that prop's own comment). Both tabs (and the ability to ever reach either branch
+  // below) only exist when lockedAnalystId is unset -- the management view.
+  const showManagementTabs = !lockedAnalystId
 
   // Styled to match ShadowMonitoringPanel.tsx's border-b-2/-mb-px underline tab
   // pattern -- the existing convention elsewhere in the management dashboard for
   // this exact "outer tab spanning otherwise-separate sections" shape.
-  const tabBar = showPatternsTab ? (
+  const tabBar = showManagementTabs ? (
     <div className="flex items-center gap-1 border-b border-border print:hidden">
       <button
         onClick={() => setPageTab('PERFORMANCE')}
@@ -313,10 +315,20 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
       >
         Patterns
       </button>
+      <button
+        onClick={() => setPageTab('AI_SIGNALS')}
+        className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+          pageTab === 'AI_SIGNALS'
+            ? 'border-foreground text-foreground'
+            : 'border-transparent text-muted-foreground hover:text-foreground'
+        }`}
+      >
+        AI Signals
+      </button>
     </div>
   ) : null
 
-  if (showPatternsTab && pageTab === 'PATTERNS') {
+  if (showManagementTabs && pageTab === 'PATTERNS') {
     // PatternsTab manages its own print:hidden scoping internally (its Report Builder/
     // PerformanceReport must render outside any print:hidden ancestor -- see its own
     // comment) -- only tabBar, not PatternsTab itself, is wrapped here.
@@ -324,6 +336,15 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
       <div className="space-y-6">
         <div className="print:hidden">{tabBar}</div>
         <PatternsTab />
+      </div>
+    )
+  }
+
+  if (showManagementTabs && pageTab === 'AI_SIGNALS') {
+    return (
+      <div className="space-y-6 print:hidden">
+        {tabBar}
+        <AiSignalsTab />
       </div>
     )
   }
