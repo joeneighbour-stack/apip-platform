@@ -99,7 +99,7 @@ async function main() {
       report_id:       t.ReportId as string,
       symbol:          (t.Symbol as string ?? '').replace('/', ''),
       asset_class:     t.AssetClass ?? null,
-      direction:       t.Direction ?? null,
+      direction:       t.Direction ? (t.Direction as string).toUpperCase() : null,
       family:          t.Family ?? null,
       granularity:     t.Granularity ?? null,
       status:          t.Status ?? null,

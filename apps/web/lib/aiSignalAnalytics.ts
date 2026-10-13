@@ -56,8 +56,12 @@ export const CONFIDENCE_LEVELS = [0, 25, 75, 100]
 export const ASSET_CLASS_ORDER = ['FX', 'Equity', 'Commodity', 'Crypto', 'Index']
 export const DIRECTION_ORDER = ['BUY', 'SELL']
 
-const STATUS_CLOSED_PROFIT = 'Closed - Profit'
-const STATUS_CLOSED_LOSS = 'Closed - Loss'
+// Trades with a definitive outcome. Unlike pattern_trades (lib/patternAnalytics.ts),
+// AI signals that reach their expiry still get a recorded rr (~47% of closed AI trades
+// are Expired, and they're mostly positive) -- excluding them understated both win rate
+// and avg R. Win/loss itself is decided by the rr sign, not the status label: a status
+// like "Expired" doesn't say win or loss on its own, only that the trade has a result.
+const STATUSES_WITH_OUTCOME = ['Closed - Profit', 'Closed - Loss', 'Closed - Flat', 'Expired']
 
 interface Aggregate {
   count: number
@@ -96,13 +100,16 @@ function aggregate(rows: AiTradePoint[]): Aggregate {
   const triggeredCount = rows.filter(r => r.triggered === true).length
   const triggerPct = count > 0 ? triggeredCount / count : null
 
-  const closedProfit = rows.filter(r => r.status === STATUS_CLOSED_PROFIT)
-  const closedLoss = rows.filter(r => r.status === STATUS_CLOSED_LOSS)
-  const closedRows = [...closedProfit, ...closedLoss]
-  const closedTotal = closedProfit.length + closedLoss.length
-  const winPct = closedTotal > 0 ? closedProfit.length / closedTotal : null
+  // Null-coalescing to 0 in a reference implementation would also mean withOutcome
+  // containing zero rows still reports "0%"/"0R" rather than "no data" -- kept as null
+  // here instead, matching every other null-sentinel in this file/AttributionRow (the
+  // UI already renders null as "—"), so an empty confidence/asset-class bucket isn't
+  // misrepresented as a real zero result.
+  const withOutcome = rows.filter(r => r.status !== null && STATUSES_WITH_OUTCOME.includes(r.status) && r.rr !== null)
+  const wins = withOutcome.filter(r => (r.rr ?? 0) > 0)
+  const winPct = withOutcome.length > 0 ? wins.length / withOutcome.length : null
 
-  const rrValues = closedRows
+  const rrValues = withOutcome
     .map(r => r.rr)
     .filter((rr): rr is number => rr !== null)
   const avgR = rrValues.length > 0 ? rrValues.reduce((s, rr) => s + rr, 0) / rrValues.length : null
@@ -112,7 +119,7 @@ function aggregate(rows: AiTradePoint[]): Aggregate {
   const losses = rrValues.filter(rr => rr < 0).reduce((s, rr) => s + rr, 0)
   const profitFactor = losses !== 0 ? round2(gains / Math.abs(losses)) : null
 
-  const maxDD = sequenceDrawdown(closedRows)
+  const maxDD = sequenceDrawdown(withOutcome)
 
   return { count, triggerPct, winPct, avgR, totalR, maxDD, profitFactor }
 }

@@ -100,7 +100,7 @@ async function main() {
       symbol:          (t.Symbol as string ?? '').replace('/', ''),
       asset_name:      t.Name ?? null,
       asset_class:     t.AssetClass ?? null,
-      direction:       t.Direction ?? null,
+      direction:       t.Direction ? (t.Direction as string).toUpperCase() : null,
       status:          t.Status ?? null,
       confidence:      t.Confidence ?? null,
       published_at:    t.PublicationDate ?? null,

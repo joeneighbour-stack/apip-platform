@@ -38,19 +38,31 @@ const ASSET_CLASS_OPTIONS = ['ALL', 'FX', 'Equity', 'Commodity', 'Crypto', 'Inde
 // (lib/metrics.ts's MIN_TRADES_FOR_MARKET_RANKING).
 const MIN_TRADES_FOR_SYMBOL_RANKING = 10
 
+// By Market can run to hundreds of symbols -- capped to the top 20 by Total R (the
+// order attributionBy() already returns) by default, with a toggle to see the rest.
+const MARKET_TABLE_LIMIT = 20
+
 function round2(n: number): number {
   return Math.round(n * 100) / 100
 }
 
-// AI trades use `rr` directly as the result (not result_r) and "triggered" is a boolean
-// column -- same adaptation as PatternsTab.tsx's toAnalyticsTrade, extended with
-// asset_name (not part of MetricsTrade at all) purely so the By Market table below can
-// label rows with a human-readable name instead of a bare ticker; none of lib/metrics.ts's
+// AI trades use `rr` directly as the result (not result_r). A recorded rr is what
+// defines "has a usable result" here -- NOT the DB `triggered` boolean: a meaningful
+// share of AI signals close at expiry with a real recorded rr (mostly positive) while
+// apparently carrying triggered=false, so gating result_r on t.triggered (as the
+// Patterns tab adapter does) was silently dropping them from every lib/metrics.ts-driven
+// calculation that reads this adapted shape -- cumulativeSeries/drawdownSeries/
+// rollingTradeWindows/monthlyMatrix/byMarket/best-worst symbols all key off
+// triggeredTrades(), which is `t.triggered && t.result_r !== null`. Setting both fields
+// from rr !== null alone makes every one of those consistently include exactly the same
+// population, so the KPI tile, the chart, and the rolling table's "Since Inception" row
+// all agree. asset_name is extended on top purely so the By Market table below can label
+// rows with a human-readable name instead of a bare ticker; none of lib/metrics.ts's
 // functions read it.
 function toAnalyticsTrade(t: AiTradePoint) {
   return {
-    result_r: t.triggered && t.rr !== null ? t.rr : null,
-    triggered: t.triggered === true,
+    result_r: t.rr !== null ? t.rr : null,
+    triggered: t.rr !== null,
     published_at: t.published_at,
     symbol: t.symbol ?? '',
     asset_class: t.asset_class ?? '',
@@ -234,6 +246,7 @@ export function AiSignalsTab() {
   const [confidenceSort, setConfidenceSort] = useState<AttributionSort>({ col: 'totalR', dir: 'desc' })
   const [assetClassSort, setAssetClassSort] = useState<AttributionSort>({ col: 'totalR', dir: 'desc' })
   const [directionSort, setDirectionSort] = useState<AttributionSort>({ col: 'totalR', dir: 'desc' })
+  const [showAllMarkets, setShowAllMarkets] = useState(false)
 
   const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
 
@@ -268,6 +281,16 @@ export function AiSignalsTab() {
   const monthly = useMemo(() => monthlyMatrix(analyticsTrades), [analyticsTrades])
   const rolling = useMemo(() => rollingTradeWindows(analyticsTrades), [analyticsTrades])
 
+  // KPI tile computed directly from the raw trades array (not summary.cumulativeR,
+  // which uses lib/aiSignalAnalytics.ts's status-gated "with outcome" definition for win
+  // rate/avg R) -- Cumulative R here is simply every recorded rr summed, matching the
+  // rolling table's "Since Inception" Total R row above (both now key off rr !== null
+  // via the adapter, so the two numbers agree).
+  const cumulativeRTotal = useMemo(
+    () => round2(trades.filter(t => t.rr !== null).reduce((sum, t) => sum + (t.rr ?? 0), 0)),
+    [trades]
+  )
+
   const confidenceRows = useMemo(() => summary ? summary.byConfidence.map(toAttributionRow) : [], [summary])
   const assetClassRows = useMemo(() => summary ? summary.byAssetClass.map(toAttributionRow) : [], [summary])
   const directionRows = useMemo(() => summary ? summary.byDirection.map(toAttributionRow) : [], [summary])
@@ -286,6 +309,10 @@ export function AiSignalsTab() {
   )
   const bestSymbols = useMemo(() => rankAttribution(byMarket, MIN_TRADES_FOR_SYMBOL_RANKING, 'best', 5), [byMarket])
   const worstSymbols = useMemo(() => rankAttribution(byMarket, MIN_TRADES_FOR_SYMBOL_RANKING, 'worst', 5), [byMarket])
+  const displayedMarkets = useMemo(
+    () => showAllMarkets ? byMarket : byMarket.slice(0, MARKET_TABLE_LIMIT),
+    [byMarket, showAllMarkets]
+  )
 
   return (
     <div className="space-y-6 print:hidden">
@@ -310,8 +337,8 @@ export function AiSignalsTab() {
         </div>
         <div className="rounded-lg border border-border bg-card p-4 space-y-1">
           <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Cumulative R</p>
-          <p className={`text-2xl font-semibold tabular-nums ${summary ? positivityClass(summary.cumulativeR) : ''}`}>
-            {summary ? formatR(summary.cumulativeR) : '—'}
+          <p className={`text-2xl font-semibold tabular-nums ${summary ? positivityClass(cumulativeRTotal) : ''}`}>
+            {summary ? formatR(cumulativeRTotal) : '—'}
           </p>
         </div>
       </div>
@@ -376,7 +403,13 @@ export function AiSignalsTab() {
             <SortableAttributionTable title="By Direction" rows={directionRows} entityLabel="Signals"
               sort={directionSort} onSortChange={setDirectionSort} />
           </div>
-          <AttributionTable title="By Market" rows={byMarket} minTrades={10} entityLabel="Markets" />
+          <AttributionTable title="By Market" rows={displayedMarkets} minTrades={10} entityLabel="Markets" />
+          {byMarket.length > MARKET_TABLE_LIMIT && (
+            <button onClick={() => setShowAllMarkets(s => !s)}
+              className="text-xs text-muted-foreground hover:text-foreground underline">
+              {showAllMarkets ? 'Show top 20' : `Show all ${byMarket.length} markets`}
+            </button>
+          )}
 
           <ContributionChart title="Contribution by Confidence" rows={confidenceRows} />
 
