@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import dynamic from 'next/dynamic'
 import {
-  type SignalTypeData, TYPE_LABELS, TYPE_ORDER, buildKeyCallouts,
+  type SignalTypeData, type SignalTypeKey, TYPE_LABELS, TYPE_ORDER, buildKeyCallouts,
 } from '@/lib/combinedSignalAnalytics'
 import { formatR, formatPercent, formatDate, positivityClass } from '@/lib/format'
 import { PAST_PERFORMANCE_WARNING } from '@/lib/compliance'
@@ -39,12 +39,25 @@ function dateRangeLabel(first: string | null, last: string | null): string {
 // Headline is totalPublished (every row actually published, including AI reiterations)
 // rather than totalSignals (the deduplicated, performance-relevant count used in the
 // comparison table below) -- this strip is about signal OUTPUT, not performance.
-function SummaryTile({ label, data }: { label: string; data: SignalTypeData }) {
+//
+// The triggered subtitle only appears for Analyst Signals: `triggered` means something
+// genuinely different per table -- on actual_trades it's a real ~35% "did price enter
+// the zone" rate, but on pattern_trades/ai_trades every row is triggered=true on
+// publication by definition (there's no untriggered state to distinguish), so showing
+// "X triggered" there would just restate totalPublished under a different label.
+function SummaryTile({ label, type, data }: { label: string; type: SignalTypeKey; data: SignalTypeData }) {
+  const triggeredPct = data.summary.totalPublished > 0
+    ? Math.round((data.summary.totalTriggered / data.summary.totalPublished) * 100)
+    : null
   return (
     <div className="rounded-lg border border-border bg-card p-4 space-y-1">
       <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{label}</p>
       <p className="text-2xl font-semibold tabular-nums">{data.summary.totalPublished.toLocaleString()}</p>
-      <p className="text-xs text-muted-foreground">{data.summary.totalTriggered.toLocaleString()} triggered</p>
+      {type === 'analyst' && (
+        <p className="text-xs text-muted-foreground">
+          {data.summary.totalTriggered.toLocaleString()} triggered{triggeredPct !== null ? ` (${triggeredPct}%)` : ''}
+        </p>
+      )}
       <p className="text-xs text-muted-foreground">{dateRangeLabel(data.summary.firstSignalDate, data.summary.lastSignalDate)}</p>
     </div>
   )
@@ -71,17 +84,6 @@ export function CombinedSignalsTab() {
 
   const callouts = useMemo(() => data ? buildKeyCallouts({ analyst: data.analyst, patterns: data.patterns, ai: data.ai }) : [], [data])
 
-  // Summed across all three types' totalPublished/totalTriggered (every published row,
-  // AI reiterations included) -- a different population than the callouts above, which
-  // pool outcomeCount (the deduplicated, performance-relevant set).
-  const triggeredSummary = useMemo(() => {
-    if (!data) return null
-    const totalPublished = data.analyst.summary.totalPublished + data.patterns.summary.totalPublished + data.ai.summary.totalPublished
-    const totalTriggered = data.analyst.summary.totalTriggered + data.patterns.summary.totalTriggered + data.ai.summary.totalTriggered
-    const pct = totalPublished > 0 ? Math.round((totalTriggered / totalPublished) * 100) : null
-    return { totalPublished, totalTriggered, pct }
-  }, [data])
-
   return (
     <>
     {/* print:hidden is scoped to the dashboard chrome only, matching PatternsTab.tsx/
@@ -102,9 +104,9 @@ export function CombinedSignalsTab() {
         <div className="space-y-6">
           <div className="flex items-start justify-between gap-4">
             <div className="grid grow grid-cols-1 gap-3 sm:grid-cols-3">
-              <SummaryTile label="Analyst Signals" data={data.analyst} />
-              <SummaryTile label="Pattern Signals" data={data.patterns} />
-              <SummaryTile label="AI Signals" data={data.ai} />
+              <SummaryTile label="Analyst Signals" type="analyst" data={data.analyst} />
+              <SummaryTile label="Pattern Signals" type="patterns" data={data.patterns} />
+              <SummaryTile label="AI Signals" type="ai" data={data.ai} />
             </div>
             <button onClick={() => setReportOpen(true)}
               className="shrink-0 text-xs px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
@@ -112,17 +114,22 @@ export function CombinedSignalsTab() {
             </button>
           </div>
 
-          <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-1.5">
+          {/* No "X% triggered" callout here -- `triggered` means something genuinely
+              different per table (a real ~35% rate for Analyst Signals, but always-true
+              on publication for Pattern/AI Signals), so pooling it into one combined
+              percentage would be misleading rather than informative. */}
+          <div className="rounded-lg border border-border bg-muted/30 p-4">
             <p className="text-sm">
               Acuity publishes an average of {data.combined.totalSignalsPerDay.toFixed(1)} signals per trading day across all signal types.
             </p>
-            {triggeredSummary && triggeredSummary.pct !== null && (
-              <p className="text-sm">
-                Of these, {triggeredSummary.totalTriggered.toLocaleString()} signals triggered entry, representing {triggeredSummary.pct}% of all published signals.
-              </p>
-            )}
           </div>
 
+          {/* Total Signals here is totalPublished (so the three rows are comparable
+              signal-output figures) -- Win Rate/Avg R/Total R/Max DD still reflect each
+              type's own canonical performance population (deduplicated for AI), so the
+              AI row's own "Total Signals" number won't match the sample size behind its
+              other columns. That's the deliberate tradeoff: a comparable headline count
+              across rows, at the cost of one row's internal consistency. */}
           <div className="space-y-2">
             <p className="text-xs font-medium text-muted-foreground print:uppercase print:tracking-wide">Performance Comparison</p>
             <div className="rounded-lg border border-border overflow-hidden overflow-x-auto">
@@ -141,9 +148,9 @@ export function CombinedSignalsTab() {
                       <tr key={key} className="hover:bg-muted/30 transition-colors">
                         <td className="px-4 py-2.5 font-medium whitespace-nowrap">{TYPE_LABELS[key]}</td>
                         <td className="px-4 py-2.5 tabular-nums text-muted-foreground whitespace-nowrap">
-                          {d.summary.totalSignals.toLocaleString()}
+                          {d.summary.totalPublished.toLocaleString()}
                           {key === 'ai' && data.aiReiterations > 0 && (
-                            <span className="text-[11px] text-muted-foreground/70"> (+{data.aiReiterations.toLocaleString()} reiterations)</span>
+                            <span className="text-[11px] text-muted-foreground/70"> (of which {data.aiReiterations.toLocaleString()} reiterations)</span>
                           )}
                         </td>
                         <td className="px-4 py-2.5 tabular-nums whitespace-nowrap">{formatPercent(d.summary.winRate)}</td>
