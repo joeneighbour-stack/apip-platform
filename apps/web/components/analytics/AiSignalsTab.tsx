@@ -292,7 +292,13 @@ export function AiSignalsTab() {
   )
 
   const confidenceRows = useMemo(() => summary ? summary.byConfidence.map(toAttributionRow) : [], [summary])
-  const assetClassRows = useMemo(() => summary ? summary.byAssetClass.map(toAttributionRow) : [], [summary])
+  // FX/Commodity/Index never appear in this dataset -- filtered out rather than shown
+  // as permanent empty rows (ASSET_CLASS_ORDER in lib/aiSignalAnalytics.ts always
+  // produces one row per fixed category, present or not).
+  const assetClassRows = useMemo(
+    () => summary ? summary.byAssetClass.map(toAttributionRow).filter(r => r.trades > 0) : [],
+    [summary]
+  )
   const directionRows = useMemo(() => summary ? summary.byDirection.map(toAttributionRow) : [], [summary])
   const confidenceInsight = useMemo(() => buildConfidenceInsight(confidenceRows), [confidenceRows])
 
