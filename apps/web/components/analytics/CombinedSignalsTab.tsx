@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import dynamic from 'next/dynamic'
 import {
-  type SignalTypeData, type SignalTypeKey, TYPE_LABELS, TYPE_ORDER, buildKeyCallouts,
+  type SignalTypeData, TYPE_LABELS, TYPE_ORDER, buildKeyCallouts,
 } from '@/lib/combinedSignalAnalytics'
 import { formatR, formatPercent, formatDate, positivityClass } from '@/lib/format'
 import { PAST_PERFORMANCE_WARNING } from '@/lib/compliance'
@@ -40,24 +40,19 @@ function dateRangeLabel(first: string | null, last: string | null): string {
 // rather than totalSignals (the deduplicated, performance-relevant count used in the
 // comparison table below) -- this strip is about signal OUTPUT, not performance.
 //
-// The triggered subtitle only appears for Analyst Signals: `triggered` means something
-// genuinely different per table -- on actual_trades it's a real ~35% "did price enter
-// the zone" rate, but on pattern_trades/ai_trades every row is triggered=true on
-// publication by definition (there's no untriggered state to distinguish), so showing
-// "X triggered" there would just restate totalPublished under a different label.
-function SummaryTile({ label, type, data }: { label: string; type: SignalTypeKey; data: SignalTypeData }) {
-  const triggeredPct = data.summary.totalPublished > 0
-    ? Math.round((data.summary.totalTriggered / data.summary.totalPublished) * 100)
-    : null
+// No triggered subtitle on any tile, including Analyst Signals: `triggered` on
+// actual_trades looked like a real ~35% "did price enter the zone" rate overall, but
+// broken down by source it's set to true on 100% of MANUAL_BACKFILL rows (91% of the
+// table) -- an import-time default, not a real outcome -- and only genuinely selective
+// (~29%) on the live ACUITY_PERFORMANCE_API feed. The table-wide figure (93.7% true) is
+// therefore an import-methodology artifact, not a meaningful trigger rate, so it's
+// omitted here the same way it already is for Pattern/AI Signals (which have no
+// untriggered state to distinguish at all).
+function SummaryTile({ label, data }: { label: string; data: SignalTypeData }) {
   return (
     <div className="rounded-lg border border-border bg-card p-4 space-y-1">
       <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{label}</p>
       <p className="text-2xl font-semibold tabular-nums">{data.summary.totalPublished.toLocaleString()}</p>
-      {type === 'analyst' && (
-        <p className="text-xs text-muted-foreground">
-          {data.summary.totalTriggered.toLocaleString()} triggered{triggeredPct !== null ? ` (${triggeredPct}%)` : ''}
-        </p>
-      )}
       <p className="text-xs text-muted-foreground">{dateRangeLabel(data.summary.firstSignalDate, data.summary.lastSignalDate)}</p>
     </div>
   )
@@ -104,9 +99,9 @@ export function CombinedSignalsTab() {
         <div className="space-y-6">
           <div className="flex items-start justify-between gap-4">
             <div className="grid grow grid-cols-1 gap-3 sm:grid-cols-3">
-              <SummaryTile label="Analyst Signals" type="analyst" data={data.analyst} />
-              <SummaryTile label="Pattern Signals" type="patterns" data={data.patterns} />
-              <SummaryTile label="AI Signals" type="ai" data={data.ai} />
+              <SummaryTile label="Analyst Signals" data={data.analyst} />
+              <SummaryTile label="Pattern Signals" data={data.patterns} />
+              <SummaryTile label="AI Signals" data={data.ai} />
             </div>
             <button onClick={() => setReportOpen(true)}
               className="shrink-0 text-xs px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
