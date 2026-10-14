@@ -377,7 +377,7 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
     return (
       <div className="space-y-6">
         <div className="print:hidden">{tabBar}</div>
-        <CombinedSignalsTab />
+        <CombinedSignalsTab analysts={analysts} />
       </div>
     )
   }

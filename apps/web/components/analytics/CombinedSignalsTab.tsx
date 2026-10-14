@@ -2,14 +2,20 @@
 import { useEffect, useMemo, useState } from 'react'
 import dynamic from 'next/dynamic'
 import {
-  type SignalTypeData, type SignalTypeSummary, type CombinedAssetClassRow, type DayOfWeekRow, type MonthOfYearRow,
-  type CombinedYearRow, type CombinedMarketRow,
-  TYPE_LABELS, TYPE_ORDER, buildKeyCallouts, monthYear,
+  type EnrichedSignal, type SignalTypeKey, type SignalTypeData, type CumulativeRPoint,
+  TYPE_LABELS, TYPE_ORDER, buildSignalTypeData, mergeCumulativeSeries, normaliseToIndex,
+  buildAssetClassBreakdown, buildDayOfWeekBreakdown, buildMonthBreakdown, buildYearGrid, buildTopMarkets,
+  buildKeyCallouts, monthYear,
 } from '@/lib/combinedSignalAnalytics'
+import type { PatternTradePoint } from '@/lib/patternAnalytics'
+import type { AiTradePoint } from '@/lib/aiSignalAnalytics'
 import { formatR, formatPercent, formatDate, positivityClass } from '@/lib/format'
 import { PAST_PERFORMANCE_WARNING } from '@/lib/compliance'
 import { CombinedCumulativeChart, SignalsByPeriodChart } from './LazyCharts'
 import { Tooltip } from '@/components/ui/Tooltip'
+import { MultiSelect } from '@/components/ui/MultiSelect'
+import { type CombinedFilterState, DEFAULT_COMBINED_FILTERS, hasActiveCombinedFilters } from '@/lib/analyticsFilters'
+import { DATE_PRESET_OPTIONS, resolveDateRange, SINCE_INCEPTION_FLOOR } from '@/lib/dateRanges'
 
 // Combined Signals reports use their own component (CombinedSignalsReportBuilder), not
 // PatternReportBuilder/AiSignalsReportBuilder -- see that file's own header comment.
@@ -20,25 +26,37 @@ const CombinedSignalsReportBuilder = dynamic(
   { ssr: false },
 )
 
-interface CombinedApiResponse {
-  analyst: SignalTypeData
-  patterns: SignalTypeData
-  ai: SignalTypeData
-  // AI-only -- analyst/patterns have no reiteration concept (see /api/analytics/combined's
-  // own comment). The `ai` row's own totalSignals/winRate/avgR/totalR are already
-  // deduplicated (is_reiteration = false), same figures the AI Signals tab itself shows.
-  aiReiterations: number
-  byAssetClass: CombinedAssetClassRow[]
-  byDayOfWeek: DayOfWeekRow[]
-  byMonth: MonthOfYearRow[]
-  byYear: CombinedYearRow[]
-  topMarkets: CombinedMarketRow[]
-  combined: {
-    summary: SignalTypeSummary
-    cumulativeR: { date: string; analyst: number | null; patterns: number | null; ai: number | null }[]
-    normalisedCumulative: { date: string; analyst: number | null; patterns: number | null; ai: number | null }[]
-  }
+// Raw actual_trades row shape returned by /api/analytics/trades -- no shared type for
+// this exists elsewhere (MetricsTrade is an already-normalized shape built from this),
+// so it's defined locally, same convention as PatternTradePoint/AiTradePoint already
+// being imported as-is for the other two raw sources.
+interface Analyst { analyst_id: string; display_name: string; active: boolean }
+
+interface RawAnalystRow {
+  analyst_id: string
+  direction: string | null
+  result_r: number | null
+  triggered: boolean | null
+  published_at: string
+  session: string | null
+  market: { market_id: string; symbol: string; asset_class: string } | null
 }
+
+// Same outcome-status gating /api/analytics/combined's route applies server-side --
+// duplicated here now that this tab builds EnrichedSignal arrays client-side instead of
+// receiving them pre-built.
+const PATTERN_OUTCOME_STATUSES = new Set(['Closed - Profit', 'Closed - Loss'])
+const AI_OUTCOME_STATUSES = new Set(['Closed - Profit', 'Closed - Loss', 'Closed - Flat', 'Expired'])
+
+// Same literal option sets as AnalyticsFilters.tsx's own (unexported) constants --
+// duplicated rather than shared, matching this codebase's existing convention of
+// self-contained sibling tab components (see e.g. PatternsTab.tsx/AiSignalsTab.tsx's
+// identical copies).
+const DIRECTION_OPTIONS = [{ value: 'BUY', label: 'BUY' }, { value: 'SELL', label: 'SELL' }]
+const SESSION_OPTIONS = [
+  { value: 'EUROPEAN', label: 'European' }, { value: 'US', label: 'US' },
+  { value: 'APAC', label: 'APAC' }, { value: 'CRYPTO', label: 'Crypto' },
+]
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100
@@ -52,6 +70,15 @@ const CURRENT_YEAR = new Date().getUTCFullYear()
 function dateRangeLabel(first: string | null, last: string | null): string {
   if (!first || !last) return 'No signals yet'
   return `${formatDate(first)} – ${formatDate(last)}`
+}
+
+// Same CumulativeRPoint <-> NormalisedPoint rebasing wrapper /api/analytics/combined's
+// route used to keep private to itself (toIndexedCumulative) -- needed here now that
+// the normalised equity curve is built client-side from filtered data instead of
+// arriving pre-built in the API response.
+function toIndexedCumulative(points: CumulativeRPoint[]): CumulativeRPoint[] {
+  return normaliseToIndex(points.map(p => ({ date: p.date, value: p.cumulativeR })))
+    .map(p => ({ date: p.date, cumulativeR: p.value }))
 }
 
 // Headline is totalPublished (every row actually published, including AI reiterations)
@@ -103,7 +130,7 @@ const COMPARISON_HEADERS: { label: string; tooltip?: string }[] = [
   { label: 'Total R' },
   { label: 'Max DD (R)' },
   { label: 'Payout Ratio', tooltip: PAYOUT_RATIO_TOOLTIP },
-  { label: 'Break-Even Win Rate', tooltip: BREAK_EVEN_WIN_RATE_TOOLTIP },
+  { label: 'Break-Even WR', tooltip: BREAK_EVEN_WIN_RATE_TOOLTIP },
   { label: 'Since' },
 ]
 
@@ -136,45 +163,248 @@ function PeriodTable({ rows, firstColumnLabel }: {
   )
 }
 
-export function CombinedSignalsTab() {
-  const [data, setData] = useState<CombinedApiResponse | null>(null)
+interface Props {
+  analysts: Analyst[]
+}
+
+export function CombinedSignalsTab({ analysts }: Props) {
+  const [filters, setFilters] = useState<CombinedFilterState>(DEFAULT_COMBINED_FILTERS)
+  const [moreOpen, setMoreOpen] = useState(false)
+
+  const [rawAnalyst, setRawAnalyst] = useState<RawAnalystRow[]>([])
+  const [rawPatterns, setRawPatterns] = useState<PatternTradePoint[]>([])
+  const [rawAi, setRawAi] = useState<AiTradePoint[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [reportOpen, setReportOpen] = useState(false)
 
+  // No raw "/api/analytics/combined/raw" endpoint exists -- /api/analytics/combined only
+  // returns pre-aggregated SignalTypeData, which can't be re-filtered client-side. Fetched
+  // once, unfiltered, from the same three raw endpoints PatternsTab.tsx/AiSignalsTab.tsx
+  // and AnalyticsPage.tsx already use; every filter below runs client-side against this
+  // set, same fetch-once/filter-client-side approach as those tabs.
   useEffect(() => {
     setLoading(true)
     setError(null)
-    fetch('/api/analytics/combined')
-      .then(r => r.json())
-      .then((json: CombinedApiResponse | { error: string }) => {
-        if ('error' in json) { setError(json.error); return }
-        setData(json)
-      })
-      .catch(() => setError('Failed to load combined signal data.'))
+    Promise.all([
+      fetch(`/api/analytics/trades?from=${SINCE_INCEPTION_FLOOR}`).then(r => r.json()),
+      fetch('/api/analytics/patterns').then(r => r.json()),
+      fetch('/api/analytics/ai-signals').then(r => r.json()),
+    ]).then(([analystRows, patternsRes, aiRes]) => {
+      if (!Array.isArray(analystRows)) { setError('Failed to load analyst signal data.'); return }
+      if (patternsRes && 'error' in patternsRes) { setError(patternsRes.error); return }
+      if (aiRes && 'error' in aiRes) { setError(aiRes.error); return }
+      setRawAnalyst(analystRows)
+      setRawPatterns(patternsRes.trades)
+      setRawAi(aiRes.trades)
+    }).catch(() => setError('Failed to load combined signal data.'))
       .finally(() => setLoading(false))
   }, [])
 
-  const callouts = useMemo(() => data ? buildKeyCallouts({ analyst: data.analyst, patterns: data.patterns, ai: data.ai }) : [], [data])
+  const dateRange = useMemo(
+    () => resolveDateRange(filters.datePreset, filters.customStart ?? undefined, filters.customEnd ?? undefined),
+    [filters.datePreset, filters.customStart, filters.customEnd]
+  )
+
+  // Filter option lists are derived from the full unfiltered fetch, not the
+  // currently-filtered subset -- same reasoning as PatternsTab.tsx/AiSignalsTab.tsx:
+  // keeps the option lists stable as other filters change instead of shrinking/growing
+  // confusingly.
+  const assetClassOptions = useMemo(() => {
+    const classes = new Set<string>()
+    for (const t of rawAnalyst) if (t.market?.asset_class) classes.add(t.market.asset_class)
+    for (const t of rawPatterns) if (t.asset_class) classes.add(t.asset_class)
+    for (const t of rawAi) if (t.asset_class) classes.add(t.asset_class)
+    return [...classes].sort().map(c => ({ value: c, label: c }))
+  }, [rawAnalyst, rawPatterns, rawAi])
+
+  // Market options are symbols, not market_ids -- pattern_trades/ai_trades carry no
+  // market_id at all (only actual_trades does, via the market join), so filters.marketIds
+  // holds symbols uniformly across all three types here, same as PatternsTab.tsx/
+  // AiSignalsTab.tsx. Narrowed by selected asset classes.
+  const marketOptions = useMemo(() => {
+    const bySymbol = new Map<string, string>()
+    for (const t of rawAnalyst) if (t.market?.symbol && !bySymbol.has(t.market.symbol)) bySymbol.set(t.market.symbol, t.market.asset_class ?? '')
+    for (const t of rawPatterns) if (t.symbol && !bySymbol.has(t.symbol)) bySymbol.set(t.symbol, t.asset_class ?? '')
+    for (const t of rawAi) if (t.symbol && !bySymbol.has(t.symbol)) bySymbol.set(t.symbol, t.asset_class ?? '')
+    const symbols = filters.assetClasses.length === 0
+      ? [...bySymbol.keys()]
+      : [...bySymbol.entries()].filter(([, ac]) => filters.assetClasses.includes(ac)).map(([sym]) => sym)
+    return symbols.sort().map(sym => ({ value: sym, label: sym }))
+  }, [rawAnalyst, rawPatterns, rawAi, filters.assetClasses])
+
+  // Labelled via the `analysts` prop (threaded through from AnalyticsPage.tsx, which
+  // already has the full list from its own server parent) -- falls back to the raw
+  // analyst_id for any id present in the trade data but missing from that list, same
+  // defensive convention as AnalyticsPage.tsx's own analystNameById lookups. Analyst-only:
+  // patterns/ai have no analyst_id concept.
+  const analystOptions = useMemo(() => {
+    const nameById = new Map(analysts.map(a => [a.analyst_id, a.display_name]))
+    const ids = [...new Set(rawAnalyst.map(t => t.analyst_id))].sort()
+    return ids.map(id => ({ value: id, label: nameById.get(id) ?? id }))
+  }, [rawAnalyst, analysts])
+
+  const analystOn = filters.signalTypes.length === 0 || filters.signalTypes.includes('analyst')
+  const patternsOn = filters.signalTypes.length === 0 || filters.signalTypes.includes('patterns')
+  const aiOn = filters.signalTypes.length === 0 || filters.signalTypes.includes('ai')
+
+  // Analyst/Trigger Status only apply to the Analyst subset (patterns/ai have no
+  // analyst_id, and their own `triggered`-equivalent concepts are out of scope here per
+  // the task). Session only has real effect on Analyst rows too -- actual_trades has a
+  // genuine `session` column, but pattern_trades/ai_trades don't (see the Pattern/AI tabs'
+  // own identical notes), so filters.sessions is applied here and nowhere else below.
+  const filteredAnalystRows = useMemo(() => rawAnalyst.filter(t => {
+    const d = t.published_at.slice(0, 10)
+    if (d < dateRange.start || d > dateRange.end) return false
+    if (filters.analystIds.length > 0 && !filters.analystIds.includes(t.analyst_id)) return false
+    if (filters.assetClasses.length > 0 && (!t.market?.asset_class || !filters.assetClasses.includes(t.market.asset_class))) return false
+    if (filters.marketIds.length > 0 && (!t.market?.symbol || !filters.marketIds.includes(t.market.symbol))) return false
+    if (filters.directions.length > 0 && (!t.direction || !filters.directions.includes(t.direction))) return false
+    if (filters.sessions.length > 0 && !filters.sessions.includes(t.session ?? '')) return false
+    if (filters.triggerStatus === 'TRIGGERED' && !t.triggered) return false
+    if (filters.triggerStatus === 'NOT_TRIGGERED' && t.triggered) return false
+    return true
+  }), [rawAnalyst, filters, dateRange])
+
+  const filteredPatternRows = useMemo(() => rawPatterns.filter(t => {
+    const d = t.published_at.slice(0, 10)
+    if (d < dateRange.start || d > dateRange.end) return false
+    if (filters.assetClasses.length > 0 && (!t.asset_class || !filters.assetClasses.includes(t.asset_class))) return false
+    if (filters.marketIds.length > 0 && (!t.symbol || !filters.marketIds.includes(t.symbol))) return false
+    if (filters.directions.length > 0 && (!t.direction || !filters.directions.includes(t.direction))) return false
+    return true
+  }), [rawPatterns, filters, dateRange])
+
+  const filteredAiRows = useMemo(() => rawAi.filter(t => {
+    const d = t.published_at.slice(0, 10)
+    if (d < dateRange.start || d > dateRange.end) return false
+    if (filters.assetClasses.length > 0 && (!t.asset_class || !filters.assetClasses.includes(t.asset_class))) return false
+    if (filters.marketIds.length > 0 && (!t.symbol || !filters.marketIds.includes(t.symbol))) return false
+    if (filters.directions.length > 0 && (!t.direction || !filters.directions.includes(t.direction))) return false
+    return true
+  }), [rawAi, filters, dateRange])
+
+  const aiDeduped = useMemo(() => filteredAiRows.filter(t => !t.is_reiteration), [filteredAiRows])
+  const aiReiterations = filteredAiRows.length - aiDeduped.length
+
+  // Deselecting a signal type (the toggle buttons below) zeroes its EnrichedSignal array
+  // entirely -- that one change then naturally propagates everywhere a type's signals
+  // feed into: the Signal Output strip, the Performance Comparison row (also explicitly
+  // hidden below), the equity curve (mergeCumulativeSeries never gets a point for that
+  // type, so its line simply doesn't appear), and every pooled breakdown (By Asset
+  // Class/Day/Month/Year/Top Markets/Key Callouts) -- "narrow all three signal types
+  // simultaneously" from the task's own framing, not just the two sections it names by
+  // example.
+  const analystSignals: EnrichedSignal[] = useMemo(() => !analystOn ? [] : filteredAnalystRows.map(t => ({
+    date: t.published_at.slice(0, 10), rr: t.result_r ?? null,
+    assetClass: t.market?.asset_class ?? null, symbol: t.market?.symbol ?? null,
+  })), [filteredAnalystRows, analystOn])
+
+  const patternSignals: EnrichedSignal[] = useMemo(() => !patternsOn ? [] : filteredPatternRows.map(t => ({
+    date: t.published_at.slice(0, 10),
+    rr: t.status !== null && PATTERN_OUTCOME_STATUSES.has(t.status) && t.rr !== null ? t.rr : null,
+    assetClass: t.asset_class ?? null, symbol: t.symbol ?? null,
+  })), [filteredPatternRows, patternsOn])
+
+  const aiSignals: EnrichedSignal[] = useMemo(() => !aiOn ? [] : aiDeduped.map(t => ({
+    date: t.published_at.slice(0, 10),
+    rr: t.status !== null && AI_OUTCOME_STATUSES.has(t.status) && t.rr !== null ? t.rr : null,
+    assetClass: t.asset_class ?? null, symbol: t.symbol ?? null,
+  })), [aiDeduped, aiOn])
+
+  const analystData = useMemo(
+    () => buildSignalTypeData(analystSignals, analystOn ? filteredAnalystRows.length : 0),
+    [analystSignals, filteredAnalystRows, analystOn]
+  )
+  const patternsData = useMemo(
+    () => buildSignalTypeData(patternSignals, patternsOn ? filteredPatternRows.length : 0),
+    [patternSignals, filteredPatternRows, patternsOn]
+  )
+  const aiData = useMemo(
+    () => buildSignalTypeData(aiSignals, aiOn ? filteredAiRows.length : 0),
+    [aiSignals, filteredAiRows, aiOn]
+  )
+
+  const cumulativeR = useMemo(
+    () => mergeCumulativeSeries(analystData.cumulativeR, patternsData.cumulativeR, aiData.cumulativeR),
+    [analystData, patternsData, aiData]
+  )
+  const normalisedCumulative = useMemo(() => mergeCumulativeSeries(
+    toIndexedCumulative(analystData.cumulativeR), toIndexedCumulative(patternsData.cumulativeR), toIndexedCumulative(aiData.cumulativeR),
+  ), [analystData, patternsData, aiData])
+
+  const byAssetClass = useMemo(
+    () => buildAssetClassBreakdown(analystSignals, patternSignals, aiSignals),
+    [analystSignals, patternSignals, aiSignals]
+  )
+  const byDayOfWeek = useMemo(
+    () => buildDayOfWeekBreakdown(analystSignals, patternSignals, aiSignals),
+    [analystSignals, patternSignals, aiSignals]
+  )
+  const byMonth = useMemo(
+    () => buildMonthBreakdown(analystSignals, patternSignals, aiSignals),
+    [analystSignals, patternSignals, aiSignals]
+  )
+  const byYear = useMemo(
+    () => buildYearGrid(analystSignals, patternSignals, aiSignals),
+    [analystSignals, patternSignals, aiSignals]
+  )
+  const topMarkets = useMemo(
+    () => buildTopMarkets(analystSignals, patternSignals, aiSignals, 20),
+    [analystSignals, patternSignals, aiSignals]
+  )
+
+  const typeData: Record<SignalTypeKey, SignalTypeData> = useMemo(
+    () => ({ analyst: analystData, patterns: patternsData, ai: aiData }),
+    [analystData, patternsData, aiData]
+  )
+
+  // Pooled payout ratio/break-even win rate across whichever signal types are currently
+  // selected -- totalPublished is irrelevant here (only summary.payoutRatio/
+  // breakEvenWinRate are read), so 0 is passed rather than recomputing a real figure.
+  const combinedSummary = useMemo(
+    () => buildSignalTypeData([...analystSignals, ...patternSignals, ...aiSignals], 0).summary,
+    [analystSignals, patternSignals, aiSignals]
+  )
+
+  // Only rows for selected signal types render (empty filters.signalTypes = all three) --
+  // the task's own explicit requirement for this table.
+  const visibleTypes = useMemo(
+    () => TYPE_ORDER.filter(key => filters.signalTypes.length === 0 || filters.signalTypes.includes(key)),
+    [filters.signalTypes]
+  )
+
+  const callouts = useMemo(() => buildKeyCallouts(typeData), [typeData])
 
   // Computed live from each type's own firstSignalDate rather than hardcoded -- the
   // task's own example wording ("Analyst Signals: Jan 2017, ...") happens to match
   // today's real data, but asserting fixed dates here would silently go stale (or wrong)
   // the moment the underlying history changes.
   const indexCaption = useMemo(() => {
-    if (!data) return ''
     const parts = TYPE_ORDER.map(key => {
-      const first = data[key].summary.firstSignalDate
+      const first = typeData[key].summary.firstSignalDate
       return `${TYPE_LABELS[key]}: ${first ? monthYear(first) : 'no data yet'}`
     })
     return `All series rebased to 100 at start. A value of 150 = +50% relative growth from inception. ${parts.join(', ')}.`
-  }, [data])
+  }, [typeData])
 
   const maxAbsYearR = useMemo(() => {
-    if (!data) return 0
-    const values = data.byYear.flatMap(row => [row.analyst, row.pattern, row.ai]).filter((v): v is number => v !== null).map(Math.abs)
+    const values = byYear.flatMap(row => [row.analyst, row.pattern, row.ai]).filter((v): v is number => v !== null).map(Math.abs)
     return values.length > 0 ? Math.max(...values) : 0
-  }, [data])
+  }, [byYear])
+
+  // Toggle one signal type on/off. filters.signalTypes: [] means "all three" -- there's
+  // no separate representation for "zero selected", so a selection collapses back to []
+  // once all three end up on, and the last remaining active type can't be turned off
+  // (there would be nothing left to mean).
+  function toggleSignalType(key: SignalTypeKey) {
+    setFilters(f => {
+      const current = f.signalTypes.length === 0 ? [...TYPE_ORDER] : f.signalTypes
+      if (current.length === 1 && current.includes(key)) return f
+      const next = current.includes(key) ? current.filter(k => k !== key) : [...current, key]
+      return { ...f, signalTypes: next.length === TYPE_ORDER.length ? [] : next }
+    })
+  }
 
   return (
     <>
@@ -182,6 +412,98 @@ export function CombinedSignalsTab() {
         AiSignalsTab.tsx's own root return -- CombinedSignalsReportBuilder (and the print
         layout it mounts) renders as a sibling below, outside this div. */}
     <div className="space-y-6 print:hidden">
+      {/* Filter bar -- styled to match AnalyticsFilters.tsx (the Analyst Signals tab's
+          own filter card) for visual consistency across tabs. Signal Type is this tab's
+          own addition (no equivalent on the single-type tabs): toggle buttons, not a
+          MultiSelect, since there are only three fixed options and "which signal types
+          contribute" is this tab's headline control. */}
+      <div className="rounded-lg border border-border bg-card p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-medium">Filters</p>
+          {hasActiveCombinedFilters(filters) && (
+            <button onClick={() => setFilters(DEFAULT_COMBINED_FILTERS)} className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+              Clear all
+            </button>
+          )}
+        </div>
+
+        <div className="space-y-1.5">
+          <p className="text-xs text-muted-foreground">Date</p>
+          <div className="flex flex-wrap gap-1.5">
+            {DATE_PRESET_OPTIONS.map(opt => (
+              <button key={opt.key} onClick={() => setFilters(f => ({ ...f, datePreset: opt.key }))}
+                className={`text-xs px-2.5 py-1.5 rounded-md border transition-colors ${
+                  filters.datePreset === opt.key
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/50'
+                }`}>
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          {filters.datePreset === 'CUSTOM' && (
+            <div className="flex items-center gap-2 pt-1">
+              <input type="date" value={filters.customStart ?? ''} onChange={e => setFilters(f => ({ ...f, customStart: e.target.value || null }))}
+                className="text-xs px-2 py-1.5 rounded-md border border-border bg-background" />
+              <span className="text-xs text-muted-foreground">to</span>
+              <input type="date" value={filters.customEnd ?? ''} onChange={e => setFilters(f => ({ ...f, customEnd: e.target.value || null }))}
+                className="text-xs px-2 py-1.5 rounded-md border border-border bg-background" />
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-1.5">
+          <p className="text-xs text-muted-foreground">Signal Type</p>
+          <div className="flex flex-wrap gap-1.5">
+            {TYPE_ORDER.map(key => {
+              const active = filters.signalTypes.length === 0 || filters.signalTypes.includes(key)
+              return (
+                <button key={key} onClick={() => toggleSignalType(key)}
+                  className={`text-xs px-2.5 py-1.5 rounded-md border transition-colors ${
+                    active
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/50'
+                  }`}>
+                  {TYPE_LABELS[key]}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-2">
+          <MultiSelect label="Asset Class" options={assetClassOptions} selected={filters.assetClasses}
+            onChange={v => setFilters(f => ({ ...f, assetClasses: v, marketIds: [] }))} placeholder="All classes" />
+          <MultiSelect label="Market" options={marketOptions} selected={filters.marketIds}
+            onChange={v => setFilters(f => ({ ...f, marketIds: v }))} placeholder="All markets" />
+        </div>
+
+        <div className="border-t border-border pt-3">
+          <button onClick={() => setMoreOpen(!moreOpen)} className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+            {moreOpen ? '▲ Fewer filters' : '▼ More filters'}
+          </button>
+          {moreOpen && (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 mt-3">
+              <MultiSelect label="Direction" options={DIRECTION_OPTIONS} selected={filters.directions}
+                onChange={v => setFilters(f => ({ ...f, directions: v }))} placeholder="Both" />
+              <MultiSelect label="Session" options={SESSION_OPTIONS} selected={filters.sessions}
+                onChange={v => setFilters(f => ({ ...f, sessions: v }))} placeholder="All sessions" />
+              <MultiSelect label="Analyst (internal only)" options={analystOptions} selected={filters.analystIds}
+                onChange={v => setFilters(f => ({ ...f, analystIds: v }))} placeholder="All analysts" />
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Trigger Status (Analyst only)</p>
+                <select value={filters.triggerStatus} onChange={e => setFilters(f => ({ ...f, triggerStatus: e.target.value as CombinedFilterState['triggerStatus'] }))}
+                  className="w-full text-xs px-2 py-2 rounded-md border border-border bg-background">
+                  <option value="ALL">All</option>
+                  <option value="TRIGGERED">Triggered</option>
+                  <option value="NOT_TRIGGERED">Not Triggered / Expired</option>
+                </select>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 p-4">
           <p className="text-sm text-red-700">{error}</p>
@@ -192,34 +514,34 @@ export function CombinedSignalsTab() {
         <div className="rounded-lg border border-border p-12 text-center">
           <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
         </div>
-      ) : data && (
+      ) : (
         <div className="space-y-6">
           {/* Signal output strip */}
           <div className="flex items-start justify-between gap-4">
             <div className="grid grow grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-              <SummaryTile label="Analyst Signals" data={data.analyst} />
-              <SummaryTile label="Pattern Signals" data={data.patterns} />
-              <SummaryTile label="AI Signals" data={data.ai} />
+              <SummaryTile label="Analyst Signals" data={analystData} />
+              <SummaryTile label="Pattern Signals" data={patternsData} />
+              <SummaryTile label="AI Signals" data={aiData} />
               <div className="rounded-lg border border-border bg-card p-4 space-y-1">
                 <div className="flex items-center gap-1">
                   <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Payout Ratio</p>
-                  <Tooltip content="Average winning trade R divided by average losing trade R. A ratio above 1.0 means winners are larger than losers on average.">
+                  <Tooltip content={PAYOUT_RATIO_TOOLTIP}>
                     <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-muted-foreground/40 text-muted-foreground/60 text-[9px] cursor-default select-none leading-none">i</span>
                   </Tooltip>
                 </div>
                 <p className="text-2xl font-semibold tabular-nums">
-                  {data.combined.summary.payoutRatio != null ? data.combined.summary.payoutRatio.toFixed(2) : '—'}
+                  {combinedSummary.payoutRatio != null ? combinedSummary.payoutRatio.toFixed(2) : '—'}
                 </p>
               </div>
               <div className="rounded-lg border border-border bg-card p-4 space-y-1">
                 <div className="flex items-center gap-1">
                   <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Break-Even Win Rate</p>
-                  <Tooltip content="The minimum win rate needed to break even given the current payout ratio. Calculated as 1 ÷ (1 + Payout Ratio).">
+                  <Tooltip content={BREAK_EVEN_WIN_RATE_TOOLTIP}>
                     <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-muted-foreground/40 text-muted-foreground/60 text-[9px] cursor-default select-none leading-none">i</span>
                   </Tooltip>
                 </div>
                 <p className="text-2xl font-semibold tabular-nums">
-                  {data.combined.summary.breakEvenWinRate != null ? formatPercent(data.combined.summary.breakEvenWinRate) : '—'}
+                  {combinedSummary.breakEvenWinRate != null ? formatPercent(combinedSummary.breakEvenWinRate) : '—'}
                 </p>
               </div>
             </div>
@@ -235,7 +557,7 @@ export function CombinedSignalsTab() {
               (deduplicated for AI), so the AI row's own "Total Signals" number won't
               match the sample size behind its other columns. That's the deliberate
               tradeoff: a comparable headline count across rows, at the cost of one row's
-              internal consistency. */}
+              internal consistency. Only rows for the selected Signal Types render. */}
           <div className="space-y-2">
             <p className="text-xs font-medium text-muted-foreground print:uppercase print:tracking-wide">Performance Comparison</p>
             <div className="rounded-lg border border-border overflow-hidden overflow-x-auto">
@@ -257,15 +579,15 @@ export function CombinedSignalsTab() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {TYPE_ORDER.map(key => {
-                    const d = data[key]
+                  {visibleTypes.map(key => {
+                    const d = typeData[key]
                     return (
                       <tr key={key} className="hover:bg-muted/30 transition-colors">
                         <td className="px-4 py-2.5 font-medium whitespace-nowrap">{TYPE_LABELS[key]}</td>
                         <td className="px-4 py-2.5 tabular-nums text-muted-foreground whitespace-nowrap">
                           {d.summary.totalPublished.toLocaleString()}
-                          {key === 'ai' && data.aiReiterations > 0 && (
-                            <span className="text-[11px] text-muted-foreground/70"> (of which {data.aiReiterations.toLocaleString()} reiterations)</span>
+                          {key === 'ai' && aiReiterations > 0 && (
+                            <span className="text-[11px] text-muted-foreground/70"> (of which {aiReiterations.toLocaleString()} reiterations)</span>
                           )}
                         </td>
                         <td className="px-4 py-2.5 tabular-nums whitespace-nowrap">{formatPercent(d.summary.winRate)}</td>
@@ -288,7 +610,7 @@ export function CombinedSignalsTab() {
           </div>
 
           {/* Normalised equity curves -- replaces the old raw-R 3-line chart */}
-          <CombinedCumulativeChart data={data.combined.normalisedCumulative} caption={indexCaption} />
+          <CombinedCumulativeChart data={normalisedCumulative} caption={indexCaption} />
 
           {/* By Asset Class */}
           <div className="space-y-2">
@@ -303,9 +625,9 @@ export function CombinedSignalsTab() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {data.byAssetClass.length === 0 ? (
+                  {byAssetClass.length === 0 ? (
                     <tr><td colSpan={6} className="px-4 py-6 text-center text-xs text-muted-foreground">No data.</td></tr>
-                  ) : data.byAssetClass.map(row => (
+                  ) : byAssetClass.map(row => (
                     <tr key={row.assetClass} className="hover:bg-muted/30 transition-colors">
                       <td className="px-4 py-2.5 font-medium whitespace-nowrap">{row.assetClass}</td>
                       <td className="px-4 py-2.5 tabular-nums text-muted-foreground whitespace-nowrap">{formatR(row.analystR)}</td>
@@ -324,18 +646,18 @@ export function CombinedSignalsTab() {
           <div className="space-y-2">
             <SignalsByPeriodChart
               title="Average R by Day of Week — all signal types combined"
-              data={data.byDayOfWeek.map(r => ({ key: r.day, avgR: r.avgR }))}
+              data={byDayOfWeek.map(r => ({ key: r.day, avgR: r.avgR }))}
             />
-            <PeriodTable firstColumnLabel="Day" rows={data.byDayOfWeek.map(r => ({ key: r.day, trades: r.trades, winRate: r.winRate, avgR: r.avgR }))} />
+            <PeriodTable firstColumnLabel="Day" rows={byDayOfWeek.map(r => ({ key: r.day, trades: r.trades, winRate: r.winRate, avgR: r.avgR }))} />
           </div>
 
           {/* By Month of Year */}
           <div className="space-y-2">
             <SignalsByPeriodChart
               title="Average R by Month of Year — all signal types combined"
-              data={data.byMonth.map(r => ({ key: r.month, avgR: r.avgR }))}
+              data={byMonth.map(r => ({ key: r.month, avgR: r.avgR }))}
             />
-            <PeriodTable firstColumnLabel="Month" rows={data.byMonth.map(r => ({ key: r.month, trades: r.trades, winRate: r.winRate, avgR: r.avgR }))} />
+            <PeriodTable firstColumnLabel="Month" rows={byMonth.map(r => ({ key: r.month, trades: r.trades, winRate: r.winRate, avgR: r.avgR }))} />
           </div>
 
           {/* Year-by-year heat map -- plain Tailwind-shaded table, no charting library */}
@@ -351,7 +673,7 @@ export function CombinedSignalsTab() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {data.byYear.map(row => {
+                  {byYear.map(row => {
                     const combinedValues = [row.analyst, row.pattern, row.ai].filter((v): v is number => v !== null)
                     const combinedTotal = combinedValues.length > 0 ? round2(combinedValues.reduce((a, b) => a + b, 0)) : null
                     return (
@@ -386,9 +708,9 @@ export function CombinedSignalsTab() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {data.topMarkets.length === 0 ? (
+                  {topMarkets.length === 0 ? (
                     <tr><td colSpan={7} className="px-4 py-6 text-center text-xs text-muted-foreground">No data.</td></tr>
-                  ) : data.topMarkets.map(row => (
+                  ) : topMarkets.map(row => (
                     <tr key={row.symbol} className="hover:bg-muted/30 transition-colors">
                       <td className="px-4 py-2.5 font-medium whitespace-nowrap">{row.symbol}</td>
                       <td className="px-4 py-2.5 tabular-nums text-muted-foreground whitespace-nowrap">{row.analystR !== null ? formatR(row.analystR) : '—'}</td>
@@ -422,10 +744,10 @@ export function CombinedSignalsTab() {
       )}
     </div>
 
-    {reportOpen && data && (
+    {reportOpen && (
       <CombinedSignalsReportBuilder
-        analyst={data.analyst} patterns={data.patterns} ai={data.ai}
-        cumulativeR={data.combined.cumulativeR}
+        analyst={analystData} patterns={patternsData} ai={aiData}
+        cumulativeR={cumulativeR}
         onClose={() => setReportOpen(false)}
       />
     )}
