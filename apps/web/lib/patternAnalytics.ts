@@ -43,6 +43,8 @@ export interface PatternSummary {
   triggerRate: number | null
   winRate: number | null
   avgR: number | null
+  payoutRatio: number | null
+  breakEvenWinRate: number | null
   byFamily: PatternBreakdownRow[]
   byGranularity: PatternBreakdownRow[]
   byAssetClass: PatternBreakdownRow[]
@@ -86,6 +88,8 @@ interface Aggregate {
   totalR: number
   maxDD: number
   profitFactor: number | null
+  payoutRatio: number | null
+  breakEvenWinRate: number | null
 }
 
 function round2(n: number): number {
@@ -126,13 +130,26 @@ function aggregate(rows: PatternTradePoint[]): Aggregate {
   const avgR = rrValues.length > 0 ? rrValues.reduce((s, rr) => s + rr, 0) / rrValues.length : null
   const totalR = round2(rrValues.reduce((s, rr) => s + rr, 0))
 
-  const gains = rrValues.filter(rr => rr > 0).reduce((s, rr) => s + rr, 0)
-  const losses = rrValues.filter(rr => rr < 0).reduce((s, rr) => s + rr, 0)
+  const winRRs = rrValues.filter(rr => rr > 0)
+  const lossRRs = rrValues.filter(rr => rr < 0)
+  const gains = winRRs.reduce((s, rr) => s + rr, 0)
+  const losses = lossRRs.reduce((s, rr) => s + rr, 0)
   const profitFactor = losses !== 0 ? round2(gains / Math.abs(losses)) : null
+
+  let payoutRatio: number | null = null
+  let breakEvenWinRate: number | null = null
+  if (winRRs.length > 0 && lossRRs.length > 0) {
+    const avgWin = gains / winRRs.length
+    const avgLoss = Math.abs(losses / lossRRs.length)
+    if (avgLoss > 0) {
+      payoutRatio = round2(avgWin / avgLoss)
+      breakEvenWinRate = round2(1 / (1 + payoutRatio))
+    }
+  }
 
   const maxDD = sequenceDrawdown(closedRows)
 
-  return { count, triggerPct, winPct, avgR, totalR, maxDD, profitFactor }
+  return { count, triggerPct, winPct, avgR, totalR, maxDD, profitFactor, payoutRatio, breakEvenWinRate }
 }
 
 function groupBy(rows: PatternTradePoint[], field: 'family' | 'granularity' | 'asset_class'): Map<string, PatternTradePoint[]> {
@@ -173,6 +190,8 @@ export function computePatternSummary(rows: PatternTradePoint[]): PatternSummary
     triggerRate: overall.triggerPct,
     winRate: overall.winPct,
     avgR: overall.avgR,
+    payoutRatio: overall.payoutRatio,
+    breakEvenWinRate: overall.breakEvenWinRate,
     byFamily,
     byGranularity,
     byAssetClass,

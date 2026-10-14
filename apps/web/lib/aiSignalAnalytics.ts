@@ -55,6 +55,8 @@ export interface AiSignalSummary {
   winRate: number | null
   avgR: number | null
   cumulativeR: number
+  payoutRatio: number | null
+  breakEvenWinRate: number | null
   byConfidence: AiBreakdownRow[]
   byAssetClass: AiBreakdownRow[]
   byDirection: AiBreakdownRow[]
@@ -82,6 +84,8 @@ interface Aggregate {
   totalR: number
   maxDD: number
   profitFactor: number | null
+  payoutRatio: number | null
+  breakEvenWinRate: number | null
 }
 
 function round2(n: number): number {
@@ -118,6 +122,7 @@ function aggregate(rows: AiTradePoint[]): Aggregate {
   // misrepresented as a real zero result.
   const withOutcome = rows.filter(r => r.status !== null && STATUSES_WITH_OUTCOME.includes(r.status) && r.rr !== null)
   const wins = withOutcome.filter(r => (r.rr ?? 0) > 0)
+  const losers = withOutcome.filter(r => (r.rr ?? 0) < 0)
   const winPct = withOutcome.length > 0 ? wins.length / withOutcome.length : null
 
   const rrValues = withOutcome
@@ -126,13 +131,26 @@ function aggregate(rows: AiTradePoint[]): Aggregate {
   const avgR = rrValues.length > 0 ? rrValues.reduce((s, rr) => s + rr, 0) / rrValues.length : null
   const totalR = round2(rrValues.reduce((s, rr) => s + rr, 0))
 
-  const gains = rrValues.filter(rr => rr > 0).reduce((s, rr) => s + rr, 0)
-  const losses = rrValues.filter(rr => rr < 0).reduce((s, rr) => s + rr, 0)
+  const winRRs = wins.map(r => r.rr as number)
+  const lossRRs = losers.map(r => r.rr as number)
+  const gains = winRRs.reduce((s, rr) => s + rr, 0)
+  const losses = lossRRs.reduce((s, rr) => s + rr, 0)
   const profitFactor = losses !== 0 ? round2(gains / Math.abs(losses)) : null
+
+  let payoutRatio: number | null = null
+  let breakEvenWinRate: number | null = null
+  if (winRRs.length > 0 && lossRRs.length > 0) {
+    const avgWin = gains / winRRs.length
+    const avgLoss = Math.abs(losses / lossRRs.length)
+    if (avgLoss > 0) {
+      payoutRatio = round2(avgWin / avgLoss)
+      breakEvenWinRate = round2(1 / (1 + payoutRatio))
+    }
+  }
 
   const maxDD = sequenceDrawdown(withOutcome)
 
-  return { count, triggerPct, winPct, avgR, totalR, maxDD, profitFactor }
+  return { count, triggerPct, winPct, avgR, totalR, maxDD, profitFactor, payoutRatio, breakEvenWinRate }
 }
 
 function groupByConfidence(rows: AiTradePoint[]): Map<number, AiTradePoint[]> {
@@ -192,6 +210,8 @@ export function computeAiSignalSummary(allRows: AiTradePoint[]): AiSignalSummary
     winRate: overall.winPct,
     avgR: overall.avgR,
     cumulativeR: overall.totalR,
+    payoutRatio: overall.payoutRatio,
+    breakEvenWinRate: overall.breakEvenWinRate,
     byConfidence,
     byAssetClass,
     byDirection,

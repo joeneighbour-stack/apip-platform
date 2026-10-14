@@ -363,7 +363,7 @@ export function AiSignalsTab() {
           computeAiSignalSummary() filters is_reiteration out internally); Max Drawdown
           is computed client-side from the same deduplicated trade series. */}
       <div className="flex items-start justify-between gap-4">
-        <div className="grid grow grid-cols-2 gap-3 sm:grid-cols-5">
+                <div className="grid grow grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
           <div className="rounded-lg border border-border bg-card p-4 space-y-1">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Total Signals</p>
             <p className="text-2xl font-semibold tabular-nums">{summary ? summary.uniqueSignals.toLocaleString() : '—'}</p>
@@ -391,9 +391,21 @@ export function AiSignalsTab() {
               {summary ? formatR(cumulativeRTotal) : '—'}
             </p>
           </div>
-          <div className="rounded-lg border border-border bg-card p-4 space-y-1">
+                    <div className="rounded-lg border border-border bg-card p-4 space-y-1">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Max Drawdown</p>
             <p className="text-2xl font-semibold tabular-nums text-red-700">{dedupTrades.length > 0 ? formatR(maxDD) : '—'}</p>
+          </div>
+          <div className="rounded-lg border border-border bg-card p-4 space-y-1">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Payout Ratio</p>
+            <p className="text-2xl font-semibold tabular-nums">
+              {summary?.payoutRatio != null ? summary.payoutRatio.toFixed(2) : '—'}
+            </p>
+          </div>
+          <div className="rounded-lg border border-border bg-card p-4 space-y-1">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Break-Even Win Rate</p>
+            <p className="text-2xl font-semibold tabular-nums">
+              {summary?.breakEvenWinRate != null ? formatPercent(summary.breakEvenWinRate) : '—'}
+            </p>
           </div>
         </div>
         <button onClick={() => setReportOpen(true)} disabled={!summary || trades.length === 0}
