@@ -133,6 +133,7 @@ export async function GET(req: Request) {
       symbol: t.symbol ?? null,
     }))
 
+  console.log('[combined] analyst signals sample:', analystSignals.slice(0, 3).map(s => ({ rr: s.rr })), 'withRR:', analystSignals.filter(s => s.rr !== null).length, 'of', analystSignals.length)
   const analyst: SignalTypeData = buildSignalTypeData(analystSignals, analystRows.length)
   const patterns: SignalTypeData = buildSignalTypeData(patternSignals, patternRows.length)
   const ai: SignalTypeData = buildSignalTypeData(aiSignals, aiRows.length)
