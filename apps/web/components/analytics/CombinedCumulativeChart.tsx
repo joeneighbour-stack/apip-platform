@@ -2,6 +2,9 @@
 import { LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts'
 import type { CombinedCumulativePoint } from '@/lib/combinedSignalAnalytics'
 import { formatDateShort } from '@/lib/format'
+import { downsample } from '@/lib/chartUtils'
+
+const MAX_CHART_POINTS = 500
 
 interface Props {
   data: CombinedCumulativePoint[]
@@ -34,6 +37,7 @@ export function CombinedCumulativeChart({ data, caption }: Props) {
       </div>
     )
   }
+  const chartData = downsample(data, MAX_CHART_POINTS)
   return (
     <div className="rounded-lg border border-border bg-card p-4 space-y-3">
       <p className="text-xs font-medium text-muted-foreground print:uppercase print:tracking-wide">
@@ -41,9 +45,9 @@ export function CombinedCumulativeChart({ data, caption }: Props) {
       </p>
       <div className="h-72 print:h-64">
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+          <LineChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
             <XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false}
-              tickFormatter={formatDateShort} interval={Math.max(0, Math.floor(data.length / 10))} />
+              tickFormatter={formatDateShort} interval={Math.max(0, Math.floor(chartData.length / 10))} />
             <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false}
               tickFormatter={v => indexed ? `${v}` : `${v > 0 ? '+' : ''}${v}R`} width={indexed ? 36 : 44} />
             <Tooltip

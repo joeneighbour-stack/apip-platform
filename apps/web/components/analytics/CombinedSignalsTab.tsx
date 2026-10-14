@@ -15,7 +15,7 @@ import { CombinedCumulativeChart, SignalsByPeriodChart } from './LazyCharts'
 import { Tooltip } from '@/components/ui/Tooltip'
 import { MultiSelect } from '@/components/ui/MultiSelect'
 import { type CombinedFilterState, DEFAULT_COMBINED_FILTERS, hasActiveCombinedFilters } from '@/lib/analyticsFilters'
-import { DATE_PRESET_OPTIONS, resolveDateRange, SINCE_INCEPTION_FLOOR } from '@/lib/dateRanges'
+import { DATE_PRESET_OPTIONS, resolveDateRange } from '@/lib/dateRanges'
 
 // Combined Signals reports use their own component (CombinedSignalsReportBuilder), not
 // PatternReportBuilder/AiSignalsReportBuilder -- see that file's own header comment.
@@ -178,33 +178,63 @@ export function CombinedSignalsTab({ analysts }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [reportOpen, setReportOpen] = useState(false)
 
-  // No raw "/api/analytics/combined/raw" endpoint exists -- /api/analytics/combined only
-  // returns pre-aggregated SignalTypeData, which can't be re-filtered client-side. Fetched
-  // once, unfiltered, from the same three raw endpoints PatternsTab.tsx/AiSignalsTab.tsx
-  // and AnalyticsPage.tsx already use; every filter below runs client-side against this
-  // set, same fetch-once/filter-client-side approach as those tabs.
-  useEffect(() => {
-    setLoading(true)
-    setError(null)
-    Promise.all([
-      fetch(`/api/analytics/trades?from=${SINCE_INCEPTION_FLOOR}`).then(r => r.json()),
-      fetch('/api/analytics/patterns').then(r => r.json()),
-      fetch('/api/analytics/ai-signals').then(r => r.json()),
-    ]).then(([analystRows, patternsRes, aiRes]) => {
-      if (!Array.isArray(analystRows)) { setError('Failed to load analyst signal data.'); return }
-      if (patternsRes && 'error' in patternsRes) { setError(patternsRes.error); return }
-      if (aiRes && 'error' in aiRes) { setError(aiRes.error); return }
-      setRawAnalyst(analystRows)
-      setRawPatterns(patternsRes.trades)
-      setRawAi(aiRes.trades)
-    }).catch(() => setError('Failed to load combined signal data.'))
-      .finally(() => setLoading(false))
-  }, [])
-
   const dateRange = useMemo(
     () => resolveDateRange(filters.datePreset, filters.customStart ?? undefined, filters.customEnd ?? undefined),
     [filters.datePreset, filters.customStart, filters.customEnd]
   )
+
+  // No raw "/api/analytics/combined/raw" endpoint exists -- /api/analytics/combined only
+  // returns pre-aggregated SignalTypeData, which can't be re-filtered client-side. Fetches
+  // from the same three raw endpoints PatternsTab.tsx/AiSignalsTab.tsx and
+  // AnalyticsPage.tsx already use, scoped server-side to the current date window via
+  // ?from= (all three routes already support it) -- refetches whenever dateRange.start
+  // changes, i.e. only when a filter actually moves the date window, not on every filter
+  // change (asset class/market/direction/etc. stay client-side-only, same as before).
+  // No ?to= is sent, so a CUSTOM range's end boundary is still enforced by the client-side
+  // filter predicates below, which remain a safety net for that and for dateRange.start
+  // itself (the server-side from= already guarantees every returned row satisfies it).
+  // The three requests run in parallel (Promise.all) with per-source error isolation --
+  // one source returning an error/unexpected shape degrades only that source's data to
+  // [] rather than discarding all three, even ones that already succeeded.
+  useEffect(() => {
+    setLoading(true)
+    setError(null)
+
+    const failures: string[] = []
+
+    async function fetchRows<T>(label: string, url: string, extract: (json: any) => T[] | null): Promise<T[]> {
+      try {
+        const res = await fetch(url)
+        const json = await res.json()
+        const rows = extract(json)
+        if (rows === null) {
+          console.error(`[combined] ${label} fetch returned an unexpected response:`, json)
+          failures.push(label)
+          return []
+        }
+        return rows
+      } catch (err) {
+        console.error(`[combined] ${label} fetch failed:`, err)
+        failures.push(label)
+        return []
+      }
+    }
+
+    const from = dateRange.start
+
+    Promise.all([
+      fetchRows<RawAnalystRow>('Analyst', `/api/analytics/trades?from=${from}`, json => Array.isArray(json) ? json : null),
+      fetchRows<PatternTradePoint>('Patterns', `/api/analytics/patterns?from=${from}`, json => (json && !('error' in json) && Array.isArray(json.trades)) ? json.trades : null),
+      fetchRows<AiTradePoint>('AI Signals', `/api/analytics/ai-signals?from=${from}`, json => (json && !('error' in json) && Array.isArray(json.trades)) ? json.trades : null),
+    ]).then(([analystRows, patternRows, aiRows]) => {
+      setRawAnalyst(analystRows)
+      setRawPatterns(patternRows)
+      setRawAi(aiRows)
+      if (failures.length > 0) {
+        setError(`Failed to load: ${failures.join(', ')}. Showing data from the remaining source${failures.length < 3 ? 's' : ''} only.`)
+      }
+    }).finally(() => setLoading(false))
+  }, [dateRange.start])
 
   // Filter option lists are derived from the full unfiltered fetch, not the
   // currently-filtered subset -- same reasoning as PatternsTab.tsx/AiSignalsTab.tsx:

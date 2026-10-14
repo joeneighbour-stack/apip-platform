@@ -2,6 +2,9 @@
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 import type { CumulativePoint } from '@/lib/metrics'
 import { formatDateShort } from '@/lib/format'
+import { downsample } from '@/lib/chartUtils'
+
+const MAX_CHART_POINTS = 500
 
 interface Props {
   data: CumulativePoint[]
@@ -24,14 +27,15 @@ export function CumulativePerformanceChart({ data, height }: Props) {
       </div>
     )
   }
+  const chartData = downsample(data, MAX_CHART_POINTS)
   return (
     <div className="rounded-lg border border-border bg-card p-4 space-y-3">
       <p className="text-xs font-medium text-muted-foreground print:uppercase print:tracking-wide">Cumulative Performance (R)</p>
       <div className={height ? undefined : 'h-64 print:h-56'} style={height ? { height } : undefined}>
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={data} syncId="performance" margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+          <LineChart data={chartData} syncId="performance" margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
             <XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false}
-              tickFormatter={formatDateShort} interval={Math.max(0, Math.floor(data.length / 10))} />
+              tickFormatter={formatDateShort} interval={Math.max(0, Math.floor(chartData.length / 10))} />
             <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false}
               tickFormatter={v => `${v > 0 ? '+' : ''}${v}R`} width={44} />
             <Tooltip
