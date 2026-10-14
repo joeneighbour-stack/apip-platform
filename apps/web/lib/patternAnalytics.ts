@@ -10,6 +10,12 @@ export interface PatternTradeRow {
   status: string | null
   triggered: boolean | null
   rr: number | null
+  // Close timestamp, only added so PatternReportBuilder.tsx's Trade Statistics section
+  // can compute an Avg Duration figure the same way lib/metrics.ts's
+  // computeTradeStatistics() already does for actual_trades (duration = exit_date -
+  // published_at). pattern_trades (migrations/065_pattern_trades.sql) has no column
+  // literally named `closed_at` -- `exit_date` is its equivalent.
+  exit_date: string | null
 }
 
 // Lightweight trade-level record returned alongside the aggregated PatternSummary so
