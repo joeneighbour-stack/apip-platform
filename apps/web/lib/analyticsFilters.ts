@@ -62,6 +62,93 @@ export function hasActiveFilters(filters: AnalyticsFilterState): boolean {
     filters.directions.length > 0 || filters.sessions.length > 0 || filters.triggerStatus !== 'ALL'
 }
 
+export interface PatternFilterState {
+  datePreset: DatePresetKey
+  customStart: string | null
+  customEnd: string | null
+  patternTypes: string[]        // e.g. 'Double Top', 'Head & Shoulders' etc — populated from data
+  assetClasses: string[]
+  marketIds: string[]
+  directions: string[]
+  sessions: string[]
+}
+
+export const DEFAULT_PATTERN_FILTERS: PatternFilterState = {
+  datePreset: 'SINCE_INCEPTION',
+  customStart: null,
+  customEnd: null,
+  patternTypes: [],
+  assetClasses: [],
+  marketIds: [],
+  directions: [],
+  sessions: [],
+}
+
+export function hasActivePatternFilters(filters: PatternFilterState): boolean {
+  return filters.datePreset !== DEFAULT_PATTERN_FILTERS.datePreset ||
+    filters.patternTypes.length > 0 || filters.assetClasses.length > 0 || filters.marketIds.length > 0 ||
+    filters.directions.length > 0 || filters.sessions.length > 0
+}
+
+export interface AiFilterState {
+  datePreset: DatePresetKey
+  customStart: string | null
+  customEnd: string | null
+  assetClasses: string[]
+  marketIds: string[]
+  directions: string[]
+  sessions: string[]
+}
+
+export const DEFAULT_AI_FILTERS: AiFilterState = {
+  datePreset: 'SINCE_INCEPTION',
+  customStart: null,
+  customEnd: null,
+  assetClasses: [],
+  marketIds: [],
+  directions: [],
+  sessions: [],
+}
+
+export function hasActiveAiFilters(filters: AiFilterState): boolean {
+  return filters.datePreset !== DEFAULT_AI_FILTERS.datePreset ||
+    filters.assetClasses.length > 0 || filters.marketIds.length > 0 ||
+    filters.directions.length > 0 || filters.sessions.length > 0
+}
+
+export interface CombinedFilterState {
+  datePreset: DatePresetKey
+  customStart: string | null
+  customEnd: string | null
+  signalTypes: ('analyst' | 'patterns' | 'ai')[]   // empty = all three
+  analystIds: string[]
+  assetClasses: string[]
+  marketIds: string[]
+  directions: string[]
+  sessions: string[]
+  triggerStatus: TriggerStatusFilter
+}
+
+export const DEFAULT_COMBINED_FILTERS: CombinedFilterState = {
+  datePreset: 'SINCE_INCEPTION',
+  customStart: null,
+  customEnd: null,
+  signalTypes: [],
+  analystIds: [],
+  assetClasses: [],
+  marketIds: [],
+  directions: [],
+  sessions: [],
+  triggerStatus: 'ALL',
+}
+
+export function hasActiveCombinedFilters(filters: CombinedFilterState): boolean {
+  return filters.datePreset !== DEFAULT_COMBINED_FILTERS.datePreset ||
+    filters.signalTypes.length > 0 || filters.analystIds.length > 0 || filters.assetClasses.length > 0 ||
+    filters.marketIds.length > 0 || filters.directions.length > 0 || filters.sessions.length > 0 ||
+    filters.triggerStatus !== 'ALL'
+}
+
 // This tab now only ever loads actual_trades (human-analyst trades) -- Pattern and AI
 // signals live in their own separate tabs/tables (pattern_trades/ai_trades) with their
 // own fetch and filter UI, so there's no "product/strategy" dimension left to filter by
