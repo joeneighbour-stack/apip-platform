@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 import {
   buildSignalTypeData, mergeCumulativeSeries, normaliseToIndex,
   buildAssetClassBreakdown, buildDayOfWeekBreakdown, buildMonthBreakdown, buildYearGrid, buildTopMarkets,
-  type EnrichedSignal, type SignalTypeData, type CumulativeRPoint,
+  type EnrichedSignal, type SignalTypeData,
 } from '@/lib/combinedSignalAnalytics'
 
 const ALLOWED_ROLES = ['MANAGER', 'ADMIN', 'EXECUTIVE']
@@ -35,6 +35,8 @@ async function fetchAll<T>(
   }
   return all
 }
+
+type CumulativeRPoint = { date: string; cumulativeR: number }
 
 function toIndexedCumulative(points: CumulativeRPoint[]): CumulativeRPoint[] {
   return normaliseToIndex(points.map(p => ({ date: p.date, value: p.cumulativeR })))
@@ -94,9 +96,6 @@ export async function GET(req: Request) {
     ),
   ])
 
-  // Build an in-memory market lookup -- avoids relying on PostgREST embed resolution
-  // which was silently returning null for the market:market_id(...) alias on the admin
-  // client. Markets table is small (~100 rows) so fetching it whole is cheap.
   type MarketRow = { market_id: string; symbol: string; asset_class: string }
   const marketMap = new Map<string, MarketRow>(
     ((marketsResult.data ?? []) as MarketRow[]).map(m => [m.market_id, m])
@@ -134,15 +133,9 @@ export async function GET(req: Request) {
       symbol: t.symbol ?? null,
     }))
 
-  const analyst: SignalTypeData = buildSignalTypeData(
-    analystSignals, analystRows.length, analystRows.filter(t => t.triggered === true).length
-  )
-  const patterns: SignalTypeData = buildSignalTypeData(
-    patternSignals, patternRows.length, patternRows.filter(t => t.triggered === true).length
-  )
-  const ai: SignalTypeData = buildSignalTypeData(
-    aiSignals, aiRows.length, aiRows.filter(t => t.triggered === true).length
-  )
+  const analyst: SignalTypeData = buildSignalTypeData(analystSignals, analystRows.length)
+  const patterns: SignalTypeData = buildSignalTypeData(patternSignals, patternRows.length)
+  const ai: SignalTypeData = buildSignalTypeData(aiSignals, aiRows.length)
 
   const byAssetClass = buildAssetClassBreakdown(analystSignals, patternSignals, aiSignals)
   const byDayOfWeek = buildDayOfWeekBreakdown(analystSignals, patternSignals, aiSignals)
