@@ -24,8 +24,8 @@ const METRIC_DEFS: { key: MetricKey; label: string; tip: string }[] = [
 function formatValue(key: MetricKey, value: number | null): string {
   if (key === 'totalR' || key === 'maxDrawdown' || key === 'avgR') return formatR(value)
   if (key === 'winRate' || key === 'breakEvenWinRate') return formatPercent(value)
-  if (key === 'triggeredCount') return value === null ? '—' : value.toLocaleString()
-  return value === null ? '—' : value.toFixed(2)
+  if (key === 'triggeredCount') return value == null ? '—' : value.toLocaleString()
+  return value == null ? '—' : value.toFixed(2)
 }
 
 function formatDelta(key: MetricKey, delta: number): string {
@@ -41,9 +41,9 @@ export function PerformanceKpiStrip({ summary, previous, comparisonLabel }: Prop
       {METRIC_DEFS.map(def => {
         const value = summary[def.key]
         const prevValue = previous ? previous[def.key] : null
-        const delta = value !== null && prevValue !== null ? value - prevValue : null
+        const delta = value != null && prevValue != null ? value - prevValue : null
         const isMagnitude = def.key === 'triggeredCount' || def.key === 'profitFactor' || def.key === 'payoutRatio'
-        const colourValue = def.key === 'breakEvenWinRate' ? (value !== null ? -value : null) : value
+        const colourValue = def.key === 'breakEvenWinRate' ? (value != null ? -value : null) : value
         return (
           <div key={def.key} className="rounded-lg border border-border bg-card p-4">
             <Tooltip content={def.tip}>
@@ -54,7 +54,7 @@ export function PerformanceKpiStrip({ summary, previous, comparisonLabel }: Prop
             <p className={`text-xl font-semibold tabular-nums mt-1 ${isMagnitude ? '' : positivityClass(colourValue)}`}>
               {formatValue(def.key, value)}
             </p>
-            {delta !== null && (
+            {delta != null && (
               <p className={`text-xs mt-1 tabular-nums ${positivityClass(def.key === 'breakEvenWinRate' ? -delta : delta)}`}>
                 {formatDelta(def.key, delta)} {comparisonLabel}
               </p>
