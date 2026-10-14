@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import dynamic from 'next/dynamic'
 import {
-  type SignalTypeData, type CombinedAssetClassRow, type DayOfWeekRow, type MonthOfYearRow,
+  type SignalTypeData, type SignalTypeSummary, type CombinedAssetClassRow, type DayOfWeekRow, type MonthOfYearRow,
   type CombinedYearRow, type CombinedMarketRow,
   TYPE_LABELS, TYPE_ORDER, buildKeyCallouts, monthYear,
 } from '@/lib/combinedSignalAnalytics'
@@ -33,6 +33,7 @@ interface CombinedApiResponse {
   byYear: CombinedYearRow[]
   topMarkets: CombinedMarketRow[]
   combined: {
+    summary: SignalTypeSummary
     cumulativeR: { date: string; analyst: number | null; patterns: number | null; ai: number | null }[]
     normalisedCumulative: { date: string; analyst: number | null; patterns: number | null; ai: number | null }[]
   }
@@ -179,10 +180,22 @@ export function CombinedSignalsTab() {
         <div className="space-y-6">
           {/* Signal output strip */}
           <div className="flex items-start justify-between gap-4">
-            <div className="grid grow grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="grid grow grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-5">
               <SummaryTile label="Analyst Signals" data={data.analyst} />
               <SummaryTile label="Pattern Signals" data={data.patterns} />
               <SummaryTile label="AI Signals" data={data.ai} />
+              <div className="rounded-lg border border-border bg-card p-4 space-y-1">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Payout Ratio</p>
+                <p className="text-2xl font-semibold tabular-nums">
+                  {data.combined.summary.payoutRatio != null ? data.combined.summary.payoutRatio.toFixed(2) : '—'}
+                </p>
+              </div>
+              <div className="rounded-lg border border-border bg-card p-4 space-y-1">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Break-Even Win Rate</p>
+                <p className="text-2xl font-semibold tabular-nums">
+                  {data.combined.summary.breakEvenWinRate != null ? formatPercent(data.combined.summary.breakEvenWinRate) : '—'}
+                </p>
+              </div>
             </div>
             <button onClick={() => setReportOpen(true)}
               className="shrink-0 text-xs px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">

@@ -154,6 +154,10 @@ export async function GET(req: Request) {
     byYear,
     topMarkets,
     combined: {
+      summary: buildSignalTypeData(
+        [...analystSignals, ...patternSignals, ...aiSignals],
+        analystRows.length + patternRows.length + aiRows.length,
+      ).summary,
       cumulativeR: mergeCumulativeSeries(analyst.cumulativeR, patterns.cumulativeR, ai.cumulativeR),
       normalisedCumulative: mergeCumulativeSeries(
         toIndexedCumulative(analyst.cumulativeR),

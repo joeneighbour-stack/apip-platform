@@ -41,6 +41,8 @@ export interface SignalTypeSummary {
   avgR: number
   totalR: number
   maxDrawdownR: number
+  payoutRatio: number | null
+  breakEvenWinRate: number | null
   firstSignalDate: string | null
   lastSignalDate: string | null
 }
@@ -254,6 +256,19 @@ export function buildSignalTypeData(
   const wins = withOutcome.filter(s => s.rr! > 0).length
   const outcomeCount = withOutcome.length
 
+  const winRRs = withOutcome.filter(s => s.rr! > 0).map(s => s.rr!)
+  const lossRRs = withOutcome.filter(s => s.rr! < 0).map(s => s.rr!)
+  let payoutRatio: number | null = null
+  let breakEvenWinRate: number | null = null
+  if (winRRs.length > 0 && lossRRs.length > 0) {
+    const avgWin = winRRs.reduce((s, rr) => s + rr, 0) / winRRs.length
+    const avgLoss = Math.abs(lossRRs.reduce((s, rr) => s + rr, 0) / lossRRs.length)
+    if (avgLoss > 0) {
+      payoutRatio = Math.round((avgWin / avgLoss) * 100) / 100
+      breakEvenWinRate = Math.round((1 / (1 + payoutRatio)) * 100) / 100
+    }
+  }
+
   const dated = signals.filter(s => s.date).map(s => s.date).sort()
   const firstSignalDate = dated[0] ?? null
   const lastSignalDate = dated[dated.length - 1] ?? null
@@ -266,6 +281,8 @@ export function buildSignalTypeData(
       avgR: outcomeCount > 0 ? Math.round((totalR / outcomeCount) * 100) / 100 : 0,
       totalR: Math.round(totalR * 100) / 100,
       maxDrawdownR: maxDrawdown(signals),
+      payoutRatio,
+      breakEvenWinRate,
       firstSignalDate,
       lastSignalDate,
     },
@@ -374,7 +391,7 @@ export function buildTopMarkets(
     }
   })
 
-  return rows.sort((a, b) => b.trades - a.trades).slice(0, topN)
+  return rows.sort((a, b) => (b.combinedTotalR ?? 0) - (a.combinedTotalR ?? 0)).slice(0, topN)
 }
 
 // ─── buildYearGrid ────────────────────────────────────────────────────────────
