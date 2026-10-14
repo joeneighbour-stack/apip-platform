@@ -61,9 +61,14 @@ function round2(n: number): number {
 // Pattern trades use `rr` directly as the result (not result_r) and "triggered" is a
 // boolean column (not a separate status value) -- this adapts a pattern trade into the
 // minimal shape lib/metrics.ts's series/window functions actually read at runtime
-// (result_r, triggered, published_at, symbol, asset_class). It is deliberately NOT a
-// full MetricsTrade (no analyst_id/market_id/direction/session/source_system -- those
-// don't exist for pattern trades and none of the functions used below touch them).
+// (result_r, triggered, published_at, symbol, asset_class, direction, closed_at). It is
+// deliberately NOT a full MetricsTrade (no analyst_id/market_id/session/source_system --
+// those don't exist for pattern trades and none of the functions used below touch them).
+// direction and closed_at (mapped from exit_date) were added on top of the original
+// minimal set specifically so PatternReportBuilder.tsx's report can show a Direction
+// column on its Best Performers table and an Avg Duration figure on its Trade
+// Statistics panel -- lib/metrics.ts's computeTradeStatistics() already reads
+// `closed_at` for exactly this purpose for actual_trades.
 function toAnalyticsTrade(t: PatternTradePoint) {
   return {
     result_r: t.triggered && t.rr !== null ? t.rr : null,
@@ -71,6 +76,8 @@ function toAnalyticsTrade(t: PatternTradePoint) {
     published_at: t.published_at,
     symbol: t.symbol ?? '',
     asset_class: t.asset_class ?? '',
+    direction: (t.direction ?? '') as 'BUY' | 'SELL',
+    closed_at: t.triggered ? t.exit_date : null,
   }
 }
 
@@ -512,8 +519,7 @@ export function PatternsTab() {
 
     {reportOpen && (
       <PatternReportBuilder
-        trades={analyticsTrades} summary={summary}
-        familyRows={familyRows} granularityRows={granularityRows} assetClassRows={assetClassRows}
+        trades={analyticsTrades} summary={summary} assetClassRows={assetClassRows}
         onClose={() => setReportOpen(false)}
       />
     )}

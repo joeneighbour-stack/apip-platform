@@ -1,8 +1,12 @@
 'use client'
 import { useState } from 'react'
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import {
   type MetricsTrade, type AttributionRow, type CumulativePoint, type DrawdownPoint,
-  totalR, maxDrawdown, cumulativeSeries, drawdownSeries, rankAttribution,
+  type RollingRow, type MonthlyMatrixRow, type DistributionBucket,
+  totalR, cumulativeSeries, drawdownSeries, rankAttribution, rollingWindows, monthlyMatrix,
+  triggeredTrades, profitFactor, computeTradeStatistics, resultDistribution, bestWorstTrades,
+  MIN_TRADES_FOR_MARKET_RANKING,
 } from '@/lib/metrics'
 import type { AiSignalSummary } from '@/lib/aiSignalAnalytics'
 import type { ReportSafeUniverse } from '@/lib/reportSanitiser'
@@ -12,6 +16,10 @@ import { ReportHeader } from './report/ReportHeader'
 import { ReportFooter } from './report/ReportFooter'
 import { CumulativePerformanceChart } from './CumulativePerformanceChart'
 import { DrawdownChart } from './DrawdownChart'
+import { RollingPerformanceTable } from './RollingPerformanceTable'
+import { MonthlyPerformanceMatrix } from './MonthlyPerformanceMatrix'
+import { AttributionTable } from './AttributionTable'
+import { ContributionChart } from './ContributionChart'
 
 // Same reasoning as PatternReportBuilder.tsx's own header comment: a deliberately
 // separate component from ReportBuilder/PerformanceReport (the internal analyst report)
@@ -20,6 +28,15 @@ import { DrawdownChart } from './DrawdownChart'
 // structure (no section toggles, no title/subtitle editing, no presets). Sharing one
 // generic report component across all three would make it too easy for a future edit to
 // one to leak into the others.
+//
+// Unlike PatternReportBuilder (which keeps its own hand-rolled print-only tables),
+// several pages below render the SAME dashboard components AiSignalsTab.tsx itself uses
+// (RollingPerformanceTable/MonthlyPerformanceMatrix/AttributionTable/ContributionChart)
+// -- the same approach report/PerformanceReport.tsx takes for the internal analyst
+// report. Those components already carry print:-prefixed overrides (print:uppercase,
+// print:bg-black/[0.03], print:text-[7.5pt], etc.), so they are proven to render
+// correctly both on screen and under window.print() without a parallel print-only
+// reimplementation.
 
 interface Props {
   trades: MetricsTrade[]
@@ -31,14 +48,16 @@ interface Props {
   onClose: () => void
 }
 
-const MIN_TRADES_FOR_MARKET_TABLE = 10
-
 function round2(n: number): number {
   return Math.round(n * 100) / 100
 }
 
 function monthYear(dateStr: string): string {
   return new Date(dateStr + 'T12:00:00Z').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+}
+
+function formatDuration(hours: number | null): string {
+  return hours !== null ? `${hours.toFixed(1)}h` : '—'
 }
 
 // Same honesty rule as PatternReportBuilder.tsx's buildTimeframeInsight: the actual
@@ -61,22 +80,48 @@ function buildConfidenceInsight(rows: AttributionRow[]): string {
   return 'Confidence 25 and confidence 100 signals show no meaningful difference in average R in this dataset.'
 }
 
+// Explicit, deterministic y-axis ticks rather than Recharts' auto-generated ones --
+// copied from TradeStatistics.tsx's own computeDistributionTicks (not exported there)
+// so the Winner/Loser Distribution chart below matches its visual behaviour exactly.
+function computeDistributionTicks(bins: DistributionBucket[]): number[] {
+  const maxCount = bins.reduce((m, b) => Math.max(m, b.count), 0)
+  const tickInterval = Math.max(1, Math.ceil(maxCount / 5 / 1000) * 1000)
+  const ticks = Array.from(
+    { length: Math.ceil(maxCount / tickInterval) + 1 },
+    (_, i) => i * tickInterval
+  )
+  const isAscending = ticks.every((t, i) => i === 0 || t > ticks[i - 1]!)
+  if (!isAscending) throw new Error('Chart y-axis ticks are not ascending')
+  return ticks
+}
+
 interface AiReportData {
   periodLabel: string
   sinceLabel: string
   marketCount: number
   assetClassCount: number
   totalSignals: number
+  totalTrades: number
   winRate: number | null
   avgR: number | null
   totalR: number
-  maxDrawdown: number
+  profitFactor: number | null
+  avgWinner: number | null
+  avgLoser: number | null
+  avgDurationHours: number | null
+  triggerRate: number | null
+  payoutRatio: number | null
+  breakEvenWinRate: number | null
   cumulative: CumulativePoint[]
   drawdown: DrawdownPoint[]
-  confidenceRows: AttributionRow[]
+  rolling: RollingRow[]
+  monthly: MonthlyMatrixRow[]
   assetClassRows: AttributionRow[]
   directionRows: AttributionRow[]
-  topMarkets: AttributionRow[]
+  distribution: DistributionBucket[]
+  bestTrades: MetricsTrade[]
+  bestMarkets: AttributionRow[]
+  worstMarkets: AttributionRow[]
   confidenceInsight: string
   summarySentence: string
   dataThroughDate: string
@@ -102,9 +147,25 @@ function buildReportData(
   const visibleAssetClassRows = assetClassRows.filter(r => r.trades > 0)
   const visibleDirectionRows = directionRows.filter(r => r.trades > 0)
 
-  const topMarkets = rankAttribution(byMarket, MIN_TRADES_FOR_MARKET_TABLE, 'best', 10)
+  const bestMarkets = rankAttribution(byMarket, MIN_TRADES_FOR_MARKET_RANKING, 'best', 10)
+  const worstMarkets = rankAttribution(byMarket, MIN_TRADES_FOR_MARKET_RANKING, 'worst', 10)
+  const { best: bestTrades } = bestWorstTrades(trades, 10)
 
-  // Not summary's own status-gated cumulativeR: lib/metrics.ts's totalR() sums every
+  // computeTradeStatistics() normally derives generated/triggered/expired/triggerRate
+  // from a MetricsPublication[] this component has no access to (AiSignalsTab.tsx's
+  // toAnalyticsTrade adapter produces a bare MetricsTrade-shaped object with no
+  // publication history attached) -- passed an empty array here deliberately so only its
+  // trades-only fields (avgWinner/avgLoser/avgDurationHours) are used below. Trigger Rate
+  // is shown from summary.triggerRate instead (lib/aiSignalAnalytics.ts's own
+  // triggeredCount/count ratio over every signal, computed server-side from the real
+  // ai_trades rows before the adapter drops fields), not from this call's own
+  // (meaningless, always-null-with-an-empty-pubs-array) triggerRate field. avgDurationHours
+  // depends on a `closed_at` timestamp the adapter also never sets, so it will reliably
+  // render as "—" below via the existing null-sentinel convention (not fabricated).
+  const tradeStats = computeTradeStatistics(trades, [])
+  const pf = profitFactor(trades)
+
+  // Not summary's own status-gated winRate/avgR: lib/metrics.ts's totalR() sums every
   // triggeredTrades() row (== every trade with a recorded result, per AiSignalsTab.tsx's
   // toAnalyticsTrade adapter -- it sets both triggered and result_r from rr !== null), so
   // this figure matches what the live dashboard's own KPI tile and rolling table show.
@@ -121,47 +182,106 @@ function buildReportData(
     marketCount,
     assetClassCount,
     totalSignals: summary.totalSignals,
+    totalTrades: triggeredTrades(trades).length,
     winRate: summary.winRate,
     avgR: summary.avgR,
     totalR: totalRValue,
-    maxDrawdown: maxDrawdown(trades).value,
+    profitFactor: pf !== null ? round2(pf) : null,
+    avgWinner: tradeStats.avgWinner,
+    avgLoser: tradeStats.avgLoser,
+    avgDurationHours: tradeStats.avgDurationHours,
+    triggerRate: summary.triggerRate,
+    payoutRatio: summary.payoutRatio,
+    breakEvenWinRate: summary.breakEvenWinRate,
     cumulative: cumulativeSeries(trades),
     drawdown: drawdownSeries(trades),
-    confidenceRows: visibleConfidenceRows,
+    rolling: rollingWindows(trades, new Date()),
+    monthly: monthlyMatrix(trades),
     assetClassRows: visibleAssetClassRows,
     directionRows: visibleDirectionRows,
-    topMarkets,
+    distribution: resultDistribution(trades),
+    bestTrades,
+    bestMarkets,
+    worstMarkets,
     confidenceInsight: buildConfidenceInsight(visibleConfidenceRows),
     summarySentence,
     dataThroughDate: latest ? formatDate(latest) : 'N/A',
   }
 }
 
-function BreakdownTable({ rows, firstColumnLabel, showTotalR }: {
-  rows: AttributionRow[]
-  firstColumnLabel: string
-  showTotalR?: boolean
-}) {
-  if (rows.length === 0) return <p className="text-[8.5pt] text-black/50">No data for the current filters.</p>
+// Page 4's Trade Statistics panel -- a fixed, specific field list (Avg Winner R, Avg
+// Loser R, Profit Factor, BE Win Rate, Payout Ratio, Avg Duration, Trigger Rate) that
+// doesn't match the dashboard's own TradeStatistics.tsx ROWS set (which has no Payout
+// Ratio/BE Win Rate rows at all, and includes generated/triggered/expired counts this
+// component has no publication data for) -- built as its own small table instead of
+// reusing that component, matching this file's historical BreakdownTable conventions.
+interface TradeStatRow { label: string; value: string }
+
+function TradeStatsTable({ rows }: { rows: TradeStatRow[] }) {
   return (
-    <table className="w-full text-[8.5pt]" style={{ borderCollapse: 'collapse' }}>
+    <table className="w-full text-[9pt]" style={{ borderCollapse: 'collapse' }}>
+      <tbody>
+        {rows.map(r => (
+          <tr key={r.label} className="border-b border-black/10">
+            <td className="py-1.5 pr-2 text-black/70">{r.label}</td>
+            <td className="py-1.5 pl-2 text-right tabular-nums font-medium">{r.value}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+// Same chart as TradeStatistics.tsx's own Winner/Loser Distribution bar chart (bucketed
+// via lib/metrics.ts's resultDistribution()), reimplemented inline here rather than
+// reused as a whole component since TradeStatsTable above already covers this page's
+// stats panel with a different field list.
+function WinLossDistributionChart({ distribution }: { distribution: DistributionBucket[] }) {
+  if (distribution.length === 0) return <p className="text-[8.5pt] text-black/50">No data for the current filters.</p>
+  const ticks = computeDistributionTicks(distribution)
+  return (
+    <div style={{ height: 170 }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={distribution} margin={{ top: 4, right: 8, left: 0, bottom: 20 }}>
+          <XAxis dataKey="label" tick={{ fontSize: 8 }} axisLine={false} tickLine={false}
+            interval={0} angle={-40} textAnchor="end" height={36} />
+          <YAxis tick={{ fontSize: 9 }} axisLine={false} tickLine={false} allowDecimals={false} width={26}
+            ticks={ticks} domain={[0, ticks[ticks.length - 1]]} />
+          <Tooltip formatter={(v: any) => [v, 'Trades']} contentStyle={{ fontSize: 10 }} />
+          <Bar dataKey="count" radius={[2, 2, 0, 0]} isAnimationActive={false}>
+            {distribution.map((b, i) => <Cell key={i} fill={b.rangeStart >= 0 ? '#22c55e' : '#ef4444'} />)}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+// Best Performers table -- deliberately 3 columns (Date, Market, Result R), not 4.
+// AiSignalsTab.tsx's toAnalyticsTrade adapter builds a bare object literal with only
+// {result_r, triggered, published_at, symbol, asset_class, asset_name} -- `direction`
+// (and analyst_id/market_id/session/source_system/closed_at) are never set on these
+// trades despite the MetricsTrade type claiming them as required fields (the adapter
+// casts via `as unknown as MetricsTrade[]`). Showing a Direction column here would
+// render blank/undefined for every single row, which is worse than omitting it -- see
+// final report for this call-out.
+function BestTradesTable({ trades }: { trades: MetricsTrade[] }) {
+  if (trades.length === 0) return <p className="text-[8.5pt] text-black/50">No data for the current filters.</p>
+  return (
+    <table className="w-full text-[9pt]" style={{ borderCollapse: 'collapse' }}>
       <thead>
         <tr className="border-b border-black/20 text-left">
-          <th className="py-1 pr-2 font-semibold">{firstColumnLabel}</th>
-          <th className="py-1 px-2 font-semibold text-right">Signals</th>
-          <th className="py-1 px-2 font-semibold text-right">Win Rate</th>
-          <th className="py-1 px-2 font-semibold text-right">Avg R</th>
-          {showTotalR && <th className="py-1 pl-2 font-semibold text-right">Total R</th>}
+          <th className="py-1.5 pr-2 font-semibold">Date</th>
+          <th className="py-1.5 px-2 font-semibold">Market</th>
+          <th className="py-1.5 pl-2 font-semibold text-right">Result R</th>
         </tr>
       </thead>
       <tbody>
-        {rows.map(row => (
-          <tr key={row.key} className="border-b border-black/10">
-            <td className="py-1 pr-2">{row.label}</td>
-            <td className="py-1 px-2 text-right tabular-nums">{row.trades.toLocaleString()}</td>
-            <td className="py-1 px-2 text-right tabular-nums">{formatPercent(row.winRate)}</td>
-            <td className="py-1 px-2 text-right tabular-nums">{formatR(row.avgR)}</td>
-            {showTotalR && <td className="py-1 pl-2 text-right tabular-nums">{formatR(row.totalR)}</td>}
+        {trades.map((t, i) => (
+          <tr key={i} className="border-b border-black/10">
+            <td className="py-1 pr-2">{formatDate(t.published_at.slice(0, 10))}</td>
+            <td className="py-1 px-2 font-medium">{t.symbol}</td>
+            <td className="py-1 pl-2 text-right tabular-nums">{formatR(t.result_r)}</td>
           </tr>
         ))}
       </tbody>
@@ -183,9 +303,22 @@ function AiSignalPerformanceReportView({ data }: { data: AiReportData }) {
     dataThrough: data.dataThroughDate,
   }
 
+  const statRows: TradeStatRow[] = [
+    { label: 'Avg Winner R', value: formatR(data.avgWinner) },
+    { label: 'Avg Loser R', value: formatR(data.avgLoser) },
+    { label: 'Profit Factor', value: data.profitFactor !== null ? data.profitFactor.toFixed(2) : '—' },
+    { label: 'BE Win Rate', value: formatPercent(data.breakEvenWinRate) },
+    { label: 'Payout Ratio', value: data.payoutRatio !== null ? data.payoutRatio.toFixed(2) : '—' },
+    { label: 'Avg Duration', value: formatDuration(data.avgDurationHours) },
+    { label: 'Trigger Rate', value: formatPercent(data.triggerRate) },
+  ]
+
   return (
     <div className="absolute -left-[9999px] top-0 print:static print:left-auto w-[210mm] print:w-auto bg-white text-black text-[10pt] leading-snug">
-      {/* PAGE 1 -- Cover & Executive Summary */}
+      {/* PAGE 1 -- Cover, Executive Summary (6 KPI tiles), Cumulative & Drawdown charts
+          side by side. Both charts get an explicit, reduced height (rather than their
+          live-dashboard defaults of h-64/h-32) so the pair fits on one A4 page next to
+          the summary content above them. */}
       <section className="break-after-page p-2">
         <ReportHeader universe={headerUniverse} />
         <p className="mt-1 mb-4 text-[9pt] font-medium border border-black/20 rounded px-3 py-2 bg-black/[0.03]">
@@ -194,83 +327,90 @@ function AiSignalPerformanceReportView({ data }: { data: AiReportData }) {
 
         <div className="mb-4">
           <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Executive Summary</h2>
-          <div className="grid grid-cols-5 gap-2 mb-3">
+          <div className="grid grid-cols-6 gap-2 mb-3">
             <div className="border border-black/15 rounded px-2.5 py-2">
-              <p className="text-[7.5pt] text-black/60">Total Signals</p>
-              <p className="text-[13pt] font-semibold tabular-nums">{data.totalSignals.toLocaleString()}</p>
+              <p className="text-[7.5pt] text-black/60">Total R</p>
+              <p className="text-[13pt] font-semibold tabular-nums">{formatR(data.totalR)}</p>
             </div>
             <div className="border border-black/15 rounded px-2.5 py-2">
               <p className="text-[7.5pt] text-black/60">Win Rate</p>
               <p className="text-[13pt] font-semibold tabular-nums">{formatPercent(data.winRate)}</p>
             </div>
             <div className="border border-black/15 rounded px-2.5 py-2">
-              <p className="text-[7.5pt] text-black/60">Avg R</p>
-              <p className="text-[13pt] font-semibold tabular-nums">{formatR(data.avgR)}</p>
+              <p className="text-[7.5pt] text-black/60">Profit Factor</p>
+              <p className="text-[13pt] font-semibold tabular-nums">{data.profitFactor !== null ? data.profitFactor.toFixed(2) : '—'}</p>
             </div>
             <div className="border border-black/15 rounded px-2.5 py-2">
-              <p className="text-[7.5pt] text-black/60">Total R</p>
-              <p className="text-[13pt] font-semibold tabular-nums">{formatR(data.totalR)}</p>
+              <p className="text-[7.5pt] text-black/60">Total Trades</p>
+              <p className="text-[13pt] font-semibold tabular-nums">{data.totalTrades.toLocaleString()}</p>
             </div>
             <div className="border border-black/15 rounded px-2.5 py-2">
-              <p className="text-[7.5pt] text-black/60">Max Drawdown R</p>
-              <p className="text-[13pt] font-semibold tabular-nums">{formatR(data.maxDrawdown)}</p>
+              <p className="text-[7.5pt] text-black/60">Avg Win</p>
+              <p className="text-[13pt] font-semibold tabular-nums">{formatR(data.avgWinner)}</p>
+            </div>
+            <div className="border border-black/15 rounded px-2.5 py-2">
+              <p className="text-[7.5pt] text-black/60">Avg Loss</p>
+              <p className="text-[13pt] font-semibold tabular-nums">{formatR(data.avgLoser)}</p>
             </div>
           </div>
-          <p className="text-[9pt] leading-relaxed">{data.summarySentence}</p>
+          <p className="text-[9pt] leading-relaxed mb-2">{data.summarySentence}</p>
+          <div className="border border-black/15 rounded px-3 py-2 bg-black/[0.03] text-[9pt]">
+            {data.confidenceInsight}
+          </div>
+        </div>
+
+        <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Cumulative Performance &amp; Drawdown (R)</h2>
+        <div className="grid grid-cols-2 gap-3">
+          <CumulativePerformanceChart data={data.cumulative} height={220} />
+          <DrawdownChart data={data.drawdown} height={220} />
         </div>
 
         <ReportFooter pageLabel="Page 1" />
       </section>
 
-      {/* PAGE 2 -- Cumulative & Drawdown Performance. Two charts stacked on one printed
-          page, so both get an explicit, reduced height (rather than their live-dashboard
-          defaults of h-64/h-32) to make sure both fit on one A4 page without overflow. */}
+      {/* PAGE 2 -- Consistency: Rolling Performance, Monthly Performance Matrix. Reuses
+          the exact dashboard components (not a print-only reimplementation), same as
+          report/PerformanceReport.tsx's own Page 2. */}
       <section className="break-after-page p-2">
-        <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Cumulative Performance (R)</h2>
-        <div className="mb-2"><CumulativePerformanceChart data={data.cumulative} height={220} /></div>
-        <p className="text-[8.5pt] text-black/70 mb-4">
-          Cumulative R measures the total return expressed as a multiple of initial risk across all closed signals.
-        </p>
-
-        <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Drawdown (R)</h2>
-        <div className="mb-2"><DrawdownChart data={data.drawdown} height={200} /></div>
-        <p className="text-[8.5pt] text-black/70">
-          Drawdown measures the decline from a cumulative-R peak to the lowest point reached before a new peak is set.
-        </p>
-
+        <div className="mb-4"><RollingPerformanceTable rows={data.rolling} /></div>
+        <MonthlyPerformanceMatrix rows={data.monthly} />
         <ReportFooter pageLabel="Page 2" />
       </section>
 
-      {/* PAGE 3 -- Signal Quality by Confidence, Asset Class & Direction, Top Markets.
-          Merged from two previously separate pages -- each was thin on its own (one
-          table and an insight box apiece), so they're combined onto a single page. */}
+      {/* PAGE 3 -- Performance by Asset Class & Direction, Contribution by Asset Class. */}
       <section className="break-after-page p-2">
-        <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Signal Quality by Confidence Score</h2>
-        <div className="mb-3">
-          <BreakdownTable rows={data.confidenceRows} firstColumnLabel="Confidence" showTotalR />
-        </div>
-        <div className="border border-black/15 rounded px-3 py-2 bg-black/[0.03] text-[9pt] mb-4">
-          {data.confidenceInsight}
-        </div>
-
         <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Performance by Asset Class &amp; Direction</h2>
         <div className="grid grid-cols-2 gap-4 mb-4">
-          <div>
-            <h3 className="text-[9pt] font-semibold mb-1">By Asset Class</h3>
-            <BreakdownTable rows={data.assetClassRows} firstColumnLabel="Asset Class" />
-          </div>
-          <div>
-            <h3 className="text-[9pt] font-semibold mb-1">By Direction</h3>
-            <BreakdownTable rows={data.directionRows} firstColumnLabel="Direction" />
-          </div>
+          <AttributionTable title="By Asset Class" rows={data.assetClassRows} entityLabel="Asset Classes" />
+          <AttributionTable title="By Direction" rows={data.directionRows} entityLabel="Directions" showMaxDD={false} />
         </div>
-
-        <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">
-          Top Performing Markets (min. {MIN_TRADES_FOR_MARKET_TABLE} signals)
-        </h2>
-        <BreakdownTable rows={data.topMarkets} firstColumnLabel="Market" showTotalR />
-
+        <ContributionChart title="Contribution by Asset Class" rows={data.assetClassRows} />
         <ReportFooter pageLabel="Page 3" />
+      </section>
+
+      {/* PAGE 4 -- Trade Statistics, Winner/Loser Distribution, Best Performers. */}
+      <section className="break-after-page p-2">
+        <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Trade Statistics</h2>
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <TradeStatsTable rows={statRows} />
+          <WinLossDistributionChart distribution={data.distribution} />
+        </div>
+        <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Best Performers</h2>
+        <BestTradesTable trades={data.bestTrades} />
+        <ReportFooter pageLabel="Page 4" />
+      </section>
+
+      {/* PAGE 5 -- Best & Worst Performing Markets (min MIN_TRADES_FOR_MARKET_RANKING
+          triggered trades), same ranking threshold and AttributionTable usage as
+          report/PerformanceReport.tsx's own Page 4. */}
+      <section className="break-after-page p-2">
+        <div className="space-y-4">
+          <AttributionTable title={`Best Performing Markets (min ${MIN_TRADES_FOR_MARKET_RANKING} trades)`}
+            rows={data.bestMarkets} entityLabel="Markets" showMaxDD={false} />
+          <AttributionTable title={`Worst Performing Markets (min ${MIN_TRADES_FOR_MARKET_RANKING} trades)`}
+            rows={data.worstMarkets} entityLabel="Markets" showMaxDD={false} />
+        </div>
+        <ReportFooter pageLabel="Page 5" />
       </section>
 
       {/* FINAL PAGE -- Methodology & Regulatory. FCA statement, disclaimer, sanctions
@@ -336,9 +476,9 @@ export function AiSignalsReportBuilder({ trades, summary, confidenceRows, assetC
         <div className="p-4 space-y-3 overflow-y-auto grow text-xs text-muted-foreground">
           <p>
             A fixed, client-ready summary of Acuity&rsquo;s AI signal performance: executive summary,
-            cumulative and drawdown performance, signal quality by confidence score, performance by
-            asset class and direction, and top performing markets -- reflecting the filters currently
-            applied on this tab.
+            cumulative and drawdown performance, rolling and monthly performance, performance by
+            asset class and direction, trade statistics, and best/worst performers and markets --
+            reflecting the filters currently applied on this tab.
           </p>
           <p>AI signals carry no analyst identity, so this report is safe to share externally.</p>
         </div>

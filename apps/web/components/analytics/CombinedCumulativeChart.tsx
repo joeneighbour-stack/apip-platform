@@ -15,6 +15,12 @@ interface Props {
   // existing usage passes raw (non-indexed) data and no caption, so it keeps working
   // unchanged.
   caption?: string
+  // Same override mechanism as CumulativePerformanceChart.tsx's/DrawdownChart.tsx's own
+  // `height` prop -- used when this chart is placed side-by-side with another chart (e.g.
+  // CombinedSignalsReportBuilder.tsx's equity-curve/drawdown pair) and the default h-72/
+  // print:h-64 wrapper would no longer leave room for both on one print row. Left
+  // undefined, the live dashboard's usage is unaffected.
+  height?: number
 }
 
 // Three lines sharing one axis -- mergeCumulativeSeries() (lib/combinedSignalAnalytics.ts)
@@ -27,7 +33,7 @@ const SERIES: { key: 'analyst' | 'patterns' | 'ai'; label: string; color: string
   { key: 'ai', label: 'AI Signals', color: '#8b5cf6' },
 ]
 
-export function CombinedCumulativeChart({ data, caption }: Props) {
+export function CombinedCumulativeChart({ data, caption, height }: Props) {
   const indexed = caption !== undefined
 
   if (data.length === 0) {
@@ -43,7 +49,7 @@ export function CombinedCumulativeChart({ data, caption }: Props) {
       <p className="text-xs font-medium text-muted-foreground print:uppercase print:tracking-wide">
         {indexed ? 'Normalised Equity Curves — Indexed (start = 100)' : 'Cumulative Performance by Signal Type (R)'}
       </p>
-      <div className="h-72 print:h-64">
+      <div className={height ? undefined : 'h-72 print:h-64'} style={height ? { height } : undefined}>
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
             <XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false}

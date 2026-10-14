@@ -6,11 +6,13 @@ import {
   TYPE_LABELS, TYPE_ORDER, buildKeyCallouts,
 } from '@/lib/combinedSignalAnalytics'
 import type { ReportSafeUniverse } from '@/lib/reportSanitiser'
+import type { DrawdownPoint } from '@/lib/metrics'
 import { COMPANY_NAME, FCA_REGULATORY_STATEMENT, DISCLAIMER_PARAGRAPHS, PAST_PERFORMANCE_WARNING } from '@/lib/compliance'
 import { formatR, formatPercent, formatDate } from '@/lib/format'
 import { ReportHeader } from './report/ReportHeader'
 import { ReportFooter } from './report/ReportFooter'
 import { CombinedCumulativeChart } from './CombinedCumulativeChart'
+import { DrawdownChart } from './DrawdownChart'
 
 // Same reasoning as PatternReportBuilder.tsx/AiSignalsReportBuilder.tsx's own header
 // comments: a deliberately separate component, not shared with the other two signal-type
@@ -27,7 +29,7 @@ interface Props {
   patterns: SignalTypeData
   ai: SignalTypeData
   normalisedCumulative: CombinedCumulativePoint[]   // rebased-to-100 series
-  cumulativeR: CombinedCumulativePoint[]             // raw R series (kept for callouts logic)
+  cumulativeR: CombinedCumulativePoint[]             // raw R series (callouts + combined drawdown)
   byAssetClass: CombinedAssetClassRow[]
   byDayOfWeek: DayOfWeekRow[]
   byMonth: MonthOfYearRow[]
@@ -49,12 +51,29 @@ function monthYear(dateStr: string): string {
   return new Date(dateStr + 'T12:00:00Z').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
 }
 
+// Combines whichever of analyst/patterns/ai are present (non-null) at a given date into a
+// single equity figure -- the same "sum whichever series are present" rule YearGridTable
+// already applies per-year -- then walks the combined series forward tracking a running
+// peak, exactly like lib/metrics.ts's own drawdownSeries(): drawdown = equity - peak, so
+// values are always <= 0 and DrawdownChart.tsx's existing "fill red below the zero
+// reference line" rendering plots it correctly with no changes to that component.
+function buildCombinedDrawdown(points: CombinedCumulativePoint[]): DrawdownPoint[] {
+  let peak = 0
+  return points.map(p => {
+    const values = [p.analyst, p.patterns, p.ai].filter((v): v is number => v !== null && v !== undefined)
+    const equity = values.length > 0 ? values.reduce((a, b) => a + b, 0) : 0
+    if (equity > peak) peak = equity
+    return { date: p.date, drawdown: round2(equity - peak) }
+  })
+}
+
 interface CombinedReportData {
   periodLabel: string
   dataThroughDate: string
   types: Record<SignalTypeKey, SignalTypeData>
   normalisedCumulative: CombinedCumulativePoint[]
   cumulativeR: CombinedCumulativePoint[]
+  combinedDrawdown: DrawdownPoint[]
   byAssetClass: CombinedAssetClassRow[]
   byDayOfWeek: DayOfWeekRow[]
   byMonth: MonthOfYearRow[]
@@ -94,6 +113,7 @@ function buildReportData(
     types,
     normalisedCumulative,
     cumulativeR,
+    combinedDrawdown: buildCombinedDrawdown(cumulativeR),
     byAssetClass,
     byDayOfWeek,
     byMonth,
@@ -139,6 +159,37 @@ function ComparisonTable({ types }: { types: Record<SignalTypeKey, SignalTypeDat
         })}
       </tbody>
     </table>
+  )
+}
+
+// Compact per-signal-type stats row requested below the Performance Comparison table.
+// SignalTypeSummary (lib/combinedSignalAnalytics.ts) does not carry avgWinner/avgLoser/
+// profitFactor as separate fields -- only payoutRatio and breakEvenWinRate are derived and
+// stored -- and this component only ever receives the pre-aggregated SignalTypeData, never
+// the raw per-signal rr values a profit-factor/avg-winner/avg-loser computation would need.
+// So this renders the two fields that genuinely exist, as a tile row (visually distinct
+// from, not a re-statement of, the table columns above) rather than inventing numbers or a
+// new prop.
+function TradeStatisticsRow({ types }: { types: Record<SignalTypeKey, SignalTypeData> }) {
+  return (
+    <div className="grid grid-cols-3 gap-2">
+      {TYPE_ORDER.map(key => {
+        const d = types[key].summary
+        return (
+          <div key={key} className="border border-black/15 rounded px-2.5 py-2">
+            <p className="text-[7.5pt] text-black/60 mb-1">{TYPE_LABELS[key]}</p>
+            <div className="flex items-center justify-between text-[9pt]">
+              <span className="text-black/60">Payout Ratio</span>
+              <span className="tabular-nums font-medium">{d.payoutRatio != null ? d.payoutRatio.toFixed(2) : '—'}</span>
+            </div>
+            <div className="flex items-center justify-between text-[9pt]">
+              <span className="text-black/60">BE Win Rate</span>
+              <span className="tabular-nums font-medium">{d.breakEvenWinRate != null ? formatPercent(d.breakEvenWinRate) : '—'}</span>
+            </div>
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
@@ -199,6 +250,69 @@ function YearGridTable({ rows }: { rows: CombinedYearRow[] }) {
             </tr>
           )
         })}
+      </tbody>
+    </table>
+  )
+}
+
+// Fixed, literal Tailwind class strings (never interpolated) so the production build's
+// content scanner can actually see them -- mirrors CombinedSignalsTab.tsx's own
+// yearCellClass()/POSITIVE_TIERS/NEGATIVE_TIERS pattern exactly (a dynamically-built class
+// name like `bg-green-500/${n}` would be invisible to Tailwind's scanner and silently
+// render unstyled).
+const POSITIVE_TIERS = ['bg-green-500/10', 'bg-green-500/20', 'bg-green-500/30', 'bg-green-500/45', 'bg-green-500/60']
+const NEGATIVE_TIERS = ['bg-red-500/10', 'bg-red-500/20', 'bg-red-500/30', 'bg-red-500/45', 'bg-red-500/60']
+
+function monthCellClass(value: number | null, maxAbs: number): string {
+  if (value === null || value === 0) return ''
+  const tiers = value > 0 ? POSITIVE_TIERS : NEGATIVE_TIERS
+  const ratio = maxAbs > 0 ? Math.min(Math.abs(value) / maxAbs, 1) : 0
+  const idx = Math.min(tiers.length - 1, Math.floor(ratio * tiers.length))
+  return tiers[idx]!
+}
+
+// byMonth (lib/combinedSignalAnalytics.ts's buildMonthBreakdown()) is a fixed 12-row
+// month-of-year breakdown aggregated across ALL years combined -- it carries no year
+// dimension at all, so a true year x month matrix (rows by year, columns Jan-Dec) cannot be
+// built from it without new data this component doesn't receive. This renders the closest
+// faithful alternative: months across, one row per metric, all years combined, colour-coded
+// by Avg R the same way the Year-by-Year table's own cells are.
+function MonthlyMatrixTable({ rows }: { rows: MonthOfYearRow[] }) {
+  if (rows.length === 0) return <p className="text-[8.5pt] text-black/50">No data for the current filters.</p>
+  const maxAbs = Math.max(0.01, ...rows.map(r => r.avgR !== null ? Math.abs(r.avgR) : 0))
+  return (
+    <table className="w-full text-[9pt]" style={{ borderCollapse: 'collapse' }}>
+      <thead>
+        <tr className="border-b border-black/20 text-left">
+          <th className="py-1 pr-2 font-semibold">Metric</th>
+          {rows.map(row => (
+            <th key={row.month} className="py-1 px-1 font-semibold text-right">{row.month.slice(0, 3)}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        <tr className="border-b border-black/10">
+          <td className="py-1 pr-2">Avg R</td>
+          {rows.map(row => (
+            <td key={row.month} className={`py-1 px-1 text-right tabular-nums ${monthCellClass(row.avgR, maxAbs)}`}>
+              {row.avgR !== null ? row.avgR.toFixed(2) : '—'}
+            </td>
+          ))}
+        </tr>
+        <tr className="border-b border-black/10">
+          <td className="py-1 pr-2">Win Rate</td>
+          {rows.map(row => (
+            <td key={row.month} className="py-1 px-1 text-right tabular-nums">
+              {row.winRate !== null ? formatPercent(row.winRate) : '—'}
+            </td>
+          ))}
+        </tr>
+        <tr className="border-b border-black/10">
+          <td className="py-1 pr-2">Trades</td>
+          {rows.map(row => (
+            <td key={row.month} className="py-1 px-1 text-right tabular-nums">{row.trades.toLocaleString()}</td>
+          ))}
+        </tr>
       </tbody>
     </table>
   )
@@ -281,28 +395,51 @@ function CombinedSignalsReportView({ data }: { data: CombinedReportData }) {
         <ReportFooter pageLabel="Page 1" />
       </section>
 
-      {/* PAGE 2 -- Performance Comparison + Normalised Equity Curves */}
+      {/* PAGE 2 -- Performance Comparison, compact Trade Statistics, and Normalised Equity
+          Curve + Combined Drawdown side by side. The drawdown chart sits next to whichever
+          chart shows the equity curve -- that's the Normalised Equity Curve here, on this
+          page, not Page 1 (Page 1 is cover/signal-output tiles only and has no equity
+          curve to sit next to). Both charts render at a reduced explicit height so they
+          fit on one row without overflowing the page. */}
       <section className="break-after-page p-2">
         <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Performance Comparison</h2>
-        <div className="mb-4"><ComparisonTable types={data.types} /></div>
+        <div className="mb-3"><ComparisonTable types={data.types} /></div>
 
-        <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Normalised Equity Curves</h2>
-        <div className="mb-2"><CombinedCumulativeChart data={data.normalisedCumulative} caption={data.indexCaption} /></div>
+        <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Trade Statistics</h2>
+        <div className="mb-4">
+          <TradeStatisticsRow types={data.types} />
+          <p className="text-[7.5pt] text-black/50 mt-1">
+            Avg Winner, Avg Loser and Profit Factor are not shown here: SignalTypeSummary only derives and
+            stores Payout Ratio and Break-Even Win Rate at this aggregation level, not those three fields.
+          </p>
+        </div>
+
+        <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Normalised Equity Curve &amp; Combined Drawdown</h2>
+        <div className="grid grid-cols-2 gap-2 mb-2">
+          <CombinedCumulativeChart data={data.normalisedCumulative} caption={data.indexCaption} height={220} />
+          <DrawdownChart data={data.combinedDrawdown} height={220} />
+        </div>
 
         <ReportFooter pageLabel="Page 2" />
       </section>
 
-      {/* PAGE 3 -- By Asset Class + Year-by-Year Total R. Day-of-Week/Month-of-Year are
-          deliberately left out of the report entirely: they're bar charts on the live
-          dashboard, and Recharts bar charts don't render reliably in print -- rendering
-          them as compact tables instead would be a third and fourth table on a page that
-          already carries two substantial ones. */}
+      {/* PAGE 3 -- By Asset Class, Year-by-Year Total R, and Monthly Performance (all years
+          combined -- byMonth has no year dimension, see MonthlyMatrixTable's own comment).
+          Day-of-Week is still left out entirely: it's a bar chart on the live dashboard and
+          Recharts bar charts don't render reliably in print. */}
       <section className="break-after-page p-2">
         <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">By Asset Class</h2>
         <div className="mb-4"><AssetClassTable rows={data.byAssetClass} /></div>
 
         <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Year-by-Year Total R</h2>
-        <YearGridTable rows={data.byYear} />
+        <div className="mb-4"><YearGridTable rows={data.byYear} /></div>
+
+        <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Monthly Performance (All Years Combined)</h2>
+        <MonthlyMatrixTable rows={data.byMonth} />
+        <p className="text-[7.5pt] text-black/50 mt-1">
+          Aggregated across all available years — a calendar-year × month breakdown is not produced by the
+          underlying analytics pipeline.
+        </p>
 
         <ReportFooter pageLabel="Page 3" />
       </section>
