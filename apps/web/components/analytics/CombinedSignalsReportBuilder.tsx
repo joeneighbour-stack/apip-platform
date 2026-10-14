@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import {
   type SignalTypeData, type SignalTypeKey, type CombinedCumulativePoint,
+  type CombinedAssetClassRow, type CombinedMarketRow, type CombinedYearRow, type DayOfWeekRow, type MonthOfYearRow,
   TYPE_LABELS, TYPE_ORDER, buildKeyCallouts,
 } from '@/lib/combinedSignalAnalytics'
 import type { ReportSafeUniverse } from '@/lib/reportSanitiser'
@@ -25,8 +26,23 @@ interface Props {
   analyst: SignalTypeData
   patterns: SignalTypeData
   ai: SignalTypeData
-  cumulativeR: CombinedCumulativePoint[]
+  normalisedCumulative: CombinedCumulativePoint[]   // rebased-to-100 series
+  cumulativeR: CombinedCumulativePoint[]             // raw R series (kept for callouts logic)
+  byAssetClass: CombinedAssetClassRow[]
+  byDayOfWeek: DayOfWeekRow[]
+  byMonth: MonthOfYearRow[]
+  byYear: CombinedYearRow[]
+  topMarkets: CombinedMarketRow[]
   onClose: () => void
+}
+
+// Computed, not hardcoded to 2026 -- matches CombinedSignalsTab.tsx's own CURRENT_YEAR,
+// so the Year-by-Year table's "YTD" label stays correct in 2027+ instead of silently
+// going stale.
+const CURRENT_YEAR = new Date().getUTCFullYear()
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100
 }
 
 function monthYear(dateStr: string): string {
@@ -37,13 +53,22 @@ interface CombinedReportData {
   periodLabel: string
   dataThroughDate: string
   types: Record<SignalTypeKey, SignalTypeData>
+  normalisedCumulative: CombinedCumulativePoint[]
   cumulativeR: CombinedCumulativePoint[]
+  byAssetClass: CombinedAssetClassRow[]
+  byDayOfWeek: DayOfWeekRow[]
+  byMonth: MonthOfYearRow[]
+  byYear: CombinedYearRow[]
+  topMarkets: CombinedMarketRow[]
+  indexCaption: string
   callouts: string[]
 }
 
 function buildReportData(
   analyst: SignalTypeData, patterns: SignalTypeData, ai: SignalTypeData,
-  cumulativeR: CombinedCumulativePoint[],
+  normalisedCumulative: CombinedCumulativePoint[], cumulativeR: CombinedCumulativePoint[],
+  byAssetClass: CombinedAssetClassRow[], byDayOfWeek: DayOfWeekRow[], byMonth: MonthOfYearRow[],
+  byYear: CombinedYearRow[], topMarkets: CombinedMarketRow[],
 ): CombinedReportData {
   const types: Record<SignalTypeKey, SignalTypeData> = { analyst, patterns, ai }
   const firstDates = TYPE_ORDER.map(k => types[k].summary.firstSignalDate).filter((d): d is string => d !== null)
@@ -51,11 +76,30 @@ function buildReportData(
   const earliest = firstDates.length > 0 ? firstDates.reduce((a, b) => b < a ? b : a) : null
   const latest = lastDates.length > 0 ? lastDates.reduce((a, b) => b > a ? b : a) : null
 
+  // Same logic as CombinedSignalsTab.tsx's own indexCaption useMemo -- computed live from
+  // each type's own firstSignalDate rather than hardcoded, since the tab's own comment on
+  // this exact string explains why: asserting fixed dates here would silently go stale
+  // (or wrong) the moment the underlying history changes.
+  const indexCaption = (() => {
+    const parts = TYPE_ORDER.map(key => {
+      const first = types[key].summary.firstSignalDate
+      return `${TYPE_LABELS[key]}: ${first ? monthYear(first) : 'no data yet'}`
+    })
+    return `All series rebased to 100 at start. A value of 150 = +50% relative growth from inception. ${parts.join(', ')}.`
+  })()
+
   return {
     periodLabel: earliest && latest ? `${monthYear(earliest)} – ${monthYear(latest)}` : 'No data available',
     dataThroughDate: latest ? formatDate(latest) : 'N/A',
     types,
+    normalisedCumulative,
     cumulativeR,
+    byAssetClass,
+    byDayOfWeek,
+    byMonth,
+    byYear,
+    topMarkets,
+    indexCaption,
     callouts: buildKeyCallouts(types),
   }
 }
@@ -71,6 +115,8 @@ function ComparisonTable({ types }: { types: Record<SignalTypeKey, SignalTypeDat
           <th className="py-1.5 px-2 font-semibold text-right">Avg R</th>
           <th className="py-1.5 px-2 font-semibold text-right">Total R</th>
           <th className="py-1.5 px-2 font-semibold text-right">Max DD (R)</th>
+          <th className="py-1.5 px-2 font-semibold text-right">Payout Ratio</th>
+          <th className="py-1.5 px-2 font-semibold text-right">BE Win Rate</th>
           <th className="py-1.5 pl-2 font-semibold text-right">Since</th>
         </tr>
       </thead>
@@ -85,10 +131,106 @@ function ComparisonTable({ types }: { types: Record<SignalTypeKey, SignalTypeDat
               <td className="py-1.5 px-2 text-right tabular-nums">{formatR(d.summary.avgR)}</td>
               <td className="py-1.5 px-2 text-right tabular-nums">{formatR(d.summary.totalR)}</td>
               <td className="py-1.5 px-2 text-right tabular-nums">{formatR(d.summary.maxDrawdownR)}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums">{d.summary.payoutRatio != null ? d.summary.payoutRatio.toFixed(2) : '—'}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums">{d.summary.breakEvenWinRate != null ? formatPercent(d.summary.breakEvenWinRate) : '—'}</td>
               <td className="py-1.5 pl-2 text-right tabular-nums">{d.summary.firstSignalDate ? formatDate(d.summary.firstSignalDate) : '—'}</td>
             </tr>
           )
         })}
+      </tbody>
+    </table>
+  )
+}
+
+function AssetClassTable({ rows }: { rows: CombinedAssetClassRow[] }) {
+  if (rows.length === 0) return <p className="text-[8.5pt] text-black/50">No data for the current filters.</p>
+  return (
+    <table className="w-full text-[9pt]" style={{ borderCollapse: 'collapse' }}>
+      <thead>
+        <tr className="border-b border-black/20 text-left">
+          <th className="py-1 pr-2 font-semibold">Asset Class</th>
+          <th className="py-1 px-2 font-semibold text-right">Analyst R</th>
+          <th className="py-1 px-2 font-semibold text-right">Pattern R</th>
+          <th className="py-1 px-2 font-semibold text-right">AI R</th>
+          <th className="py-1 px-2 font-semibold text-right">Combined Total R</th>
+          <th className="py-1 pl-2 font-semibold text-right">Combined Win Rate</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(row => (
+          <tr key={row.assetClass} className="border-b border-black/10">
+            <td className="py-1 pr-2">{row.assetClass}</td>
+            <td className="py-1 px-2 text-right tabular-nums">{formatR(row.analystR)}</td>
+            <td className="py-1 px-2 text-right tabular-nums">{formatR(row.patternR)}</td>
+            <td className="py-1 px-2 text-right tabular-nums">{formatR(row.aiR)}</td>
+            <td className="py-1 px-2 text-right tabular-nums">{formatR(row.combinedTotalR)}</td>
+            <td className="py-1 pl-2 text-right tabular-nums">{formatPercent(row.combinedWinRate)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function YearGridTable({ rows }: { rows: CombinedYearRow[] }) {
+  if (rows.length === 0) return <p className="text-[8.5pt] text-black/50">No data for the current filters.</p>
+  return (
+    <table className="w-full text-[9pt]" style={{ borderCollapse: 'collapse' }}>
+      <thead>
+        <tr className="border-b border-black/20 text-left">
+          <th className="py-1 pr-2 font-semibold">Year</th>
+          <th className="py-1 px-2 font-semibold text-right">Analyst</th>
+          <th className="py-1 px-2 font-semibold text-right">Pattern</th>
+          <th className="py-1 px-2 font-semibold text-right">AI</th>
+          <th className="py-1 pl-2 font-semibold text-right">Combined</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(row => {
+          const combinedValues = [row.analyst, row.pattern, row.ai].filter((v): v is number => v !== null)
+          const combinedTotal = combinedValues.length > 0 ? round2(combinedValues.reduce((a, b) => a + b, 0)) : null
+          return (
+            <tr key={row.year} className="border-b border-black/10">
+              <td className="py-1 pr-2">{row.year === CURRENT_YEAR ? `${row.year} YTD` : row.year}</td>
+              <td className="py-1 px-2 text-right tabular-nums">{row.analyst === null ? '—' : formatR(row.analyst)}</td>
+              <td className="py-1 px-2 text-right tabular-nums">{row.pattern === null ? '—' : formatR(row.pattern)}</td>
+              <td className="py-1 px-2 text-right tabular-nums">{row.ai === null ? '—' : formatR(row.ai)}</td>
+              <td className="py-1 pl-2 text-right tabular-nums">{combinedTotal === null ? '—' : formatR(combinedTotal)}</td>
+            </tr>
+          )
+        })}
+      </tbody>
+    </table>
+  )
+}
+
+function TopMarketsTable({ rows }: { rows: CombinedMarketRow[] }) {
+  if (rows.length === 0) return <p className="text-[8.5pt] text-black/50">No data for the current filters.</p>
+  return (
+    <table className="w-full text-[9pt]" style={{ borderCollapse: 'collapse' }}>
+      <thead>
+        <tr className="border-b border-black/20 text-left">
+          <th className="py-1 pr-2 font-semibold">Symbol</th>
+          <th className="py-1 px-2 font-semibold text-right">Analyst R</th>
+          <th className="py-1 px-2 font-semibold text-right">Pattern R</th>
+          <th className="py-1 px-2 font-semibold text-right">AI R</th>
+          <th className="py-1 px-2 font-semibold text-right">Combined R</th>
+          <th className="py-1 px-2 font-semibold text-right">Win Rate</th>
+          <th className="py-1 pl-2 font-semibold text-right">Trades</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(row => (
+          <tr key={row.symbol} className="border-b border-black/10">
+            <td className="py-1 pr-2">{row.symbol}</td>
+            <td className="py-1 px-2 text-right tabular-nums">{row.analystR !== null ? formatR(row.analystR) : '—'}</td>
+            <td className="py-1 px-2 text-right tabular-nums">{row.patternR !== null ? formatR(row.patternR) : '—'}</td>
+            <td className="py-1 px-2 text-right tabular-nums">{row.aiR !== null ? formatR(row.aiR) : '—'}</td>
+            <td className="py-1 px-2 text-right tabular-nums">{formatR(row.combinedTotalR)}</td>
+            <td className="py-1 px-2 text-right tabular-nums">{formatPercent(row.combinedWinRate)}</td>
+            <td className="py-1 pl-2 text-right tabular-nums">{row.trades.toLocaleString()}</td>
+          </tr>
+        ))}
       </tbody>
     </table>
   )
@@ -139,20 +281,36 @@ function CombinedSignalsReportView({ data }: { data: CombinedReportData }) {
         <ReportFooter pageLabel="Page 1" />
       </section>
 
-      {/* PAGE 2 -- Performance Comparison, Cumulative Chart & Key Callouts. Merged from
-          three previously separate pages, each thin on its own: a 3-row comparison
-          table, a single chart, and a short bulleted callouts list. Combined, they read
-          as one coherent "numbers, chart, then takeaways" page instead of three mostly
-          empty ones. */}
+      {/* PAGE 2 -- Performance Comparison + Normalised Equity Curves */}
       <section className="break-after-page p-2">
         <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Performance Comparison</h2>
         <div className="mb-4"><ComparisonTable types={data.types} /></div>
 
-        <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Cumulative Performance by Signal Type (R)</h2>
-        <div className="mb-2"><CombinedCumulativeChart data={data.cumulativeR} /></div>
-        <p className="text-[8.5pt] text-black/70 mb-4">
-          Cumulative R measures the total return expressed as a multiple of initial risk across all closed signals of each type.
-        </p>
+        <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Normalised Equity Curves</h2>
+        <div className="mb-2"><CombinedCumulativeChart data={data.normalisedCumulative} caption={data.indexCaption} /></div>
+
+        <ReportFooter pageLabel="Page 2" />
+      </section>
+
+      {/* PAGE 3 -- By Asset Class + Year-by-Year Total R. Day-of-Week/Month-of-Year are
+          deliberately left out of the report entirely: they're bar charts on the live
+          dashboard, and Recharts bar charts don't render reliably in print -- rendering
+          them as compact tables instead would be a third and fourth table on a page that
+          already carries two substantial ones. */}
+      <section className="break-after-page p-2">
+        <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">By Asset Class</h2>
+        <div className="mb-4"><AssetClassTable rows={data.byAssetClass} /></div>
+
+        <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Year-by-Year Total R</h2>
+        <YearGridTable rows={data.byYear} />
+
+        <ReportFooter pageLabel="Page 3" />
+      </section>
+
+      {/* PAGE 4 -- Top 20 Markets + Key Callouts */}
+      <section className="break-after-page p-2">
+        <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Top 20 Markets</h2>
+        <div className="mb-4"><TopMarketsTable rows={data.topMarkets} /></div>
 
         <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Key Callouts</h2>
         {data.callouts.length === 0 ? (
@@ -162,7 +320,7 @@ function CombinedSignalsReportView({ data }: { data: CombinedReportData }) {
             {data.callouts.map((c, i) => <li key={i}>{c}</li>)}
           </ul>
         )}
-        <ReportFooter pageLabel="Page 2" />
+        <ReportFooter pageLabel="Page 4" />
       </section>
 
       {/* FINAL PAGE -- Methodology & Regulatory. FCA statement, disclaimer, sanctions
@@ -204,11 +362,17 @@ function CombinedSignalsReportView({ data }: { data: CombinedReportData }) {
   )
 }
 
-export function CombinedSignalsReportBuilder({ analyst, patterns, ai, cumulativeR, onClose }: Props) {
+export function CombinedSignalsReportBuilder({
+  analyst, patterns, ai, normalisedCumulative, cumulativeR,
+  byAssetClass, byDayOfWeek, byMonth, byYear, topMarkets, onClose,
+}: Props) {
   const [reportData, setReportData] = useState<CombinedReportData | null>(null)
 
   function handleGenerate() {
-    const data = buildReportData(analyst, patterns, ai, cumulativeR)
+    const data = buildReportData(
+      analyst, patterns, ai, normalisedCumulative, cumulativeR,
+      byAssetClass, byDayOfWeek, byMonth, byYear, topMarkets,
+    )
     setReportData(data)
 
     requestAnimationFrame(() => {
@@ -231,8 +395,8 @@ export function CombinedSignalsReportBuilder({ analyst, patterns, ai, cumulative
         <div className="p-4 space-y-3 overflow-y-auto grow text-xs text-muted-foreground">
           <p>
             A fixed, client-ready summary spanning all three signal types: signal output,
-            performance comparison, cumulative performance, and key callouts drawn from
-            live data.
+            performance comparison, normalised equity curves, breakdowns by asset class,
+            year, and market, and key callouts drawn from live data.
           </p>
           <p>No signal type here carries analyst identity, so this report is safe to share externally.</p>
         </div>

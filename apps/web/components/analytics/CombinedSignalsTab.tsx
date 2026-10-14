@@ -777,7 +777,13 @@ export function CombinedSignalsTab({ analysts }: Props) {
     {reportOpen && (
       <CombinedSignalsReportBuilder
         analyst={analystData} patterns={patternsData} ai={aiData}
+        normalisedCumulative={normalisedCumulative}
         cumulativeR={cumulativeR}
+        byAssetClass={byAssetClass}
+        byDayOfWeek={byDayOfWeek}
+        byMonth={byMonth}
+        byYear={byYear}
+        topMarkets={topMarkets}
         onClose={() => setReportOpen(false)}
       />
     )}
