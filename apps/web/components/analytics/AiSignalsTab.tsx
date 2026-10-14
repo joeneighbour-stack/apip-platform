@@ -396,13 +396,23 @@ export function AiSignalsTab() {
             <p className="text-2xl font-semibold tabular-nums text-red-700">{dedupTrades.length > 0 ? formatR(maxDD) : '—'}</p>
           </div>
           <div className="rounded-lg border border-border bg-card p-4 space-y-1">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Payout Ratio</p>
+            <div className="flex items-center gap-1">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Payout Ratio</p>
+              <Tooltip content="Average winning trade R divided by average losing trade R. A ratio above 1.0 means winners are larger than losers on average.">
+                <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-muted-foreground/40 text-muted-foreground/60 text-[9px] cursor-default select-none leading-none">i</span>
+              </Tooltip>
+            </div>
             <p className="text-2xl font-semibold tabular-nums">
               {summary?.payoutRatio != null ? summary.payoutRatio.toFixed(2) : '—'}
             </p>
           </div>
           <div className="rounded-lg border border-border bg-card p-4 space-y-1">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Break-Even Win Rate</p>
+            <div className="flex items-center gap-1">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Break-Even Win Rate</p>
+              <Tooltip content="The minimum win rate needed to break even given the current payout ratio. Calculated as 1 ÷ (1 + Payout Ratio).">
+                <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-muted-foreground/40 text-muted-foreground/60 text-[9px] cursor-default select-none leading-none">i</span>
+              </Tooltip>
+            </div>
             <p className="text-2xl font-semibold tabular-nums">
               {summary?.breakEvenWinRate != null ? formatPercent(summary.breakEvenWinRate) : '—'}
             </p>

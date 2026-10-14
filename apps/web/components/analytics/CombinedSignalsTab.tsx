@@ -9,6 +9,7 @@ import {
 import { formatR, formatPercent, formatDate, positivityClass } from '@/lib/format'
 import { PAST_PERFORMANCE_WARNING } from '@/lib/compliance'
 import { CombinedCumulativeChart, SignalsByPeriodChart } from './LazyCharts'
+import { Tooltip } from '@/components/ui/Tooltip'
 
 // Combined Signals reports use their own component (CombinedSignalsReportBuilder), not
 // PatternReportBuilder/AiSignalsReportBuilder -- see that file's own header comment.
@@ -90,6 +91,21 @@ function yearCellClass(value: number | null, maxAbs: number): string {
   const idx = Math.min(tiers.length - 1, Math.floor(ratio * tiers.length))
   return tiers[idx]!
 }
+
+const PAYOUT_RATIO_TOOLTIP = 'Average winning trade R divided by average losing trade R. A ratio above 1.0 means winners are larger than losers on average.'
+const BREAK_EVEN_WIN_RATE_TOOLTIP = 'The minimum win rate needed to break even given the current payout ratio. Calculated as 1 ÷ (1 + Payout Ratio).'
+
+const COMPARISON_HEADERS: { label: string; tooltip?: string }[] = [
+  { label: 'Signal Type' },
+  { label: 'Total Signals' },
+  { label: 'Win Rate' },
+  { label: 'Avg R' },
+  { label: 'Total R' },
+  { label: 'Max DD (R)' },
+  { label: 'Payout Ratio', tooltip: PAYOUT_RATIO_TOOLTIP },
+  { label: 'Break-Even Win Rate', tooltip: BREAK_EVEN_WIN_RATE_TOOLTIP },
+  { label: 'Since' },
+]
 
 function PeriodTable({ rows, firstColumnLabel }: {
   rows: { key: string; trades: number; winRate: number | null; avgR: number | null }[]
@@ -185,13 +201,23 @@ export function CombinedSignalsTab() {
               <SummaryTile label="Pattern Signals" data={data.patterns} />
               <SummaryTile label="AI Signals" data={data.ai} />
               <div className="rounded-lg border border-border bg-card p-4 space-y-1">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Payout Ratio</p>
+                <div className="flex items-center gap-1">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Payout Ratio</p>
+                  <Tooltip content="Average winning trade R divided by average losing trade R. A ratio above 1.0 means winners are larger than losers on average.">
+                    <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-muted-foreground/40 text-muted-foreground/60 text-[9px] cursor-default select-none leading-none">i</span>
+                  </Tooltip>
+                </div>
                 <p className="text-2xl font-semibold tabular-nums">
                   {data.combined.summary.payoutRatio != null ? data.combined.summary.payoutRatio.toFixed(2) : '—'}
                 </p>
               </div>
               <div className="rounded-lg border border-border bg-card p-4 space-y-1">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Break-Even Win Rate</p>
+                <div className="flex items-center gap-1">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Break-Even Win Rate</p>
+                  <Tooltip content="The minimum win rate needed to break even given the current payout ratio. Calculated as 1 ÷ (1 + Payout Ratio).">
+                    <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-muted-foreground/40 text-muted-foreground/60 text-[9px] cursor-default select-none leading-none">i</span>
+                  </Tooltip>
+                </div>
                 <p className="text-2xl font-semibold tabular-nums">
                   {data.combined.summary.breakEvenWinRate != null ? formatPercent(data.combined.summary.breakEvenWinRate) : '—'}
                 </p>
@@ -216,8 +242,17 @@ export function CombinedSignalsTab() {
               <table className="w-full text-sm">
                 <thead className="bg-muted/50">
                   <tr>
-                    {['Signal Type', 'Total Signals', 'Win Rate', 'Avg R', 'Total R', 'Max DD (R)', 'Since'].map(h => (
-                      <th key={h} className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground whitespace-nowrap">{h}</th>
+                    {COMPARISON_HEADERS.map(h => (
+                      <th key={h.label} className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground whitespace-nowrap">
+                        {h.tooltip ? (
+                          <div className="flex items-center gap-1">
+                            <span>{h.label}</span>
+                            <Tooltip content={h.tooltip}>
+                              <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-muted-foreground/40 text-muted-foreground/60 text-[9px] cursor-default select-none leading-none">i</span>
+                            </Tooltip>
+                          </div>
+                        ) : h.label}
+                      </th>
                     ))}
                   </tr>
                 </thead>
@@ -237,6 +272,12 @@ export function CombinedSignalsTab() {
                         <td className="px-4 py-2.5 tabular-nums text-muted-foreground whitespace-nowrap">{formatR(d.summary.avgR)}</td>
                         <td className={`px-4 py-2.5 tabular-nums font-medium whitespace-nowrap ${positivityClass(d.summary.totalR)}`}>{formatR(d.summary.totalR)}</td>
                         <td className="px-4 py-2.5 tabular-nums text-red-700 whitespace-nowrap">{formatR(d.summary.maxDrawdownR)}</td>
+                        <td className="px-4 py-2.5 tabular-nums text-muted-foreground whitespace-nowrap">
+                          {d.summary.payoutRatio != null ? d.summary.payoutRatio.toFixed(2) : '—'}
+                        </td>
+                        <td className="px-4 py-2.5 tabular-nums text-muted-foreground whitespace-nowrap">
+                          {d.summary.breakEvenWinRate != null ? `${(d.summary.breakEvenWinRate * 100).toFixed(1)}%` : '—'}
+                        </td>
                         <td className="px-4 py-2.5 text-muted-foreground whitespace-nowrap">{d.summary.firstSignalDate ? formatDate(d.summary.firstSignalDate) : '—'}</td>
                       </tr>
                     )

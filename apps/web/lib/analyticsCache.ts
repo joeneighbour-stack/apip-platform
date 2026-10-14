@@ -31,6 +31,10 @@ async function fetchAllTrades(): Promise<any[]> {
       .range(page * 1000, page * 1000 + 999)
     if (error) {
       console.error('[analyticsCache] Failed to fetch actual_trades:', error.message)
+      const msg = error.message.toLowerCase()
+      if (msg.includes('statement timeout') || msg.includes('canceling statement')) {
+        throw new Error('fetchAllTrades timed out')
+      }
       hasMore = false
     } else if (!data?.length) { hasMore = false } else { all.push(...data); hasMore = data.length === 1000; page++ }
     if (all.length >= 150_000) break
@@ -162,6 +166,13 @@ export type DefaultAnalyticsView = Awaited<ReturnType<typeof computeDefaultAnaly
 // 30,000+ trade / 40,000+ publication rebuild and contending for the same DB resources.
 let recomputeInProgress: Promise<DefaultAnalyticsView> | null = null
 
+// Set by invalidateAnalyticsCache() to force the next getCachedDefaultAnalyticsView()
+// call to recompute instead of serving the existing row -- deliberately does NOT delete
+// the row itself, so if that recompute fails, the previous (stale but complete) payload
+// is still there for every other request to read instead of every call paying for a
+// live 30,000+ trade / 40,000+ publication rebuild until someone succeeds.
+let forceRecompute = false
+
 async function doRecompute(): Promise<DefaultAnalyticsView> {
   const db = createAdminClient()
 
@@ -193,23 +204,32 @@ async function doRecompute(): Promise<DefaultAnalyticsView> {
 // replaces unstable_cache, which hit Next.js's per-entry size limit on this
 // payload (30,000+ trades, 40,000+ publications).
 export async function getCachedDefaultAnalyticsView(): Promise<DefaultAnalyticsView> {
-  const db = createAdminClient()
+  // forceRecompute skips the cache-hit check below entirely for this one call, then
+  // resets immediately (before any await) so only the triggering call pays for a
+  // recompute -- every other request, including ones that land while this recompute is
+  // still running, falls through to the normal read below.
+  if (forceRecompute) {
+    forceRecompute = false
+  } else {
+    const db = createAdminClient()
 
-  const { data, error } = await db
-    .from('analytics_cache')
-    .select('payload, computed_at')
-    .eq('cache_key', CACHE_KEY)
-    .single()
+    const { data, error } = await db
+      .from('analytics_cache')
+      .select('payload, computed_at')
+      .eq('cache_key', CACHE_KEY)
+      .single()
 
-  // PGRST116 ("no rows returned") is the routine cache-miss case .single() always hits on
-  // the very first call -- not a real failure, so it's excluded from the error log below.
-  if (error && error.code !== 'PGRST116') {
-    console.error('[analyticsCache] Failed to read analytics_cache:', error.message)
-  }
+    // PGRST116 ("no rows returned") is the routine cache-miss case .single() always hits
+    // on the very first call -- not a real failure, so it's excluded from the error log
+    // below.
+    if (error && error.code !== 'PGRST116') {
+      console.error('[analyticsCache] Failed to read analytics_cache:', error.message)
+    }
 
-  if (data) {
-    console.log(`Analytics cache hit (computed ${data.computed_at})`)
-    return data.payload as DefaultAnalyticsView
+    if (data) {
+      console.log(`Analytics cache hit (computed ${data.computed_at})`)
+      return data.payload as DefaultAnalyticsView
+    }
   }
 
   if (recomputeInProgress) return recomputeInProgress
@@ -218,10 +238,9 @@ export async function getCachedDefaultAnalyticsView(): Promise<DefaultAnalyticsV
   return recomputeInProgress
 }
 
+// Does NOT delete the cached row -- see forceRecompute's own comment above for why.
 export async function invalidateAnalyticsCache(): Promise<void> {
-  const db = createAdminClient()
-  const { error } = await db.from('analytics_cache').delete().eq('cache_key', CACHE_KEY)
-  if (error) console.error('[analyticsCache] Failed to invalidate analytics_cache:', error.message)
+  forceRecompute = true
 }
 
 export { computeDefaultAnalyticsView }
