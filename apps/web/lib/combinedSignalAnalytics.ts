@@ -37,7 +37,7 @@ export interface NormalisedPoint {
 export interface SignalTypeSummary {
   totalPublished: number
   totalSignals: number
-  winRate: number
+  winRate: number        // fraction 0–1
   avgR: number
   totalR: number
   maxDrawdownR: number
@@ -56,7 +56,7 @@ export interface CombinedAssetClassRow {
   patternR: number | null
   aiR: number | null
   combinedTotalR: number | null
-  combinedWinRate: number | null
+  combinedWinRate: number | null  // fraction 0–1
 }
 
 export interface CombinedMarketRow {
@@ -65,7 +65,7 @@ export interface CombinedMarketRow {
   patternR: number | null
   aiR: number | null
   combinedTotalR: number | null
-  combinedWinRate: number | null
+  combinedWinRate: number | null  // fraction 0–1
   trades: number
 }
 
@@ -79,14 +79,14 @@ export interface CombinedYearRow {
 export interface DayOfWeekRow {
   day: string
   trades: number
-  winRate: number | null
+  winRate: number | null  // fraction 0–1
   avgR: number | null
 }
 
 export interface MonthOfYearRow {
   month: string
   trades: number
-  winRate: number | null
+  winRate: number | null  // fraction 0–1
   avgR: number | null
 }
 
@@ -111,7 +111,6 @@ function canonicalAssetClass(raw: string | null): string | null {
 }
 
 const SYMBOL_CANONICAL: Record<string, string> = {
-  // Crypto display names → tickers
   Bitcoin: 'BTC',
   BITCOIN: 'BTC',
   Ethereum: 'ETH',
@@ -120,7 +119,6 @@ const SYMBOL_CANONICAL: Record<string, string> = {
   RIPPLE: 'XRP',
   Solana: 'SOL',
   SOLANA: 'SOL',
-  // Index display names → tickers
   DOW: 'US30',
   Dow: 'US30',
   NASDAQ: 'US100',
@@ -132,7 +130,6 @@ const SYMBOL_CANONICAL: Record<string, string> = {
   DAX: 'DE40',
   Dax: 'DE40',
   NIKKEI: 'Nikkei',
-  // Oil and Brent stay separate (different instruments)
 }
 
 function canonicalSymbol(raw: string | null): string | null {
@@ -265,7 +262,7 @@ export function buildSignalTypeData(
     summary: {
       totalPublished,
       totalSignals: outcomeCount,
-      winRate: outcomeCount > 0 ? Math.round((wins / outcomeCount) * 1000) / 10 : 0,
+      winRate: outcomeCount > 0 ? wins / outcomeCount : 0,
       avgR: outcomeCount > 0 ? Math.round((totalR / outcomeCount) * 100) / 100 : 0,
       totalR: Math.round(totalR * 100) / 100,
       maxDrawdownR: maxDrawdown(signals),
@@ -290,7 +287,6 @@ export function buildKeyCallouts(types: Record<SignalTypeKey, SignalTypeData>): 
     )
   }
 
-  // Best performer by total R
   const ranked = TYPE_ORDER
     .map(k => ({ key: k, totalR: types[k].summary.totalR, count: types[k].summary.totalSignals }))
     .filter(x => x.count >= 10)
@@ -304,7 +300,7 @@ export function buildKeyCallouts(types: Record<SignalTypeKey, SignalTypeData>): 
 }
 
 function formatWinRate(wr: number): string {
-  return `${wr.toFixed(1)}%`
+  return `${(wr * 100).toFixed(1)}%`
 }
 
 function formatTotalR(r: number): string {
@@ -339,7 +335,7 @@ export function buildAssetClassBreakdown(
       patternR: p ? Math.round(p.totalR * 100) / 100 : null,
       aiR: i ? Math.round(i.totalR * 100) / 100 : null,
       combinedTotalR: combinedOutcomes > 0 ? Math.round(combinedR * 100) / 100 : null,
-      combinedWinRate: combinedOutcomes > 0 ? Math.round((combinedWins / combinedOutcomes) * 1000) / 10 : null,
+      combinedWinRate: combinedOutcomes > 0 ? combinedWins / combinedOutcomes : null,
     }
   })
 }
@@ -373,7 +369,7 @@ export function buildTopMarkets(
       patternR: p ? Math.round(p.totalR * 100) / 100 : null,
       aiR: i ? Math.round(i.totalR * 100) / 100 : null,
       combinedTotalR: combinedOutcomes > 0 ? Math.round(combinedR * 100) / 100 : null,
-      combinedWinRate: combinedOutcomes > 0 ? Math.round((combinedWins / combinedOutcomes) * 1000) / 10 : null,
+      combinedWinRate: combinedOutcomes > 0 ? combinedWins / combinedOutcomes : null,
       trades: combinedOutcomes,
     }
   })
@@ -423,7 +419,7 @@ export function buildDayOfWeekBreakdown(
     return {
       day,
       trades: b?.outcomes ?? 0,
-      winRate: b && b.outcomes > 0 ? Math.round((b.wins / b.outcomes) * 1000) / 10 : null,
+      winRate: b && b.outcomes > 0 ? b.wins / b.outcomes : null,
       avgR: b && b.outcomes > 0 ? Math.round((b.totalR / b.outcomes) * 100) / 100 : null,
     }
   })
@@ -451,7 +447,7 @@ export function buildMonthBreakdown(
     return {
       month,
       trades: b?.outcomes ?? 0,
-      winRate: b && b.outcomes > 0 ? Math.round((b.wins / b.outcomes) * 1000) / 10 : null,
+      winRate: b && b.outcomes > 0 ? b.wins / b.outcomes : null,
       avgR: b && b.outcomes > 0 ? Math.round((b.totalR / b.outcomes) * 100) / 100 : null,
     }
   })
