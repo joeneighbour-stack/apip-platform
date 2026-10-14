@@ -19,10 +19,28 @@ export async function GET(req: Request) {
   }
 
   const url = new URL(req.url)
-  if (url.searchParams.get('force') === 'true') {
+  const force = url.searchParams.get('force') === 'true'
+  if (force) {
     await invalidateAnalyticsCache()
+    console.log('[analytics/summary] force=true: invalidateAnalyticsCache() completed')
   }
 
   const data = await getCachedDefaultAnalyticsView()
+  if (force) {
+    console.log(
+      '[analytics/summary] force=true: getCachedDefaultAnalyticsView() returned',
+      'payoutRatio =', data.summary.payoutRatio,
+      '(present and non-null:', data.summary.payoutRatio != null, ')',
+    )
+  }
+
+  if (force) {
+    console.log(
+      '[analytics/summary] force=true: about to return response',
+      'computedAt =', data.computedAt,
+      'payoutRatio =', data.summary.payoutRatio,
+      'breakEvenWinRate =', data.summary.breakEvenWinRate,
+    )
+  }
   return NextResponse.json(data)
 }
