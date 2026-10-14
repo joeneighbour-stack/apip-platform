@@ -139,25 +139,21 @@ function CombinedSignalsReportView({ data }: { data: CombinedReportData }) {
         <ReportFooter pageLabel="Page 1" />
       </section>
 
-      {/* PAGE 2 -- Performance Comparison */}
+      {/* PAGE 2 -- Performance Comparison, Cumulative Chart & Key Callouts. Merged from
+          three previously separate pages, each thin on its own: a 3-row comparison
+          table, a single chart, and a short bulleted callouts list. Combined, they read
+          as one coherent "numbers, chart, then takeaways" page instead of three mostly
+          empty ones. */}
       <section className="break-after-page p-2">
         <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Performance Comparison</h2>
-        <ComparisonTable types={data.types} />
-        <ReportFooter pageLabel="Page 2" />
-      </section>
+        <div className="mb-4"><ComparisonTable types={data.types} /></div>
 
-      {/* PAGE 3 -- Cumulative R chart */}
-      <section className="break-after-page p-2">
         <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Cumulative Performance by Signal Type (R)</h2>
         <div className="mb-2"><CombinedCumulativeChart data={data.cumulativeR} /></div>
-        <p className="text-[8.5pt] text-black/70">
+        <p className="text-[8.5pt] text-black/70 mb-4">
           Cumulative R measures the total return expressed as a multiple of initial risk across all closed signals of each type.
         </p>
-        <ReportFooter pageLabel="Page 3" />
-      </section>
 
-      {/* PAGE 4 -- Key Callouts */}
-      <section className="break-after-page p-2">
         <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Key Callouts</h2>
         {data.callouts.length === 0 ? (
           <p className="text-[9pt] text-black/60">Insufficient data to generate callouts yet.</p>
@@ -166,7 +162,7 @@ function CombinedSignalsReportView({ data }: { data: CombinedReportData }) {
             {data.callouts.map((c, i) => <li key={i}>{c}</li>)}
           </ul>
         )}
-        <ReportFooter pageLabel="Page 4" />
+        <ReportFooter pageLabel="Page 2" />
       </section>
 
       {/* FINAL PAGE -- Methodology & Regulatory. FCA statement, disclaimer, sanctions

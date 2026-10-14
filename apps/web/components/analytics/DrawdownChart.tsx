@@ -5,18 +5,21 @@ import { formatDateShort } from '@/lib/format'
 
 interface Props {
   data: DrawdownPoint[]
+  // Same override mechanism as CumulativePerformanceChart.tsx's own `height` prop -- see
+  // its comment for why.
+  height?: number
 }
 
 // Shares syncId with CumulativePerformanceChart so hovering either chart shows the
 // same date's crosshair/tooltip on both -- the requested "shared horizontal axis"
 // effect. Both series are derived from the same sorted trade list, so they align by
 // index.
-export function DrawdownChart({ data }: Props) {
+export function DrawdownChart({ data, height }: Props) {
   if (data.length === 0) return null
   return (
     <div className="rounded-lg border border-border bg-card p-4 space-y-3">
       <p className="text-xs font-medium text-muted-foreground print:uppercase print:tracking-wide">Drawdown (R)</p>
-      <div className="h-32 print:h-28">
+      <div className={height ? undefined : 'h-32 print:h-28'} style={height ? { height } : undefined}>
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data} syncId="performance" margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
             <XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false}

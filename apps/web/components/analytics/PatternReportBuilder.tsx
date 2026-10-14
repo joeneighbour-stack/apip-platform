@@ -213,18 +213,16 @@ function PatternPerformanceReportView({ data }: { data: PatternReportData }) {
         <ReportFooter pageLabel="Page 1" />
       </section>
 
-      {/* PAGE 2 -- Cumulative Performance */}
+      {/* PAGE 2 -- Cumulative Performance & Signal Quality by Pattern Type. Merged from
+          two previously separate pages -- the chart page held only one chart and was
+          thin on its own, so it's combined with the pattern-type table below it. */}
       <section className="break-after-page p-2">
         <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Cumulative Performance (R)</h2>
         <div className="mb-2"><CumulativePerformanceChart data={data.cumulative} /></div>
-        <p className="text-[8.5pt] text-black/70">
+        <p className="text-[8.5pt] text-black/70 mb-4">
           Cumulative R measures the total return expressed as a multiple of initial risk across all closed signals.
         </p>
-        <ReportFooter pageLabel="Page 2" />
-      </section>
 
-      {/* PAGE 3 -- Signal Quality by Pattern Type */}
-      <section className="break-after-page p-2">
         <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Signal Quality by Pattern Type</h2>
         {data.qualifyingFamilies.length === 0 ? (
           <p className="text-[9pt] text-black/60 mb-3">
@@ -258,10 +256,10 @@ function PatternPerformanceReportView({ data }: { data: PatternReportData }) {
         <div className="border border-black/15 rounded px-3 py-2 bg-black/[0.03] text-[9pt]">
           {buildPatternInsight(data.topWinRateFamily)}
         </div>
-        <ReportFooter pageLabel="Page 3" />
+        <ReportFooter pageLabel="Page 2" />
       </section>
 
-      {/* PAGE 4 -- Performance by Timeframe & Asset Class */}
+      {/* PAGE 3 -- Performance by Timeframe & Asset Class */}
       <section className="break-after-page p-2">
         <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Performance by Timeframe &amp; Asset Class</h2>
         <div className="grid grid-cols-2 gap-4 mb-3">
@@ -277,7 +275,7 @@ function PatternPerformanceReportView({ data }: { data: PatternReportData }) {
         <div className="border border-black/15 rounded px-3 py-2 bg-black/[0.03] text-[9pt]">
           {data.timeframeInsight}
         </div>
-        <ReportFooter pageLabel="Page 4" />
+        <ReportFooter pageLabel="Page 3" />
       </section>
 
       {/* FINAL PAGE -- Methodology & Regulatory. FCA statement, disclaimer, sanctions

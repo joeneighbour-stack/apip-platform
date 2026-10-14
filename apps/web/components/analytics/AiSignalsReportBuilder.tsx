@@ -222,16 +222,18 @@ function AiSignalPerformanceReportView({ data }: { data: AiReportData }) {
         <ReportFooter pageLabel="Page 1" />
       </section>
 
-      {/* PAGE 2 -- Cumulative & Drawdown Performance */}
+      {/* PAGE 2 -- Cumulative & Drawdown Performance. Two charts stacked on one printed
+          page, so both get an explicit, reduced height (rather than their live-dashboard
+          defaults of h-64/h-32) to make sure both fit on one A4 page without overflow. */}
       <section className="break-after-page p-2">
         <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Cumulative Performance (R)</h2>
-        <div className="mb-2"><CumulativePerformanceChart data={data.cumulative} /></div>
+        <div className="mb-2"><CumulativePerformanceChart data={data.cumulative} height={220} /></div>
         <p className="text-[8.5pt] text-black/70 mb-4">
           Cumulative R measures the total return expressed as a multiple of initial risk across all closed signals.
         </p>
 
         <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Drawdown (R)</h2>
-        <div className="mb-2"><DrawdownChart data={data.drawdown} /></div>
+        <div className="mb-2"><DrawdownChart data={data.drawdown} height={200} /></div>
         <p className="text-[8.5pt] text-black/70">
           Drawdown measures the decline from a cumulative-R peak to the lowest point reached before a new peak is set.
         </p>
@@ -239,20 +241,18 @@ function AiSignalPerformanceReportView({ data }: { data: AiReportData }) {
         <ReportFooter pageLabel="Page 2" />
       </section>
 
-      {/* PAGE 3 -- Signal Quality by Confidence */}
+      {/* PAGE 3 -- Signal Quality by Confidence, Asset Class & Direction, Top Markets.
+          Merged from two previously separate pages -- each was thin on its own (one
+          table and an insight box apiece), so they're combined onto a single page. */}
       <section className="break-after-page p-2">
         <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Signal Quality by Confidence Score</h2>
         <div className="mb-3">
           <BreakdownTable rows={data.confidenceRows} firstColumnLabel="Confidence" showTotalR />
         </div>
-        <div className="border border-black/15 rounded px-3 py-2 bg-black/[0.03] text-[9pt]">
+        <div className="border border-black/15 rounded px-3 py-2 bg-black/[0.03] text-[9pt] mb-4">
           {data.confidenceInsight}
         </div>
-        <ReportFooter pageLabel="Page 3" />
-      </section>
 
-      {/* PAGE 4 -- By Asset Class & Direction, Top Markets */}
-      <section className="break-after-page p-2">
         <h2 className="text-xs font-semibold uppercase tracking-wide mb-2">Performance by Asset Class &amp; Direction</h2>
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div>
@@ -270,7 +270,7 @@ function AiSignalPerformanceReportView({ data }: { data: AiReportData }) {
         </h2>
         <BreakdownTable rows={data.topMarkets} firstColumnLabel="Market" showTotalR />
 
-        <ReportFooter pageLabel="Page 4" />
+        <ReportFooter pageLabel="Page 3" />
       </section>
 
       {/* FINAL PAGE -- Methodology & Regulatory. FCA statement, disclaimer, sanctions

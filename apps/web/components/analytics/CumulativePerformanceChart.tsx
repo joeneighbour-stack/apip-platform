@@ -5,12 +5,18 @@ import { formatDateShort } from '@/lib/format'
 
 interface Props {
   data: CumulativePoint[]
+  // Overrides the default h-64/print:h-56 wrapper height with an explicit pixel value --
+  // used by the report builders when this chart is stacked with another chart on one
+  // printed page (e.g. AiSignalsReportBuilder.tsx's Cumulative+Drawdown page) and the
+  // default heights would no longer both fit on one A4 page. Left undefined, the live
+  // dashboard tabs' usage is unaffected.
+  height?: number
 }
 
 // R is the only supported unit -- no NAV/equity baseline exists for "%" and no
 // per-market pip-size metadata exists for "Pips" (see plan). Building toggles for
 // either would either mislead or require data this app doesn't have.
-export function CumulativePerformanceChart({ data }: Props) {
+export function CumulativePerformanceChart({ data, height }: Props) {
   if (data.length === 0) {
     return (
       <div className="rounded-lg border border-border bg-card p-8 text-center text-sm text-muted-foreground">
@@ -21,7 +27,7 @@ export function CumulativePerformanceChart({ data }: Props) {
   return (
     <div className="rounded-lg border border-border bg-card p-4 space-y-3">
       <p className="text-xs font-medium text-muted-foreground print:uppercase print:tracking-wide">Cumulative Performance (R)</p>
-      <div className="h-64 print:h-56">
+      <div className={height ? undefined : 'h-64 print:h-56'} style={height ? { height } : undefined}>
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data} syncId="performance" margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
             <XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false}
