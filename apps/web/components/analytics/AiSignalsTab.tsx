@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import dynamic from 'next/dynamic'
-import type { AiSignalSummary, AiBreakdownRow, AiTradePoint } from '@/lib/aiSignalAnalytics'
+import { computeAiSignalSummary, type AiSignalSummary, type AiBreakdownRow, type AiTradePoint } from '@/lib/aiSignalAnalytics'
 import {
   triggeredTrades, totalR, winRate, avgR, maxDrawdown, cumulativeSeries, drawdownSeries, monthlyMatrix,
   attributionBy, rankAttribution, type MetricsTrade, type RollingRow, type AttributionRow,
@@ -12,6 +12,9 @@ import { RollingPerformanceTable } from './RollingPerformanceTable'
 import { MonthlyPerformanceMatrix } from './MonthlyPerformanceMatrix'
 import { AttributionTable } from './AttributionTable'
 import { Tooltip } from '@/components/ui/Tooltip'
+import { MultiSelect } from '@/components/ui/MultiSelect'
+import { type AiFilterState, DEFAULT_AI_FILTERS, hasActiveAiFilters } from '@/lib/analyticsFilters'
+import { DATE_PRESET_OPTIONS, resolveDateRange } from '@/lib/dateRanges'
 
 const REITERATION_TOOLTIP = 'A reiteration is published when the model identifies a continuing opportunity on a symbol that already has an open signal. Reiterations are recorded but excluded from performance statistics.'
 
@@ -29,32 +32,21 @@ const AiSignalsReportBuilder = dynamic(() => import('./AiSignalsReportBuilder').
 // timeframe concept), and there's no PDF report builder equivalent here -- not asked
 // for, and this tab's own headline finding (confidence doesn't predict outcome) is
 // already front-and-centre in the dashboard itself.
-
-// totalSignals/uniqueSignals/reiterations are layered on top of AiSignalSummary by the
-// route (see its own comment) -- totalSignals here means ALL signals including
-// reiterations, shadowing AiSignalSummary's own "dedup count" meaning of that field.
 type AiSignalsApiResponse = AiSignalSummary & {
   totalSignals: number
   uniqueSignals: number
   reiterations: number
   trades: AiTradePoint[]
 }
-type AiSignalsSummaryState = Omit<AiSignalsApiResponse, 'trades'>
 
-type DateRangeKey = '30D' | '90D' | '12M' | 'ALL'
-const DATE_RANGES: { key: DateRangeKey; label: string; days: number | null }[] = [
-  { key: '30D', label: 'Last 30 days', days: 30 },
-  { key: '90D', label: 'Last 90 days', days: 90 },
-  { key: '12M', label: 'Last 12 months', days: 365 },
-  { key: 'ALL', label: 'All time', days: null },
+// Same literal option sets as AnalyticsFilters.tsx's own (unexported) constants --
+// duplicated rather than shared, matching this codebase's existing convention of
+// self-contained sibling tab components (see e.g. PatternsTab.tsx's identical copy).
+const DIRECTION_OPTIONS = [{ value: 'BUY', label: 'BUY' }, { value: 'SELL', label: 'SELL' }]
+const SESSION_OPTIONS = [
+  { value: 'EUROPEAN', label: 'European' }, { value: 'US', label: 'US' },
+  { value: 'APAC', label: 'APAC' }, { value: 'CRYPTO', label: 'Crypto' },
 ]
-
-const DIRECTION_OPTIONS: { value: string; label: string }[] = [
-  { value: 'ALL', label: 'All' },
-  { value: 'BUY', label: 'Buy' },
-  { value: 'SELL', label: 'Sell' },
-]
-const ASSET_CLASS_OPTIONS = ['ALL', 'FX', 'Equity', 'Commodity', 'Crypto', 'Index']
 
 // Same minimum sample used elsewhere in the app for market/entity ranking
 // (lib/metrics.ts's MIN_TRADES_FOR_MARKET_RANKING).
@@ -257,12 +249,10 @@ function SortableAttributionTable({ title, rows, minTrades = 0, entityLabel = 'R
 }
 
 export function AiSignalsTab() {
-  const [dateRange, setDateRange] = useState<DateRangeKey>('ALL')
-  const [direction, setDirection] = useState('ALL')
-  const [assetClass, setAssetClass] = useState('ALL')
+  const [filters, setFilters] = useState<AiFilterState>(DEFAULT_AI_FILTERS)
+  const [moreOpen, setMoreOpen] = useState(false)
 
-  const [summary, setSummary] = useState<AiSignalsSummaryState | null>(null)
-  const [trades, setTrades] = useState<AiTradePoint[]>([])
+  const [allTrades, setAllTrades] = useState<AiTradePoint[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [confidenceSort, setConfidenceSort] = useState<AttributionSort>({ col: 'totalR', dir: 'desc' })
@@ -271,39 +261,90 @@ export function AiSignalsTab() {
   const [showAllMarkets, setShowAllMarkets] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
 
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
-
+  // Fetched once, unfiltered -- every filter below runs client-side against this set,
+  // matching AnalyticsPage.tsx's (the Analyst Signals tab's) own fetch-once/filter-
+  // client-side approach, and PatternsTab.tsx's identical rework.
   useEffect(() => {
-    const params = new URLSearchParams()
-    const preset = DATE_RANGES.find(r => r.key === dateRange)!
-    if (preset.days !== null) {
-      const from = new Date(Date.now() - preset.days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-      params.set('from', from)
-      params.set('to', today)
-    }
-    if (direction !== 'ALL') params.set('direction', direction)
-    if (assetClass !== 'ALL') params.set('assetClass', assetClass)
-
     setLoading(true)
     setError(null)
-    fetch(`/api/analytics/ai-signals?${params.toString()}`)
+    fetch('/api/analytics/ai-signals')
       .then(r => r.json())
       .then((data: AiSignalsApiResponse | { error: string }) => {
         if ('error' in data) { setError(data.error); return }
-        const { trades: tradePoints, ...rest } = data
-        setSummary(rest)
-        setTrades(tradePoints)
+        setAllTrades(data.trades)
       })
       .catch(() => setError('Failed to load AI signal data.'))
       .finally(() => setLoading(false))
-  }, [dateRange, direction, assetClass, today])
+  }, [])
 
-  // Every chart/table below is built from dedupTrades, not the raw `trades` array --
-  // reiterations are recorded data (kept in `trades` for the reiterations count/tooltip)
-  // but must never feed cumulative/drawdown/rolling/monthly/breakdowns, same as
-  // lib/aiSignalAnalytics.ts's own computeAiSignalSummary() already does server-side for
+  const dateRange = useMemo(
+    () => resolveDateRange(filters.datePreset, filters.customStart ?? undefined, filters.customEnd ?? undefined),
+    [filters.datePreset, filters.customStart, filters.customEnd]
+  )
+
+  // Filter option lists are derived from the fetched data itself -- ai_trades has no
+  // separate reference table the way markets does for the Analyst tab.
+  const assetClassOptions = useMemo(() => {
+    const classes = [...new Set(allTrades.map(t => t.asset_class).filter((c): c is string => !!c))].sort()
+    return classes.map(c => ({ value: c, label: c }))
+  }, [allTrades])
+
+  // Market options are symbols, not market_ids -- ai_trades carries no market_id at all
+  // (see AiTradeRow), only a symbol string, so filters.marketIds holds symbols here.
+  // Narrowed by selected asset classes, same as AnalyticsFilters.tsx's own
+  // filteredMarkets. Labelled with asset_name when available, matching the By Market
+  // table's own labeling below.
+  const marketOptions = useMemo(() => {
+    const bySymbol = new Map<string, { assetClass: string; label: string }>()
+    for (const t of allTrades) {
+      if (t.symbol && !bySymbol.has(t.symbol)) {
+        bySymbol.set(t.symbol, { assetClass: t.asset_class ?? '', label: t.asset_name || t.symbol })
+      }
+    }
+    const entries = filters.assetClasses.length === 0
+      ? [...bySymbol.entries()]
+      : [...bySymbol.entries()].filter(([, v]) => filters.assetClasses.includes(v.assetClass))
+    return entries
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([symbol, v]) => ({ value: symbol, label: v.label }))
+  }, [allTrades, filters.assetClasses])
+
+  // ai_trades has no `session` column at all (migrations/066_ai_trades.sql -- same as
+  // pattern_trades, see PatternsTab.tsx's identical note). filters.sessions is
+  // intentionally never read below: there's no field on AiTradePoint to filter against.
+  // The control is still shown for visual/UX parity with the Analyst tab's filter bar,
+  // but it has no effect on this tab's results.
+  const filteredTrades = useMemo(() => {
+    return allTrades.filter(t => {
+      const d = t.published_at.slice(0, 10)
+      if (d < dateRange.start || d > dateRange.end) return false
+      if (filters.assetClasses.length > 0 && (!t.asset_class || !filters.assetClasses.includes(t.asset_class))) return false
+      if (filters.marketIds.length > 0 && (!t.symbol || !filters.marketIds.includes(t.symbol))) return false
+      if (filters.directions.length > 0 && (!t.direction || !filters.directions.includes(t.direction))) return false
+      return true
+    })
+  }, [allTrades, filters, dateRange])
+
+  // totalSignals/uniqueSignals/reiterations were layered on top of AiSignalSummary by
+  // the route (see the previous version's own comment) -- now computed client-side over
+  // filteredTrades instead of the full unfiltered set, same split: totalSignals means
+  // ALL filtered rows including reiterations, uniqueSignals is the deduplicated count.
+  const summary = useMemo(() => {
+    const uniqueSignals = filteredTrades.filter(t => !t.is_reiteration).length
+    return {
+      ...computeAiSignalSummary(filteredTrades),
+      totalSignals: filteredTrades.length,
+      uniqueSignals,
+      reiterations: filteredTrades.length - uniqueSignals,
+    }
+  }, [filteredTrades])
+
+  // Every chart/table below is built from dedupTrades, not the raw filtered array --
+  // reiterations are recorded data (kept for the reiterations count/tooltip) but must
+  // never feed cumulative/drawdown/rolling/monthly/breakdowns, same as
+  // lib/aiSignalAnalytics.ts's own computeAiSignalSummary() already does internally for
   // win rate/avg R/total R/drawdown/breakdowns.
-  const dedupTrades = useMemo(() => trades.filter(t => !t.is_reiteration), [trades])
+  const dedupTrades = useMemo(() => filteredTrades.filter(t => !t.is_reiteration), [filteredTrades])
   const analyticsTrades = useMemo(() => dedupTrades.map(toAnalyticsTrade) as unknown as MetricsTrade[], [dedupTrades])
   const cumulative = useMemo(() => cumulativeSeries(analyticsTrades), [analyticsTrades])
   const drawdown = useMemo(() => drawdownSeries(analyticsTrades), [analyticsTrades])
@@ -321,15 +362,15 @@ export function AiSignalsTab() {
     [dedupTrades]
   )
 
-  const confidenceRows = useMemo(() => summary ? summary.byConfidence.map(toAttributionRow) : [], [summary])
+  const confidenceRows = useMemo(() => summary.byConfidence.map(toAttributionRow), [summary])
   // FX/Commodity/Index never appear in this dataset -- filtered out rather than shown
   // as permanent empty rows (ASSET_CLASS_ORDER in lib/aiSignalAnalytics.ts always
   // produces one row per fixed category, present or not).
   const assetClassRows = useMemo(
-    () => summary ? summary.byAssetClass.map(toAttributionRow).filter(r => r.trades > 0) : [],
+    () => summary.byAssetClass.map(toAttributionRow).filter(r => r.trades > 0),
     [summary]
   )
-  const directionRows = useMemo(() => summary ? summary.byDirection.map(toAttributionRow) : [], [summary])
+  const directionRows = useMemo(() => summary.byDirection.map(toAttributionRow), [summary])
   const confidenceInsight = useMemo(() => buildConfidenceInsight(confidenceRows), [confidenceRows])
 
   // By-symbol breakdown, computed directly from the trade series -- same
@@ -357,17 +398,79 @@ export function AiSignalsTab() {
         renders as a sibling below, outside this div, since a display:none ancestor
         can't be overridden by a descendant's print:static rule. */}
     <div className="space-y-6 print:hidden">
+      {/* Filter bar -- styled to match AnalyticsFilters.tsx (the Analyst Signals tab's
+          own filter card) for visual consistency across tabs. No pattern type, analyst,
+          or trigger status filters: ai_trades has no family/analyst_id concept and no
+          untriggered state distinct from "closed with no result" the way actual_trades
+          does. */}
+      <div className="rounded-lg border border-border bg-card p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-medium">Filters</p>
+          {hasActiveAiFilters(filters) && (
+            <button onClick={() => setFilters(DEFAULT_AI_FILTERS)} className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+              Clear all
+            </button>
+          )}
+        </div>
+
+        <div className="space-y-1.5">
+          <p className="text-xs text-muted-foreground">Date</p>
+          <div className="flex flex-wrap gap-1.5">
+            {DATE_PRESET_OPTIONS.map(opt => (
+              <button key={opt.key} onClick={() => setFilters(f => ({ ...f, datePreset: opt.key }))}
+                className={`text-xs px-2.5 py-1.5 rounded-md border transition-colors ${
+                  filters.datePreset === opt.key
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/50'
+                }`}>
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          {filters.datePreset === 'CUSTOM' && (
+            <div className="flex items-center gap-2 pt-1">
+              <input type="date" value={filters.customStart ?? ''} onChange={e => setFilters(f => ({ ...f, customStart: e.target.value || null }))}
+                className="text-xs px-2 py-1.5 rounded-md border border-border bg-background" />
+              <span className="text-xs text-muted-foreground">to</span>
+              <input type="date" value={filters.customEnd ?? ''} onChange={e => setFilters(f => ({ ...f, customEnd: e.target.value || null }))}
+                className="text-xs px-2 py-1.5 rounded-md border border-border bg-background" />
+            </div>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-2">
+          <MultiSelect label="Asset Class" options={assetClassOptions} selected={filters.assetClasses}
+            onChange={v => setFilters(f => ({ ...f, assetClasses: v, marketIds: [] }))} placeholder="All classes" />
+          <MultiSelect label="Market" options={marketOptions} selected={filters.marketIds}
+            onChange={v => setFilters(f => ({ ...f, marketIds: v }))} placeholder="All markets" />
+        </div>
+
+        <div className="border-t border-border pt-3">
+          <button onClick={() => setMoreOpen(!moreOpen)} className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+            {moreOpen ? '▲ Fewer filters' : '▼ More filters'}
+          </button>
+          {moreOpen && (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 mt-3">
+              <MultiSelect label="Direction" options={DIRECTION_OPTIONS} selected={filters.directions}
+                onChange={v => setFilters(f => ({ ...f, directions: v }))} placeholder="Both" />
+              <MultiSelect label="Session" options={SESSION_OPTIONS} selected={filters.sessions}
+                onChange={v => setFilters(f => ({ ...f, sessions: v }))} placeholder="All sessions" />
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* KPI strip -- Total Signals shows the deduplicated (unique) count with a
           reiterations subtitle (see REITERATION_TOOLTIP); Win Rate/Avg R/Cumulative R
-          are already deduplicated server-side (lib/aiSignalAnalytics.ts's
-          computeAiSignalSummary() filters is_reiteration out internally); Max Drawdown
-          is computed client-side from the same deduplicated trade series. */}
+          are already deduplicated client-side (computeAiSignalSummary() filters
+          is_reiteration out internally); Max Drawdown is computed client-side from the
+          same deduplicated trade series. */}
       <div className="flex items-start justify-between gap-4">
-                <div className="grid grow grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+        <div className="grid grow grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
           <div className="rounded-lg border border-border bg-card p-4 space-y-1">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Total Signals</p>
-            <p className="text-2xl font-semibold tabular-nums">{summary ? summary.uniqueSignals.toLocaleString() : '—'}</p>
-            {summary && summary.reiterations > 0 && (
+            <p className="text-2xl font-semibold tabular-nums">{!loading ? summary.uniqueSignals.toLocaleString() : '—'}</p>
+            {!loading && summary.reiterations > 0 && (
               <Tooltip content={REITERATION_TOOLTIP}>
                 <p className="text-xs text-muted-foreground cursor-help border-b border-dotted border-muted-foreground/40 inline-block">
                   + {summary.reiterations.toLocaleString()} reiterations
@@ -377,21 +480,21 @@ export function AiSignalsTab() {
           </div>
           <div className="rounded-lg border border-border bg-card p-4 space-y-1">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Win Rate</p>
-            <p className="text-2xl font-semibold tabular-nums">{summary ? formatPercent(summary.winRate) : '—'}</p>
+            <p className="text-2xl font-semibold tabular-nums">{!loading ? formatPercent(summary.winRate) : '—'}</p>
           </div>
           <div className="rounded-lg border border-border bg-card p-4 space-y-1">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Avg R</p>
-            <p className={`text-2xl font-semibold tabular-nums ${summary ? positivityClass(summary.avgR) : ''}`}>
-              {summary ? formatR(summary.avgR) : '—'}
+            <p className={`text-2xl font-semibold tabular-nums ${!loading ? positivityClass(summary.avgR) : ''}`}>
+              {!loading ? formatR(summary.avgR) : '—'}
             </p>
           </div>
           <div className="rounded-lg border border-border bg-card p-4 space-y-1">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Cumulative R</p>
-            <p className={`text-2xl font-semibold tabular-nums ${summary ? positivityClass(cumulativeRTotal) : ''}`}>
-              {summary ? formatR(cumulativeRTotal) : '—'}
+            <p className={`text-2xl font-semibold tabular-nums ${!loading ? positivityClass(cumulativeRTotal) : ''}`}>
+              {!loading ? formatR(cumulativeRTotal) : '—'}
             </p>
           </div>
-                    <div className="rounded-lg border border-border bg-card p-4 space-y-1">
+          <div className="rounded-lg border border-border bg-card p-4 space-y-1">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Max Drawdown</p>
             <p className="text-2xl font-semibold tabular-nums text-red-700">{dedupTrades.length > 0 ? formatR(maxDD) : '—'}</p>
           </div>
@@ -403,7 +506,7 @@ export function AiSignalsTab() {
               </Tooltip>
             </div>
             <p className="text-2xl font-semibold tabular-nums">
-              {summary?.payoutRatio != null ? summary.payoutRatio.toFixed(2) : '—'}
+              {!loading && summary.payoutRatio != null ? summary.payoutRatio.toFixed(2) : '—'}
             </p>
           </div>
           <div className="rounded-lg border border-border bg-card p-4 space-y-1">
@@ -414,43 +517,14 @@ export function AiSignalsTab() {
               </Tooltip>
             </div>
             <p className="text-2xl font-semibold tabular-nums">
-              {summary?.breakEvenWinRate != null ? formatPercent(summary.breakEvenWinRate) : '—'}
+              {!loading && summary.breakEvenWinRate != null ? formatPercent(summary.breakEvenWinRate) : '—'}
             </p>
           </div>
         </div>
-        <button onClick={() => setReportOpen(true)} disabled={!summary || trades.length === 0}
+        <button onClick={() => setReportOpen(true)} disabled={loading || filteredTrades.length === 0}
           className="shrink-0 text-xs px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors">
           Generate Report
         </button>
-      </div>
-
-      {/* Filters -- no granularity filter: AI signals have no chart-timeframe concept. */}
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-1">
-          {DATE_RANGES.map(r => (
-            <button key={r.key}
-              onClick={() => setDateRange(r.key)}
-              className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
-                dateRange === r.key
-                  ? 'bg-foreground text-background border-foreground'
-                  : 'border-border text-muted-foreground hover:text-foreground'
-              }`}>
-              {r.label}
-            </button>
-          ))}
-        </div>
-        <select value={direction} onChange={e => setDirection(e.target.value)}
-          className="text-xs px-2 py-1.5 rounded-md border border-border bg-background">
-          {DIRECTION_OPTIONS.map(d => (
-            <option key={d.value} value={d.value}>{d.value === 'ALL' ? 'All directions' : d.label}</option>
-          ))}
-        </select>
-        <select value={assetClass} onChange={e => setAssetClass(e.target.value)}
-          className="text-xs px-2 py-1.5 rounded-md border border-border bg-background">
-          {ASSET_CLASS_OPTIONS.map(a => (
-            <option key={a} value={a}>{a === 'ALL' ? 'All asset classes' : a}</option>
-          ))}
-        </select>
       </div>
 
       {error && (
@@ -463,7 +537,7 @@ export function AiSignalsTab() {
         <div className="rounded-lg border border-border p-12 text-center">
           <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
         </div>
-      ) : summary && (
+      ) : (
         <div className="space-y-6">
           <CumulativePerformanceChart data={cumulative} />
           <DrawdownChart data={drawdown} />
@@ -506,11 +580,11 @@ export function AiSignalsTab() {
 
     {/* AiSignalsReportBuilder's own summary.totalSignals is written assuming
         lib/aiSignalAnalytics.ts's original "dedup count" meaning of that field -- the
-        route now overrides totalSignals to mean ALL signals including reiterations
-        (summary.uniqueSignals is the dedup count instead), so that field has to be
-        remapped back here before handing summary off, or the report would silently
-        show an inflated "Total Signals" figure. */}
-    {reportOpen && summary && (
+        client-side summary above overrides totalSignals to mean ALL filtered signals
+        including reiterations (summary.uniqueSignals is the dedup count instead), so
+        that field has to be remapped back here before handing summary off, or the
+        report would silently show an inflated "Total Signals" figure. */}
+    {reportOpen && (
       <AiSignalsReportBuilder
         trades={analyticsTrades} summary={{ ...summary, totalSignals: summary.uniqueSignals }}
         confidenceRows={confidenceRows} assetClassRows={assetClassRows} directionRows={directionRows}

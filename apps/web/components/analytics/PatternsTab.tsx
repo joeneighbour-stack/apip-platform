@@ -1,8 +1,13 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import dynamic from 'next/dynamic'
-import type { PatternSummary, PatternBreakdownRow, PatternTradePoint } from '@/lib/patternAnalytics'
+import { computePatternSummary, FAMILY_LABELS, type PatternSummary, type PatternBreakdownRow, type PatternTradePoint } from '@/lib/patternAnalytics'
 import { Tooltip } from '@/components/ui/Tooltip'
+import { MultiSelect } from '@/components/ui/MultiSelect'
+import {
+  type PatternFilterState, DEFAULT_PATTERN_FILTERS, hasActivePatternFilters,
+} from '@/lib/analyticsFilters'
+import { DATE_PRESET_OPTIONS, resolveDateRange } from '@/lib/dateRanges'
 import {
   triggeredTrades, totalR, winRate, avgR, maxDrawdown, cumulativeSeries, drawdownSeries, monthlyMatrix,
   attributionBy, rankAttribution, type MetricsTrade, type RollingRow, type AttributionRow,
@@ -33,21 +38,16 @@ function truncateLabel(label: string): string {
   return label.length > MAX_CONTRIBUTION_LABEL_LENGTH ? `${label.slice(0, MAX_CONTRIBUTION_LABEL_LENGTH - 1)}…` : label
 }
 
-type DateRangeKey = '30D' | '90D' | '12M' | 'ALL'
-const DATE_RANGES: { key: DateRangeKey; label: string; days: number | null }[] = [
-  { key: '30D', label: 'Last 30 days', days: 30 },
-  { key: '90D', label: 'Last 90 days', days: 90 },
-  { key: '12M', label: 'Last 12 months', days: 365 },
-  { key: 'ALL', label: 'All time', days: null },
+// Same literal option sets as AnalyticsFilters.tsx's own (unexported) constants --
+// duplicated rather than shared, matching this codebase's existing convention of
+// self-contained sibling tab components (see e.g. aiSignalAnalytics.ts/
+// patternAnalytics.ts's own header comments on why they mirror each other file-for-file
+// instead of sharing a module).
+const DIRECTION_OPTIONS = [{ value: 'BUY', label: 'BUY' }, { value: 'SELL', label: 'SELL' }]
+const SESSION_OPTIONS = [
+  { value: 'EUROPEAN', label: 'European' }, { value: 'US', label: 'US' },
+  { value: 'APAC', label: 'APAC' }, { value: 'CRYPTO', label: 'Crypto' },
 ]
-
-const GRANULARITY_OPTIONS = ['ALL', '1h', '4h', '1d']
-const DIRECTION_OPTIONS: { value: string; label: string }[] = [
-  { value: 'ALL', label: 'All' },
-  { value: 'BUY', label: 'Buy' },
-  { value: 'SELL', label: 'Sell' },
-]
-const ASSET_CLASS_OPTIONS = ['ALL', 'FX', 'Equity', 'Commodity', 'Crypto', 'Index']
 
 // Same minimum sample used elsewhere in the app for market/entity ranking
 // (lib/metrics.ts's MIN_TRADES_FOR_MARKET_RANKING) -- a single lucky/unlucky pattern
@@ -232,13 +232,10 @@ function SortableAttributionTable({ title, rows, minTrades = 0, entityLabel = 'R
 }
 
 export function PatternsTab() {
-  const [dateRange, setDateRange] = useState<DateRangeKey>('ALL')
-  const [granularity, setGranularity] = useState('ALL')
-  const [direction, setDirection] = useState('ALL')
-  const [assetClass, setAssetClass] = useState('ALL')
+  const [filters, setFilters] = useState<PatternFilterState>(DEFAULT_PATTERN_FILTERS)
+  const [moreOpen, setMoreOpen] = useState(false)
 
-  const [summary, setSummary] = useState<PatternSummary | null>(null)
-  const [trades, setTrades] = useState<PatternTradePoint[]>([])
+  const [allTrades, setAllTrades] = useState<PatternTradePoint[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [reportOpen, setReportOpen] = useState(false)
@@ -246,44 +243,88 @@ export function PatternsTab() {
   const [granularitySort, setGranularitySort] = useState<AttributionSort>({ col: 'totalR', dir: 'desc' })
   const [assetClassSort, setAssetClassSort] = useState<AttributionSort>({ col: 'totalR', dir: 'desc' })
 
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
-
+  // Fetched once, unfiltered -- every filter below runs client-side against this set,
+  // matching AnalyticsPage.tsx's (the Analyst Signals tab's) own fetch-once/filter-
+  // client-side approach instead of the old per-filter-change API call.
   useEffect(() => {
-    const params = new URLSearchParams()
-    const preset = DATE_RANGES.find(r => r.key === dateRange)!
-    if (preset.days !== null) {
-      const from = new Date(Date.now() - preset.days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-      params.set('from', from)
-      params.set('to', today)
-    }
-    if (granularity !== 'ALL') params.set('granularity', granularity)
-    if (direction !== 'ALL') params.set('direction', direction)
-    if (assetClass !== 'ALL') params.set('assetClass', assetClass)
-
     setLoading(true)
     setError(null)
-    fetch(`/api/analytics/patterns?${params.toString()}`)
+    fetch('/api/analytics/patterns')
       .then(r => r.json())
       .then((data: PatternsApiResponse | { error: string }) => {
         if ('error' in data) { setError(data.error); return }
-        const { trades: tradePoints, ...rest } = data
-        setSummary(rest)
-        setTrades(tradePoints)
+        setAllTrades(data.trades)
       })
       .catch(() => setError('Failed to load pattern trade data.'))
       .finally(() => setLoading(false))
-  }, [dateRange, granularity, direction, assetClass, today])
+  }, [])
 
-  const analyticsTrades = useMemo(() => trades.map(toAnalyticsTrade) as unknown as MetricsTrade[], [trades])
+  const dateRange = useMemo(
+    () => resolveDateRange(filters.datePreset, filters.customStart ?? undefined, filters.customEnd ?? undefined),
+    [filters.datePreset, filters.customStart, filters.customEnd]
+  )
+
+  // Filter option lists are derived from the fetched data itself -- pattern_trades has
+  // no separate reference table the way markets/analysts do for the Analyst tab, so
+  // "what pattern types/asset classes/markets exist" is just whatever's actually present
+  // in this fetch. Family is the raw code (e.g. "FLAG") -- labelled via FAMILY_LABELS,
+  // same mapping the By Pattern Family table already uses.
+  const patternTypeOptions = useMemo(() => {
+    const codes = [...new Set(allTrades.map(t => t.family).filter((f): f is string => !!f))].sort()
+    return codes.map(code => ({ value: code, label: FAMILY_LABELS[code] ?? code }))
+  }, [allTrades])
+
+  const assetClassOptions = useMemo(() => {
+    const classes = [...new Set(allTrades.map(t => t.asset_class).filter((c): c is string => !!c))].sort()
+    return classes.map(c => ({ value: c, label: c }))
+  }, [allTrades])
+
+  // Market options are symbols, not market_ids -- pattern_trades carries no market_id at
+  // all (see PatternTradeRow), only a symbol string, so filters.marketIds holds symbols
+  // here. Narrowed by selected asset classes, same as AnalyticsFilters.tsx's own
+  // filteredMarkets.
+  const marketOptions = useMemo(() => {
+    const assetClassBySymbol = new Map<string, string>()
+    for (const t of allTrades) {
+      if (t.symbol && !assetClassBySymbol.has(t.symbol)) assetClassBySymbol.set(t.symbol, t.asset_class ?? '')
+    }
+    const symbols = filters.assetClasses.length === 0
+      ? [...assetClassBySymbol.keys()]
+      : [...assetClassBySymbol.entries()].filter(([, ac]) => filters.assetClasses.includes(ac)).map(([sym]) => sym)
+    return symbols.sort().map(sym => ({ value: sym, label: sym }))
+  }, [allTrades, filters.assetClasses])
+
+  // pattern_trades has no `session` column at all (migrations/065_pattern_trades.sql --
+  // patterns are algorithm-generated, not tied to a human trading session the way
+  // actual_trades is). filters.sessions is intentionally never read below: there's no
+  // field on PatternTradePoint to filter against, so wiring it up would either silently
+  // zero out every row the moment a session is selected, or require fabricating session
+  // data that doesn't exist. The control is still shown for visual/UX parity with the
+  // Analyst tab's filter bar, but it has no effect on this tab's results.
+  const filteredTrades = useMemo(() => {
+    return allTrades.filter(t => {
+      const d = t.published_at.slice(0, 10)
+      if (d < dateRange.start || d > dateRange.end) return false
+      if (filters.patternTypes.length > 0 && (!t.family || !filters.patternTypes.includes(t.family))) return false
+      if (filters.assetClasses.length > 0 && (!t.asset_class || !filters.assetClasses.includes(t.asset_class))) return false
+      if (filters.marketIds.length > 0 && (!t.symbol || !filters.marketIds.includes(t.symbol))) return false
+      if (filters.directions.length > 0 && (!t.direction || !filters.directions.includes(t.direction))) return false
+      return true
+    })
+  }, [allTrades, filters, dateRange])
+
+  const summary = useMemo(() => computePatternSummary(filteredTrades), [filteredTrades])
+
+  const analyticsTrades = useMemo(() => filteredTrades.map(toAnalyticsTrade) as unknown as MetricsTrade[], [filteredTrades])
   const cumulative = useMemo(() => cumulativeSeries(analyticsTrades), [analyticsTrades])
   const drawdown = useMemo(() => drawdownSeries(analyticsTrades), [analyticsTrades])
   const monthly = useMemo(() => monthlyMatrix(analyticsTrades), [analyticsTrades])
   const rolling = useMemo(() => rollingTradeWindows(analyticsTrades), [analyticsTrades])
   const maxDD = useMemo(() => maxDrawdown(analyticsTrades).value, [analyticsTrades])
 
-  const familyRows = useMemo(() => summary ? summary.byFamily.map(toAttributionRow) : [], [summary])
-  const granularityRows = useMemo(() => summary ? summary.byGranularity.map(toAttributionRow) : [], [summary])
-  const assetClassRows = useMemo(() => summary ? summary.byAssetClass.map(toAttributionRow) : [], [summary])
+  const familyRows = useMemo(() => summary.byFamily.map(toAttributionRow), [summary])
+  const granularityRows = useMemo(() => summary.byGranularity.map(toAttributionRow), [summary])
+  const assetClassRows = useMemo(() => summary.byAssetClass.map(toAttributionRow), [summary])
   const bestFamilies = useMemo(() => rankAttribution(familyRows, MIN_TRADES_FOR_FAMILY_RANKING, 'best', 5), [familyRows])
   const worstFamilies = useMemo(() => rankAttribution(familyRows, MIN_TRADES_FOR_FAMILY_RANKING, 'worst', 5), [familyRows])
   const familyContributionRows = useMemo(() => familyRows.map(r => ({ ...r, label: truncateLabel(r.label) })), [familyRows])
@@ -304,33 +345,95 @@ export function PatternsTab() {
         as a sibling below, outside this div, since a display:none ancestor can't be
         overridden by a descendant's print:static rule. */}
     <div className="space-y-6 print:hidden">
-      {/* KPI strip -- Total Patterns/Win Rate/Avg R are the server-computed, status-based
-          PatternSummary figures (see lib/patternAnalytics.ts); Max Drawdown is computed
+      {/* Filter bar -- styled to match AnalyticsFilters.tsx (the Analyst Signals tab's
+          own filter card) for visual consistency across tabs. */}
+      <div className="rounded-lg border border-border bg-card p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-medium">Filters</p>
+          {hasActivePatternFilters(filters) && (
+            <button onClick={() => setFilters(DEFAULT_PATTERN_FILTERS)} className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+              Clear all
+            </button>
+          )}
+        </div>
+
+        <div className="space-y-1.5">
+          <p className="text-xs text-muted-foreground">Date</p>
+          <div className="flex flex-wrap gap-1.5">
+            {DATE_PRESET_OPTIONS.map(opt => (
+              <button key={opt.key} onClick={() => setFilters(f => ({ ...f, datePreset: opt.key }))}
+                className={`text-xs px-2.5 py-1.5 rounded-md border transition-colors ${
+                  filters.datePreset === opt.key
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/50'
+                }`}>
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          {filters.datePreset === 'CUSTOM' && (
+            <div className="flex items-center gap-2 pt-1">
+              <input type="date" value={filters.customStart ?? ''} onChange={e => setFilters(f => ({ ...f, customStart: e.target.value || null }))}
+                className="text-xs px-2 py-1.5 rounded-md border border-border bg-background" />
+              <span className="text-xs text-muted-foreground">to</span>
+              <input type="date" value={filters.customEnd ?? ''} onChange={e => setFilters(f => ({ ...f, customEnd: e.target.value || null }))}
+                className="text-xs px-2 py-1.5 rounded-md border border-border bg-background" />
+            </div>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <MultiSelect label="Pattern Type" options={patternTypeOptions} selected={filters.patternTypes}
+            onChange={v => setFilters(f => ({ ...f, patternTypes: v }))} placeholder="All patterns" />
+          <MultiSelect label="Asset Class" options={assetClassOptions} selected={filters.assetClasses}
+            onChange={v => setFilters(f => ({ ...f, assetClasses: v, marketIds: [] }))} placeholder="All classes" />
+          <MultiSelect label="Market" options={marketOptions} selected={filters.marketIds}
+            onChange={v => setFilters(f => ({ ...f, marketIds: v }))} placeholder="All markets" />
+        </div>
+
+        <div className="border-t border-border pt-3">
+          <button onClick={() => setMoreOpen(!moreOpen)} className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+            {moreOpen ? '▲ Fewer filters' : '▼ More filters'}
+          </button>
+          {moreOpen && (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 mt-3">
+              <MultiSelect label="Direction" options={DIRECTION_OPTIONS} selected={filters.directions}
+                onChange={v => setFilters(f => ({ ...f, directions: v }))} placeholder="Both" />
+              <MultiSelect label="Session" options={SESSION_OPTIONS} selected={filters.sessions}
+                onChange={v => setFilters(f => ({ ...f, sessions: v }))} placeholder="All sessions" />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* KPI strip -- Total Patterns/Win Rate/Avg R are computed client-side (via
+          computePatternSummary) from the filtered trade set, same formulas
+          lib/patternAnalytics.ts always used server-side; Max Drawdown is computed
           client-side from the trade series via lib/metrics.ts, since PatternSummary has
           no drawdown concept. Trigger Rate is intentionally omitted: pattern trades are
           only published once already triggered, so it's always ~100% and carries no
           signal. PerformanceKpiStrip isn't reused here -- its METRIC_DEFS hardcodes a
           fixed 6-metric set (Triggered Trades/Profit Factor instead of Total Patterns)
           that doesn't match this tab's metrics. */}
-            <div className="flex items-start justify-between gap-4">
+      <div className="flex items-start justify-between gap-4">
         <div className="grid grow grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           <div className="rounded-lg border border-border bg-card p-4 space-y-1">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Total Patterns</p>
-            <p className="text-2xl font-semibold tabular-nums">{summary ? summary.totalPatterns : '—'}</p>
+            <p className="text-2xl font-semibold tabular-nums">{!loading ? summary.totalPatterns : '—'}</p>
           </div>
           <div className="rounded-lg border border-border bg-card p-4 space-y-1">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Win Rate</p>
-            <p className="text-2xl font-semibold tabular-nums">{summary ? formatPercent(summary.winRate) : '—'}</p>
+            <p className="text-2xl font-semibold tabular-nums">{!loading ? formatPercent(summary.winRate) : '—'}</p>
           </div>
           <div className="rounded-lg border border-border bg-card p-4 space-y-1">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Avg R</p>
-            <p className={`text-2xl font-semibold tabular-nums ${summary ? positivityClass(summary.avgR) : ''}`}>
-              {summary ? formatR(summary.avgR) : '—'}
+            <p className={`text-2xl font-semibold tabular-nums ${!loading ? positivityClass(summary.avgR) : ''}`}>
+              {!loading ? formatR(summary.avgR) : '—'}
             </p>
           </div>
           <div className="rounded-lg border border-border bg-card p-4 space-y-1">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Max Drawdown</p>
-            <p className="text-2xl font-semibold tabular-nums text-red-700">{trades.length > 0 ? formatR(maxDD) : '—'}</p>
+            <p className="text-2xl font-semibold tabular-nums text-red-700">{filteredTrades.length > 0 ? formatR(maxDD) : '—'}</p>
           </div>
           <div className="rounded-lg border border-border bg-card p-4 space-y-1">
             <div className="flex items-center gap-1">
@@ -340,7 +443,7 @@ export function PatternsTab() {
               </Tooltip>
             </div>
             <p className="text-2xl font-semibold tabular-nums">
-              {summary?.payoutRatio != null ? summary.payoutRatio.toFixed(2) : '—'}
+              {!loading && summary.payoutRatio != null ? summary.payoutRatio.toFixed(2) : '—'}
             </p>
           </div>
           <div className="rounded-lg border border-border bg-card p-4 space-y-1">
@@ -351,49 +454,14 @@ export function PatternsTab() {
               </Tooltip>
             </div>
             <p className="text-2xl font-semibold tabular-nums">
-              {summary?.breakEvenWinRate != null ? formatPercent(summary.breakEvenWinRate) : '—'}
+              {!loading && summary.breakEvenWinRate != null ? formatPercent(summary.breakEvenWinRate) : '—'}
             </p>
           </div>
-                </div>
-        <button onClick={() => setReportOpen(true)} disabled={!summary || trades.length === 0}
+        </div>
+        <button onClick={() => setReportOpen(true)} disabled={loading || filteredTrades.length === 0}
           className="shrink-0 text-xs px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors">
           Generate Report
         </button>
-      </div>
-
-      {/* Filters */}
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-1">
-          {DATE_RANGES.map(r => (
-            <button key={r.key}
-              onClick={() => setDateRange(r.key)}
-              className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
-                dateRange === r.key
-                  ? 'bg-foreground text-background border-foreground'
-                  : 'border-border text-muted-foreground hover:text-foreground'
-              }`}>
-              {r.label}
-            </button>
-          ))}
-        </div>
-        <select value={granularity} onChange={e => setGranularity(e.target.value)}
-          className="text-xs px-2 py-1.5 rounded-md border border-border bg-background">
-          {GRANULARITY_OPTIONS.map(g => (
-            <option key={g} value={g}>{g === 'ALL' ? 'All granularities' : g}</option>
-          ))}
-        </select>
-        <select value={direction} onChange={e => setDirection(e.target.value)}
-          className="text-xs px-2 py-1.5 rounded-md border border-border bg-background">
-          {DIRECTION_OPTIONS.map(d => (
-            <option key={d.value} value={d.value}>{d.value === 'ALL' ? 'All directions' : d.label}</option>
-          ))}
-        </select>
-        <select value={assetClass} onChange={e => setAssetClass(e.target.value)}
-          className="text-xs px-2 py-1.5 rounded-md border border-border bg-background">
-          {ASSET_CLASS_OPTIONS.map(a => (
-            <option key={a} value={a}>{a === 'ALL' ? 'All asset classes' : a}</option>
-          ))}
-        </select>
       </div>
 
       {error && (
@@ -406,7 +474,7 @@ export function PatternsTab() {
         <div className="rounded-lg border border-border p-12 text-center">
           <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
         </div>
-      ) : summary && (
+      ) : (
         <div className="space-y-6">
           <CumulativePerformanceChart data={cumulative} />
           <DrawdownChart data={drawdown} />
@@ -436,7 +504,7 @@ export function PatternsTab() {
       )}
     </div>
 
-    {reportOpen && summary && (
+    {reportOpen && (
       <PatternReportBuilder
         trades={analyticsTrades} summary={summary}
         familyRows={familyRows} granularityRows={granularityRows} assetClassRows={assetClassRows}
