@@ -66,6 +66,23 @@ export function profitFactor(trades: MetricsTrade[]): number | null {
   return gains / Math.abs(losses)
 }
 
+export function payoutRatio(trades: MetricsTrade[]): number | null {
+  const triggered = triggeredTrades(trades)
+  const wins = triggered.filter(t => (t.result_r ?? 0) > 0)
+  const losses = triggered.filter(t => (t.result_r ?? 0) < 0)
+  if (wins.length === 0 || losses.length === 0) return null
+  const avgWin = wins.reduce((s, t) => s + (t.result_r ?? 0), 0) / wins.length
+  const avgLoss = Math.abs(losses.reduce((s, t) => s + (t.result_r ?? 0), 0) / losses.length)
+  if (avgLoss === 0) return null
+  return round2(avgWin / avgLoss)
+}
+
+export function breakEvenWinRate(trades: MetricsTrade[]): number | null {
+  const pr = payoutRatio(trades)
+  if (pr === null || pr <= 0) return null
+  return round2(1 / (1 + pr))
+}
+
 // Mirrors calculateKpis.ts's actual formula exactly: both numerator and denominator
 // come from `analyst_publications` alone (reconciliation_status), with no join back
 // to actual_trades. (An earlier version of this function cross-referenced
@@ -139,11 +156,15 @@ export interface PerformanceSummary {
   profitFactor: number | null
   triggeredCount: number
   generatedCount: number
+  payoutRatio: number | null
+  breakEvenWinRate: number | null
 }
 
 export function computeSummary(trades: MetricsTrade[], pubs: MetricsPublication[]): PerformanceSummary {
   const avg = avgR(trades)
   const pf = profitFactor(trades)
+  const pr = payoutRatio(trades)
+  const bewr = breakEvenWinRate(trades)
   return {
     totalR: round2(totalR(trades)),
     avgR: avg !== null ? round2(avg) : null,
@@ -153,6 +174,8 @@ export function computeSummary(trades: MetricsTrade[], pubs: MetricsPublication[
     profitFactor: pf !== null ? round2(pf) : null,
     triggeredCount: triggeredTrades(trades).length,
     generatedCount: pubs.length,
+    payoutRatio: pr,
+    breakEvenWinRate: bewr,
   }
 }
 
@@ -199,8 +222,6 @@ export interface MonthlyMatrixRow {
   ytd: number | null
 }
 
-// Cells with no triggered trades are `totalR: null` (no data), distinct from a month
-// that closed flat at exactly 0.00R (a real, valid neutral result).
 export function monthlyMatrix(trades: MetricsTrade[]): MonthlyMatrixRow[] {
   const triggered = triggeredTrades(trades)
   const byYearMonth = new Map<string, MetricsTrade[]>()
@@ -246,9 +267,6 @@ const ROLLING_WINDOWS: { label: string; days: number | null }[] = [
   { label: 'Since Inception', days: null },
 ]
 
-// Rolling windows are always measured back from "today", independent of whatever
-// date-range preset is active on the page -- this is how institutional rolling-return
-// tables work (a fixed, standard set of lookback periods), not a filtered sub-view.
 export function rollingWindows(trades: MetricsTrade[], asOf: Date): RollingRow[] {
   const triggered = triggeredTrades(trades)
   const earliest = triggered.length > 0
@@ -263,9 +281,6 @@ export function rollingWindows(trades: MetricsTrade[], asOf: Date): RollingRow[]
     if (windowStart === null) {
       return { label: w.label, totalR: null, avgR: null, winRate: null, maxDD: null, trades: 0, insufficientData: true }
     }
-    // A fixed-length window (not Since Inception) needs data reaching back at least
-    // as far as its nominal start -- otherwise it would silently understate a
-    // "30 day" figure as if it were a full 30 days when there's only, say, 6.
     const insufficientData = w.days !== null && earliest !== null && earliest > windowStart
     if (insufficientData) {
       return { label: w.label, totalR: null, avgR: null, winRate: null, maxDD: null, trades: 0, insufficientData: true }
@@ -324,15 +339,8 @@ export function attributionBy(trades: MetricsTrade[], dimension: (t: MetricsTrad
     .sort((a, b) => b.totalR - a.totalR)
 }
 
-// Shared by the interactive dashboard and the PDF report so both rank markets under
-// the identical threshold -- one authoritative number, not three copies.
 export const MIN_TRADES_FOR_MARKET_RANKING = 20
 
-// Ranks already-grouped attribution rows (e.g. by market) by Total R, applying a
-// minimum-sample floor so single-trade groups can't dominate a "best/worst" list --
-// a market's worst possible single trade is capped at -1R, so raw trade-level
-// worst-performer lists are meaningless; ranking by aggregate Total R per market
-// with a real sample size is what actually surfaces where performance is won or lost.
 export function rankAttribution(rows: AttributionRow[], minTrades: number, direction: 'best' | 'worst', n = 10): AttributionRow[] {
   const qualifying = rows.filter(r => r.trades >= minTrades)
   const sorted = direction === 'best'
@@ -388,11 +396,6 @@ export function distinctAnalystCount(trades: MetricsTrade[]): number {
   return new Set(triggeredTrades(trades).map(t => t.analyst_id)).size
 }
 
-// Ties are common at the -1R floor (a capped loss), and Array.sort's stability means a
-// plain sort-then-slice(-n) on ties silently surfaces whichever end of the tied block
-// happens to sit at the array's tail -- since `trades` arrives published_at-descending
-// from the API, that tail is the OLDEST tied trades, not the most recent. Breaking ties
-// by recency explicitly avoids depending on incoming array order at all.
 export function bestWorstTrades(trades: MetricsTrade[], n = 10): { best: MetricsTrade[]; worst: MetricsTrade[] } {
   const triggered = triggeredTrades(trades)
   const sorted = (direction: 'best' | 'worst') => {
@@ -420,21 +423,6 @@ export interface TradeStatisticsSummary {
   avgDurationHours: number | null
 }
 
-// "Generated", "Triggered", "Expired" and "Trigger Rate" here all derive from the SAME
-// array (`pubs`), the record of every setup actually published, so the four reconcile
-// by construction (generated = triggered + expired, trigger rate = triggered/generated)
-// -- not from `trades` (actual_trades): that table mixes in MANUAL_BACKFILL rows, which
-// either duplicate recent API-sourced trades or (for genuinely historical dates) were
-// never published through the webhook feed at all, so counting any of these four off
-// `trades` inflates or deflates them relative to the others depending on the window.
-// `triggered` here used to come from triggeredTrades(trades).length -- a different
-// dataset than generated/expired's `pubs`, so the three never summed correctly and this
-// table's own displayed Trigger Rate (via triggerRate()'s calculateKpis.ts-matching
-// monthly-averaged formula, see that function's own comment) didn't equal
-// triggered/generated either, since it isn't a plain ratio by design. That formula is
-// still correct and still used by computeSummary() above for parity with
-// calculateKpis.ts's actual KPI figure -- it's just not what this table's four adjacent
-// fields need to visibly reconcile with each other.
 export function computeTradeStatistics(trades: MetricsTrade[], pubs: MetricsPublication[]): TradeStatisticsSummary {
   const triggered = triggeredTrades(trades)
   const wins = triggered.filter(t => (t.result_r ?? 0) > 0)
