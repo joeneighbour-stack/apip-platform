@@ -18,10 +18,11 @@ const METRIC_DEFS: { key: MetricKey; label: string; tip: string }[] = [
   { key: 'triggeredCount', label: 'Triggered Trades', tip: 'Recommendations that triggered and closed with a result in the period.' },
   { key: 'profitFactor', label: 'Profit Factor', tip: 'Gross gains divided by gross losses across triggered trades.' },
   { key: 'payoutRatio', label: 'Payout Ratio', tip: 'Average winning trade divided by average losing trade (absolute value). A ratio of 2.0 means winners are twice the size of losers.' },
-  { key: 'breakEvenWinRate', label: 'Break-Even Win Rate', tip: 'Minimum win rate needed to be profitable at the current payout ratio. Your actual win rate above this line is your edge.' },
+  { key: 'breakEvenWinRate', label: 'BE Win Rate', tip: 'Minimum win rate needed to be profitable at the current payout ratio. Your actual win rate above this line is your edge.' },
 ]
 
 function formatValue(key: MetricKey, value: number | null): string {
+  if (typeof value === 'number' && isNaN(value)) return '—'
   if (key === 'totalR' || key === 'maxDrawdown' || key === 'avgR') return formatR(value)
   if (key === 'winRate' || key === 'breakEvenWinRate') return formatPercent(value)
   if (key === 'triggeredCount') return value == null ? '—' : value.toLocaleString()

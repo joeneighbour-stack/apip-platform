@@ -406,8 +406,8 @@ export function PatternsTab() {
         </div>
       </div>
 
-      {/* KPI strip -- Total Patterns/Win Rate/Avg R are computed client-side (via
-          computePatternSummary) from the filtered trade set, same formulas
+      {/* KPI strip -- Total Patterns/Win Rate/Avg R/Cumulative R are computed client-side
+          (via computePatternSummary) from the filtered trade set, same formulas
           lib/patternAnalytics.ts always used server-side; Max Drawdown is computed
           client-side from the trade series via lib/metrics.ts, since PatternSummary has
           no drawdown concept. Trigger Rate is intentionally omitted: pattern trades are
@@ -416,7 +416,7 @@ export function PatternsTab() {
           fixed 6-metric set (Triggered Trades/Profit Factor instead of Total Patterns)
           that doesn't match this tab's metrics. */}
       <div className="flex items-start justify-between gap-4">
-        <div className="grid grow grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <div className="grid grow grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
           <div className="rounded-lg border border-border bg-card p-4 space-y-1">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Total Patterns</p>
             <p className="text-2xl font-semibold tabular-nums">{!loading ? summary.totalPatterns : '—'}</p>
@@ -436,6 +436,12 @@ export function PatternsTab() {
             <p className="text-2xl font-semibold tabular-nums text-red-700">{filteredTrades.length > 0 ? formatR(maxDD) : '—'}</p>
           </div>
           <div className="rounded-lg border border-border bg-card p-4 space-y-1">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Cumulative R</p>
+            <p className={`text-2xl font-semibold tabular-nums ${!loading ? positivityClass(summary.totalR) : ''}`}>
+              {!loading ? formatR(summary.totalR) : '—'}
+            </p>
+          </div>
+          <div className="rounded-lg border border-border bg-card p-4 space-y-1">
             <div className="flex items-center gap-1">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Payout Ratio</p>
               <Tooltip content="Average winning trade R divided by average losing trade R. A ratio above 1.0 means winners are larger than losers on average.">
@@ -448,7 +454,7 @@ export function PatternsTab() {
           </div>
           <div className="rounded-lg border border-border bg-card p-4 space-y-1">
             <div className="flex items-center gap-1">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Break-Even Win Rate</p>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">BE Win Rate</p>
               <Tooltip content="The minimum win rate needed to break even given the current payout ratio. Calculated as 1 ÷ (1 + Payout Ratio).">
                 <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-muted-foreground/40 text-muted-foreground/60 text-[9px] cursor-default select-none leading-none">i</span>
               </Tooltip>

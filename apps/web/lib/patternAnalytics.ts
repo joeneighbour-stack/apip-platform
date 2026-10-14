@@ -43,6 +43,7 @@ export interface PatternSummary {
   triggerRate: number | null
   winRate: number | null
   avgR: number | null
+  totalR: number
   payoutRatio: number | null
   breakEvenWinRate: number | null
   byFamily: PatternBreakdownRow[]
@@ -190,6 +191,7 @@ export function computePatternSummary(rows: PatternTradePoint[]): PatternSummary
     triggerRate: overall.triggerPct,
     winRate: overall.winPct,
     avgR: overall.avgR,
+    totalR: overall.totalR,
     payoutRatio: overall.payoutRatio,
     breakEvenWinRate: overall.breakEvenWinRate,
     byFamily,

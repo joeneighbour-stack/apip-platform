@@ -511,7 +511,7 @@ export function AiSignalsTab() {
           </div>
           <div className="rounded-lg border border-border bg-card p-4 space-y-1">
             <div className="flex items-center gap-1">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Break-Even Win Rate</p>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">BE Win Rate</p>
               <Tooltip content="The minimum win rate needed to break even given the current payout ratio. Calculated as 1 ÷ (1 + Payout Ratio).">
                 <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-muted-foreground/40 text-muted-foreground/60 text-[9px] cursor-default select-none leading-none">i</span>
               </Tooltip>
