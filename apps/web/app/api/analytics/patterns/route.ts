@@ -38,7 +38,7 @@ export async function GET(req: Request) {
   const assetClass = url.searchParams.get('assetClass')   // 'FX' | 'Equity' | ... | null (ALL)
 
   const adminDb = createAdminClient()
-  const FIELDS = 'family, granularity, asset_class, direction, status, triggered, rr, published_at, symbol'
+  const FIELDS = 'family, granularity, asset_class, direction, status, triggered, rr, published_at, symbol, exit_date'
 
   const allRows: PatternTradePoint[] = []
   let page = 0
