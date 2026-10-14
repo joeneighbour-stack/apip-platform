@@ -311,8 +311,8 @@ export function PatternsTab() {
           signal. PerformanceKpiStrip isn't reused here -- its METRIC_DEFS hardcodes a
           fixed 6-metric set (Triggered Trades/Profit Factor instead of Total Patterns)
           that doesn't match this tab's metrics. */}
-      <div className="flex items-start justify-between gap-4">
-        <div className="grid grow grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="flex items-start justify-between gap-4">
+        <div className="grid grow grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           <div className="rounded-lg border border-border bg-card p-4 space-y-1">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Total Patterns</p>
             <p className="text-2xl font-semibold tabular-nums">{summary ? summary.totalPatterns : '—'}</p>
@@ -331,7 +331,19 @@ export function PatternsTab() {
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Max Drawdown</p>
             <p className="text-2xl font-semibold tabular-nums text-red-700">{trades.length > 0 ? formatR(maxDD) : '—'}</p>
           </div>
-        </div>
+          <div className="rounded-lg border border-border bg-card p-4 space-y-1">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Payout Ratio</p>
+            <p className="text-2xl font-semibold tabular-nums">
+              {summary?.payoutRatio != null ? summary.payoutRatio.toFixed(2) : '—'}
+            </p>
+          </div>
+          <div className="rounded-lg border border-border bg-card p-4 space-y-1">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Break-Even Win Rate</p>
+            <p className="text-2xl font-semibold tabular-nums">
+              {summary?.breakEvenWinRate != null ? formatPercent(summary.breakEvenWinRate) : '—'}
+            </p>
+          </div>
+                </div>
         <button onClick={() => setReportOpen(true)} disabled={!summary || trades.length === 0}
           className="shrink-0 text-xs px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors">
           Generate Report
