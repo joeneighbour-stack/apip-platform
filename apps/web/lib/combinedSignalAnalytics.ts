@@ -1,5 +1,19 @@
 // apps/web/lib/combinedSignalAnalytics.ts
 
+// ─── Signal type keys / labels / order ──────────────────────────────────────
+
+export type SignalTypeKey = 'analyst' | 'patterns' | 'ai'
+
+export const TYPE_ORDER: SignalTypeKey[] = ['analyst', 'patterns', 'ai']
+
+export const TYPE_LABELS: Record<SignalTypeKey, string> = {
+  analyst: 'Analyst Signals',
+  patterns: 'Pattern Signals',
+  ai: 'AI Signals',
+}
+
+// ─── Core data shapes ────────────────────────────────────────────────────────
+
 export interface EnrichedSignal {
   date: string          // YYYY-MM-DD
   rr: number | null
@@ -12,87 +26,71 @@ export interface CumulativeRPoint {
   cumulativeR: number
 }
 
+// Alias used by CombinedCumulativeChart.tsx and CombinedSignalsReportBuilder.tsx
+export type CombinedCumulativePoint = { date: string; analyst?: number; patterns?: number; ai?: number }
+
 export interface NormalisedPoint {
   date: string
   value: number
 }
 
-export interface SignalTypeData {
-  uniqueSignals: number
-  triggeredSignals: number
-  outcomeCount: number
-  totalR: number
+export interface SignalTypeSummary {
+  totalPublished: number
+  totalSignals: number
   winRate: number
   avgR: number
+  totalR: number
+  maxDrawdownR: number
+  firstSignalDate: string | null
+  lastSignalDate: string | null
+}
+
+export interface SignalTypeData {
+  summary: SignalTypeSummary
   cumulativeR: CumulativeRPoint[]
 }
 
-export interface AssetClassRow {
+export interface CombinedAssetClassRow {
   assetClass: string
-  analystCount: number
   analystR: number | null
-  analystWinRate: number | null
-  patternCount: number
   patternR: number | null
-  patternWinRate: number | null
-  aiCount: number
   aiR: number | null
-  aiWinRate: number | null
-}
-
-export interface TopMarketRow {
-  symbol: string
-  analystCount: number
-  analystR: number | null
-  analystWinRate: number | null
-  patternCount: number
-  patternR: number | null
-  patternWinRate: number | null
-  aiCount: number
-  aiR: number | null
-  aiWinRate: number | null
-  totalSignals: number
-}
-
-export interface YearGridRow {
-  year: number
-  analystCount: number
-  analystR: number | null
-  analystWinRate: number | null
-  patternCount: number
-  patternR: number | null
-  patternWinRate: number | null
-  aiCount: number
-  aiR: number | null
-  aiWinRate: number | null
-  combinedCount: number
-  combinedR: number | null
+  combinedTotalR: number | null
   combinedWinRate: number | null
+}
+
+export interface CombinedMarketRow {
+  symbol: string
+  analystR: number | null
+  patternR: number | null
+  aiR: number | null
+  combinedTotalR: number | null
+  combinedWinRate: number | null
+  trades: number
+}
+
+export interface CombinedYearRow {
+  year: number
+  analyst: number | null
+  pattern: number | null
+  ai: number | null
 }
 
 export interface DayOfWeekRow {
   day: string
-  analystCount: number
-  analystR: number | null
-  patternCount: number
-  patternR: number | null
-  aiCount: number
-  aiR: number | null
+  trades: number
+  winRate: number | null
+  avgR: number | null
 }
 
-export interface MonthRow {
+export interface MonthOfYearRow {
   month: string
-  analystCount: number
-  analystR: number | null
-  patternCount: number
-  patternR: number | null
-  aiCount: number
-  aiR: number | null
+  trades: number
+  winRate: number | null
+  avgR: number | null
 }
 
-// ---------------------------------------------------------------------------
-// Canonical maps
-// ---------------------------------------------------------------------------
+// ─── Canonical maps ──────────────────────────────────────────────────────────
 
 const ASSET_CLASS_CANONICAL: Record<string, string> = {
   COMMODITY: 'Commodity',
@@ -134,7 +132,7 @@ const SYMBOL_CANONICAL: Record<string, string> = {
   DAX: 'DE40',
   Dax: 'DE40',
   NIKKEI: 'Nikkei',
-  // Oil stays as-is; Brent stays as-is (separate instruments)
+  // Oil and Brent stay separate (different instruments)
 }
 
 function canonicalSymbol(raw: string | null): string | null {
@@ -142,9 +140,13 @@ function canonicalSymbol(raw: string | null): string | null {
   return SYMBOL_CANONICAL[raw] ?? raw
 }
 
-// ---------------------------------------------------------------------------
-// Shared aggregation primitive
-// ---------------------------------------------------------------------------
+// ─── Utility exports ─────────────────────────────────────────────────────────
+
+export function monthYear(dateStr: string): string {
+  return new Date(dateStr + 'T12:00:00Z').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+}
+
+// ─── Shared aggregation primitive ────────────────────────────────────────────
 
 interface AggBucket {
   totalR: number
@@ -172,9 +174,7 @@ function aggregateByKey<T>(
   return map
 }
 
-// ---------------------------------------------------------------------------
-// Normalise cumulative series to start at 100
-// ---------------------------------------------------------------------------
+// ─── Normalise cumulative series to start at 100 ─────────────────────────────
 
 export function normaliseToIndex(points: NormalisedPoint[]): NormalisedPoint[] {
   if (points.length === 0) return []
@@ -187,9 +187,23 @@ export function normaliseToIndex(points: NormalisedPoint[]): NormalisedPoint[] {
   }))
 }
 
-// ---------------------------------------------------------------------------
-// Cumulative R series builder
-// ---------------------------------------------------------------------------
+// ─── Max drawdown ─────────────────────────────────────────────────────────────
+
+function maxDrawdown(signals: EnrichedSignal[]): number {
+  const withOutcome = signals.filter(s => s.rr !== null).sort((a, b) => a.date.localeCompare(b.date))
+  let peak = 0
+  let cumulative = 0
+  let maxDD = 0
+  for (const s of withOutcome) {
+    cumulative += s.rr!
+    if (cumulative > peak) peak = cumulative
+    const dd = peak - cumulative
+    if (dd > maxDD) maxDD = dd
+  }
+  return Math.round(maxDD * 100) / 100
+}
+
+// ─── Cumulative R series builder ─────────────────────────────────────────────
 
 function buildCumulativeR(signals: EnrichedSignal[]): CumulativeRPoint[] {
   const sorted = [...signals]
@@ -202,15 +216,13 @@ function buildCumulativeR(signals: EnrichedSignal[]): CumulativeRPoint[] {
   })
 }
 
-// ---------------------------------------------------------------------------
-// Merge cumulative series (outer join by date)
-// ---------------------------------------------------------------------------
+// ─── Merge cumulative series (outer join by date) ────────────────────────────
 
 export function mergeCumulativeSeries(
   analyst: CumulativeRPoint[],
   patterns: CumulativeRPoint[],
   ai: CumulativeRPoint[],
-): Array<{ date: string; analyst?: number; patterns?: number; ai?: number }> {
+): CombinedCumulativePoint[] {
   const allDates = new Set([
     ...analyst.map(p => p.date),
     ...patterns.map(p => p.date),
@@ -222,7 +234,6 @@ export function mergeCumulativeSeries(
   const pMap = new Map(patterns.map(p => [p.date, p.cumulativeR]))
   const iMap = new Map(ai.map(p => [p.date, p.cumulativeR]))
 
-  // Forward-fill
   let lastA: number | undefined
   let lastP: number | undefined
   let lastI: number | undefined
@@ -235,116 +246,148 @@ export function mergeCumulativeSeries(
   })
 }
 
-// ---------------------------------------------------------------------------
-// buildSignalTypeData
-// ---------------------------------------------------------------------------
+// ─── buildSignalTypeData ──────────────────────────────────────────────────────
 
 export function buildSignalTypeData(
   signals: EnrichedSignal[],
-  uniqueSignals: number,
-  triggeredSignals: number,
+  totalPublished: number,
 ): SignalTypeData {
   const withOutcome = signals.filter(s => s.rr !== null)
   const totalR = withOutcome.reduce((sum, s) => sum + s.rr!, 0)
   const wins = withOutcome.filter(s => s.rr! > 0).length
   const outcomeCount = withOutcome.length
 
+  const dated = signals.filter(s => s.date).map(s => s.date).sort()
+  const firstSignalDate = dated[0] ?? null
+  const lastSignalDate = dated[dated.length - 1] ?? null
+
   return {
-    uniqueSignals,
-    triggeredSignals,
-    outcomeCount,
-    totalR: Math.round(totalR * 100) / 100,
-    winRate: outcomeCount > 0 ? Math.round((wins / outcomeCount) * 1000) / 10 : 0,
-    avgR: outcomeCount > 0 ? Math.round((totalR / outcomeCount) * 100) / 100 : 0,
+    summary: {
+      totalPublished,
+      totalSignals: outcomeCount,
+      winRate: outcomeCount > 0 ? Math.round((wins / outcomeCount) * 1000) / 10 : 0,
+      avgR: outcomeCount > 0 ? Math.round((totalR / outcomeCount) * 100) / 100 : 0,
+      totalR: Math.round(totalR * 100) / 100,
+      maxDrawdownR: maxDrawdown(signals),
+      firstSignalDate,
+      lastSignalDate,
+    },
     cumulativeR: buildCumulativeR(signals),
   }
 }
 
-// ---------------------------------------------------------------------------
-// buildAssetClassBreakdown
-// ---------------------------------------------------------------------------
+// ─── buildKeyCallouts ─────────────────────────────────────────────────────────
+
+export function buildKeyCallouts(types: Record<SignalTypeKey, SignalTypeData>): string[] {
+  const callouts: string[] = []
+
+  for (const key of TYPE_ORDER) {
+    const d = types[key].summary
+    if (d.totalSignals < 10) continue
+    const label = TYPE_LABELS[key]
+    callouts.push(
+      `${label}: ${d.totalSignals.toLocaleString()} closed signals, ${formatWinRate(d.winRate)} win rate, ${formatTotalR(d.totalR)} total R.`
+    )
+  }
+
+  // Best performer by total R
+  const ranked = TYPE_ORDER
+    .map(k => ({ key: k, totalR: types[k].summary.totalR, count: types[k].summary.totalSignals }))
+    .filter(x => x.count >= 10)
+    .sort((a, b) => b.totalR - a.totalR)
+
+  if (ranked.length >= 2) {
+    callouts.push(`${TYPE_LABELS[ranked[0].key]} leads on total R with ${formatTotalR(ranked[0].totalR)}.`)
+  }
+
+  return callouts
+}
+
+function formatWinRate(wr: number): string {
+  return `${wr.toFixed(1)}%`
+}
+
+function formatTotalR(r: number): string {
+  return `${r >= 0 ? '+' : ''}${r.toFixed(2)}R`
+}
+
+// ─── buildAssetClassBreakdown ─────────────────────────────────────────────────
 
 export function buildAssetClassBreakdown(
   analystSignals: EnrichedSignal[],
   patternSignals: EnrichedSignal[],
   aiSignals: EnrichedSignal[],
-): AssetClassRow[] {
+): CombinedAssetClassRow[] {
   const aMap = aggregateByKey(analystSignals, s => canonicalAssetClass(s.assetClass), s => s.rr)
   const pMap = aggregateByKey(patternSignals, s => canonicalAssetClass(s.assetClass), s => s.rr)
   const iMap = aggregateByKey(aiSignals, s => canonicalAssetClass(s.assetClass), s => s.rr)
 
   const allClasses = new Set([...aMap.keys(), ...pMap.keys(), ...iMap.keys()])
 
-  return [...allClasses]
-    .sort()
-    .map(cls => {
-      const a = aMap.get(cls)
-      const p = pMap.get(cls)
-      const i = iMap.get(cls)
-      return {
-        assetClass: cls,
-        analystCount: a?.outcomes ?? 0,
-        analystR: a ? Math.round(a.totalR * 100) / 100 : null,
-        analystWinRate: a && a.outcomes > 0 ? Math.round((a.wins / a.outcomes) * 1000) / 10 : null,
-        patternCount: p?.outcomes ?? 0,
-        patternR: p ? Math.round(p.totalR * 100) / 100 : null,
-        patternWinRate: p && p.outcomes > 0 ? Math.round((p.wins / p.outcomes) * 1000) / 10 : null,
-        aiCount: i?.outcomes ?? 0,
-        aiR: i ? Math.round(i.totalR * 100) / 100 : null,
-        aiWinRate: i && i.outcomes > 0 ? Math.round((i.wins / i.outcomes) * 1000) / 10 : null,
-      }
-    })
+  return [...allClasses].sort().map(cls => {
+    const a = aMap.get(cls)
+    const p = pMap.get(cls)
+    const i = iMap.get(cls)
+
+    const combinedOutcomes = (a?.outcomes ?? 0) + (p?.outcomes ?? 0) + (i?.outcomes ?? 0)
+    const combinedWins = (a?.wins ?? 0) + (p?.wins ?? 0) + (i?.wins ?? 0)
+    const combinedR = (a?.totalR ?? 0) + (p?.totalR ?? 0) + (i?.totalR ?? 0)
+
+    return {
+      assetClass: cls,
+      analystR: a ? Math.round(a.totalR * 100) / 100 : null,
+      patternR: p ? Math.round(p.totalR * 100) / 100 : null,
+      aiR: i ? Math.round(i.totalR * 100) / 100 : null,
+      combinedTotalR: combinedOutcomes > 0 ? Math.round(combinedR * 100) / 100 : null,
+      combinedWinRate: combinedOutcomes > 0 ? Math.round((combinedWins / combinedOutcomes) * 1000) / 10 : null,
+    }
+  })
 }
 
-// ---------------------------------------------------------------------------
-// buildTopMarkets
-// ---------------------------------------------------------------------------
+// ─── buildTopMarkets ──────────────────────────────────────────────────────────
 
 export function buildTopMarkets(
   analystSignals: EnrichedSignal[],
   patternSignals: EnrichedSignal[],
   aiSignals: EnrichedSignal[],
   topN = 20,
-): TopMarketRow[] {
+): CombinedMarketRow[] {
   const aMap = aggregateByKey(analystSignals, s => canonicalSymbol(s.symbol), s => s.rr)
   const pMap = aggregateByKey(patternSignals, s => canonicalSymbol(s.symbol), s => s.rr)
   const iMap = aggregateByKey(aiSignals, s => canonicalSymbol(s.symbol), s => s.rr)
 
   const allSymbols = new Set([...aMap.keys(), ...pMap.keys(), ...iMap.keys()])
 
-  const rows: TopMarketRow[] = [...allSymbols].map(sym => {
+  const rows: CombinedMarketRow[] = [...allSymbols].map(sym => {
     const a = aMap.get(sym)
     const p = pMap.get(sym)
     const i = iMap.get(sym)
+
+    const combinedOutcomes = (a?.outcomes ?? 0) + (p?.outcomes ?? 0) + (i?.outcomes ?? 0)
+    const combinedWins = (a?.wins ?? 0) + (p?.wins ?? 0) + (i?.wins ?? 0)
+    const combinedR = (a?.totalR ?? 0) + (p?.totalR ?? 0) + (i?.totalR ?? 0)
+
     return {
       symbol: sym,
-      analystCount: a?.outcomes ?? 0,
       analystR: a ? Math.round(a.totalR * 100) / 100 : null,
-      analystWinRate: a && a.outcomes > 0 ? Math.round((a.wins / a.outcomes) * 1000) / 10 : null,
-      patternCount: p?.outcomes ?? 0,
       patternR: p ? Math.round(p.totalR * 100) / 100 : null,
-      patternWinRate: p && p.outcomes > 0 ? Math.round((p.wins / p.outcomes) * 1000) / 10 : null,
-      aiCount: i?.outcomes ?? 0,
       aiR: i ? Math.round(i.totalR * 100) / 100 : null,
-      aiWinRate: i && i.outcomes > 0 ? Math.round((i.wins / i.outcomes) * 1000) / 10 : null,
-      totalSignals: (a?.outcomes ?? 0) + (p?.outcomes ?? 0) + (i?.outcomes ?? 0),
+      combinedTotalR: combinedOutcomes > 0 ? Math.round(combinedR * 100) / 100 : null,
+      combinedWinRate: combinedOutcomes > 0 ? Math.round((combinedWins / combinedOutcomes) * 1000) / 10 : null,
+      trades: combinedOutcomes,
     }
   })
 
-  return rows
-    .sort((a, b) => b.totalSignals - a.totalSignals)
-    .slice(0, topN)
+  return rows.sort((a, b) => b.trades - a.trades).slice(0, topN)
 }
 
-// ---------------------------------------------------------------------------
-// buildYearGrid
-// ---------------------------------------------------------------------------
+// ─── buildYearGrid ────────────────────────────────────────────────────────────
 
 export function buildYearGrid(
   analystSignals: EnrichedSignal[],
   patternSignals: EnrichedSignal[],
   aiSignals: EnrichedSignal[],
-): YearGridRow[] {
+): CombinedYearRow[] {
   const yearFn = (s: EnrichedSignal) => s.date.slice(0, 4)
 
   const aMap = aggregateByKey(analystSignals, yearFn, s => s.rr)
@@ -353,38 +396,15 @@ export function buildYearGrid(
 
   const allYears = new Set([...aMap.keys(), ...pMap.keys(), ...iMap.keys()])
 
-  return [...allYears]
-    .sort()
-    .map(year => {
-      const a = aMap.get(year)
-      const p = pMap.get(year)
-      const i = iMap.get(year)
-
-      const combinedR = (a?.totalR ?? 0) + (p?.totalR ?? 0) + (i?.totalR ?? 0)
-      const combinedOutcomes = (a?.outcomes ?? 0) + (p?.outcomes ?? 0) + (i?.outcomes ?? 0)
-      const combinedWins = (a?.wins ?? 0) + (p?.wins ?? 0) + (i?.wins ?? 0)
-
-      return {
-        year: parseInt(year, 10),
-        analystCount: a?.outcomes ?? 0,
-        analystR: a ? Math.round(a.totalR * 100) / 100 : null,
-        analystWinRate: a && a.outcomes > 0 ? Math.round((a.wins / a.outcomes) * 1000) / 10 : null,
-        patternCount: p?.outcomes ?? 0,
-        patternR: p ? Math.round(p.totalR * 100) / 100 : null,
-        patternWinRate: p && p.outcomes > 0 ? Math.round((p.wins / p.outcomes) * 1000) / 10 : null,
-        aiCount: i?.outcomes ?? 0,
-        aiR: i ? Math.round(i.totalR * 100) / 100 : null,
-        aiWinRate: i && i.outcomes > 0 ? Math.round((i.wins / i.outcomes) * 1000) / 10 : null,
-        combinedCount: combinedOutcomes,
-        combinedR: combinedOutcomes > 0 ? Math.round(combinedR * 100) / 100 : null,
-        combinedWinRate: combinedOutcomes > 0 ? Math.round((combinedWins / combinedOutcomes) * 1000) / 10 : null,
-      }
-    })
+  return [...allYears].sort().map(year => ({
+    year: parseInt(year, 10),
+    analyst: aMap.has(year) ? Math.round(aMap.get(year)!.totalR * 100) / 100 : null,
+    pattern: pMap.has(year) ? Math.round(pMap.get(year)!.totalR * 100) / 100 : null,
+    ai: iMap.has(year) ? Math.round(iMap.get(year)!.totalR * 100) / 100 : null,
+  }))
 }
 
-// ---------------------------------------------------------------------------
-// buildDayOfWeekBreakdown
-// ---------------------------------------------------------------------------
+// ─── buildDayOfWeekBreakdown ──────────────────────────────────────────────────
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
@@ -393,34 +413,23 @@ export function buildDayOfWeekBreakdown(
   patternSignals: EnrichedSignal[],
   aiSignals: EnrichedSignal[],
 ): DayOfWeekRow[] {
-  const dayFn = (s: EnrichedSignal) => {
-    const d = new Date(s.date + 'T00:00:00Z')
-    return DAY_NAMES[d.getUTCDay()]
-  }
+  const dayFn = (s: EnrichedSignal) => DAY_NAMES[new Date(s.date + 'T00:00:00Z').getUTCDay()]
 
-  const aMap = aggregateByKey(analystSignals, dayFn, s => s.rr)
-  const pMap = aggregateByKey(patternSignals, dayFn, s => s.rr)
-  const iMap = aggregateByKey(aiSignals, dayFn, s => s.rr)
+  const allSignals = [...analystSignals, ...patternSignals, ...aiSignals]
+  const map = aggregateByKey(allSignals, dayFn, s => s.rr)
 
   return DAY_NAMES.map(day => {
-    const a = aMap.get(day)
-    const p = pMap.get(day)
-    const i = iMap.get(day)
+    const b = map.get(day)
     return {
       day,
-      analystCount: a?.outcomes ?? 0,
-      analystR: a ? Math.round(a.totalR * 100) / 100 : null,
-      patternCount: p?.outcomes ?? 0,
-      patternR: p ? Math.round(p.totalR * 100) / 100 : null,
-      aiCount: i?.outcomes ?? 0,
-      aiR: i ? Math.round(i.totalR * 100) / 100 : null,
+      trades: b?.outcomes ?? 0,
+      winRate: b && b.outcomes > 0 ? Math.round((b.wins / b.outcomes) * 1000) / 10 : null,
+      avgR: b && b.outcomes > 0 ? Math.round((b.totalR / b.outcomes) * 100) / 100 : null,
     }
   })
 }
 
-// ---------------------------------------------------------------------------
-// buildMonthBreakdown
-// ---------------------------------------------------------------------------
+// ─── buildMonthBreakdown ──────────────────────────────────────────────────────
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -431,28 +440,19 @@ export function buildMonthBreakdown(
   analystSignals: EnrichedSignal[],
   patternSignals: EnrichedSignal[],
   aiSignals: EnrichedSignal[],
-): MonthRow[] {
-  const monthFn = (s: EnrichedSignal) => {
-    const m = parseInt(s.date.slice(5, 7), 10) - 1
-    return MONTH_NAMES[m]
-  }
+): MonthOfYearRow[] {
+  const monthFn = (s: EnrichedSignal) => MONTH_NAMES[parseInt(s.date.slice(5, 7), 10) - 1]
 
-  const aMap = aggregateByKey(analystSignals, monthFn, s => s.rr)
-  const pMap = aggregateByKey(patternSignals, monthFn, s => s.rr)
-  const iMap = aggregateByKey(aiSignals, monthFn, s => s.rr)
+  const allSignals = [...analystSignals, ...patternSignals, ...aiSignals]
+  const map = aggregateByKey(allSignals, monthFn, s => s.rr)
 
   return MONTH_NAMES.map(month => {
-    const a = aMap.get(month)
-    const p = pMap.get(month)
-    const i = iMap.get(month)
+    const b = map.get(month)
     return {
       month,
-      analystCount: a?.outcomes ?? 0,
-      analystR: a ? Math.round(a.totalR * 100) / 100 : null,
-      patternCount: p?.outcomes ?? 0,
-      patternR: p ? Math.round(p.totalR * 100) / 100 : null,
-      aiCount: i?.outcomes ?? 0,
-      aiR: i ? Math.round(i.totalR * 100) / 100 : null,
+      trades: b?.outcomes ?? 0,
+      winRate: b && b.outcomes > 0 ? Math.round((b.wins / b.outcomes) * 1000) / 10 : null,
+      avgR: b && b.outcomes > 0 ? Math.round((b.totalR / b.outcomes) * 100) / 100 : null,
     }
   })
 }
