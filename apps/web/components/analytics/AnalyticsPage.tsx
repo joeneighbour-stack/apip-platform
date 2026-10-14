@@ -268,8 +268,15 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
   async function handleRefresh() {
     setRefreshing(true)
     try {
-      const data = await fetch('/api/analytics/summary?force=true').then(r => r.json())
+      const res = await fetch('/api/analytics/summary?force=true')
+      const data = await res.json()
+      if (!res.ok || (data && typeof data === 'object' && 'error' in data)) {
+        setError(typeof data?.error === 'string' ? data.error : 'Failed to refresh analytics.')
+        return
+      }
       setCachedView(data)
+    } catch {
+      setError('Failed to refresh analytics.')
     } finally {
       setRefreshing(false)
     }
