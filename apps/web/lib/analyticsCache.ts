@@ -52,6 +52,10 @@ async function fetchAllPublications(): Promise<any[]> {
       .range(page * 1000, page * 1000 + 999)
     if (error) {
       console.error('[analyticsCache] Failed to fetch analyst_publications:', error.message)
+      const msg = error.message.toLowerCase()
+      if (msg.includes('statement timeout') || msg.includes('canceling statement')) {
+        throw new Error('analyst_publications fetch timed out')
+      }
       hasMore = false
     } else if (!data?.length) { hasMore = false } else { all.push(...data); hasMore = data.length === 1000; page++ }
     if (all.length >= 150_000) break
@@ -152,6 +156,37 @@ async function computeDefaultAnalyticsView() {
 
 export type DefaultAnalyticsView = Awaited<ReturnType<typeof computeDefaultAnalyticsView>>
 
+// In-memory only -- doesn't help across separate Railway instances, but within a single
+// process it collapses concurrent cache-miss callers (e.g. a force=true refresh racing
+// the warm-cache cron) onto one recompute instead of each kicking off its own full
+// 30,000+ trade / 40,000+ publication rebuild and contending for the same DB resources.
+let recomputeInProgress: Promise<DefaultAnalyticsView> | null = null
+
+async function doRecompute(): Promise<DefaultAnalyticsView> {
+  const db = createAdminClient()
+
+  console.log('Analytics cache miss -- computing...')
+  let result: DefaultAnalyticsView
+  try {
+    result = await computeDefaultAnalyticsView()
+  } catch (err) {
+    console.error(
+      '[analyticsCache] computeDefaultAnalyticsView() failed -- existing cache row left untouched:',
+      err instanceof Error ? err.message : err,
+    )
+    throw err
+  }
+
+  const { error: upsertError } = await db.from('analytics_cache').upsert({
+    cache_key: CACHE_KEY,
+    payload: result as any,
+    computed_at: new Date().toISOString(),
+    trade_count: result.tradeCount,
+  })
+  if (upsertError) console.error('[analyticsCache] Failed to write analytics_cache:', upsertError.message)
+  return result
+}
+
 // No TTL: the row is only replaced by an explicit recompute -- either
 // /api/analytics/warm-cache (hit every 2 hours during market hours by
 // analytics-cache-warm.yml) or /api/analytics/summary?force=true. This
@@ -177,16 +212,10 @@ export async function getCachedDefaultAnalyticsView(): Promise<DefaultAnalyticsV
     return data.payload as DefaultAnalyticsView
   }
 
-  console.log('Analytics cache miss -- computing...')
-  const result = await computeDefaultAnalyticsView()
-  const { error: upsertError } = await db.from('analytics_cache').upsert({
-    cache_key: CACHE_KEY,
-    payload: result as any,
-    computed_at: new Date().toISOString(),
-    trade_count: result.tradeCount,
-  })
-  if (upsertError) console.error('[analyticsCache] Failed to write analytics_cache:', upsertError.message)
-  return result
+  if (recomputeInProgress) return recomputeInProgress
+
+  recomputeInProgress = doRecompute().finally(() => { recomputeInProgress = null })
+  return recomputeInProgress
 }
 
 export async function invalidateAnalyticsCache(): Promise<void> {
