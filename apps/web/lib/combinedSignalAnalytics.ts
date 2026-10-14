@@ -27,7 +27,7 @@ export interface CumulativeRPoint {
 }
 
 // Alias used by CombinedCumulativeChart.tsx and CombinedSignalsReportBuilder.tsx
-export type CombinedCumulativePoint = { date: string; analyst?: number; patterns?: number; ai?: number }
+export type CombinedCumulativePoint = { date: string; analyst?: number | null; patterns?: number | null; ai?: number | null }
 
 export interface NormalisedPoint {
   date: string
