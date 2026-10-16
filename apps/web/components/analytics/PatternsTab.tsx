@@ -48,6 +48,15 @@ const SESSION_OPTIONS = [
   { value: 'EUROPEAN', label: 'European' }, { value: 'US', label: 'US' },
   { value: 'APAC', label: 'APAC' }, { value: 'CRYPTO', label: 'Crypto' },
 ]
+// Values are lowercase to match the real `granularity` column values (see
+// lib/patternAnalytics.ts's GRANULARITY_ORDER, which groups actual rows by '1h'/'4h'/'1d')
+// -- not the uppercase '1H'/'4H'/'1D' a first draft of this constant used, which would
+// have silently matched zero rows against live data.
+const GRANULARITY_OPTIONS = [
+  { value: '1h', label: '1 Hour' },
+  { value: '4h', label: '4 Hour' },
+  { value: '1d', label: 'Daily' },
+]
 
 // Same minimum sample used elsewhere in the app for market/entity ranking
 // (lib/metrics.ts's MIN_TRADES_FOR_MARKET_RANKING) -- a single lucky/unlucky pattern
@@ -316,6 +325,7 @@ export function PatternsTab() {
       if (filters.assetClasses.length > 0 && (!t.asset_class || !filters.assetClasses.includes(t.asset_class))) return false
       if (filters.marketIds.length > 0 && (!t.symbol || !filters.marketIds.includes(t.symbol))) return false
       if (filters.directions.length > 0 && (!t.direction || !filters.directions.includes(t.direction))) return false
+      if (filters.granularities.length > 0 && (!t.granularity || !filters.granularities.includes(t.granularity))) return false
       return true
     })
   }, [allTrades, filters, dateRange])
@@ -389,13 +399,15 @@ export function PatternsTab() {
           )}
         </div>
 
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <MultiSelect label="Pattern Type" options={patternTypeOptions} selected={filters.patternTypes}
             onChange={v => setFilters(f => ({ ...f, patternTypes: v }))} placeholder="All patterns" />
           <MultiSelect label="Asset Class" options={assetClassOptions} selected={filters.assetClasses}
             onChange={v => setFilters(f => ({ ...f, assetClasses: v, marketIds: [] }))} placeholder="All classes" />
           <MultiSelect label="Market" options={marketOptions} selected={filters.marketIds}
             onChange={v => setFilters(f => ({ ...f, marketIds: v }))} placeholder="All markets" />
+          <MultiSelect label="Granularity" options={GRANULARITY_OPTIONS} selected={filters.granularities}
+            onChange={v => setFilters(f => ({ ...f, granularities: v }))} placeholder="All" />
         </div>
 
         <div className="border-t border-border pt-3">

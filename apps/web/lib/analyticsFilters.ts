@@ -71,6 +71,7 @@ export interface PatternFilterState {
   marketIds: string[]
   directions: string[]
   sessions: string[]
+  granularities: string[]
 }
 
 export const DEFAULT_PATTERN_FILTERS: PatternFilterState = {
@@ -82,12 +83,13 @@ export const DEFAULT_PATTERN_FILTERS: PatternFilterState = {
   marketIds: [],
   directions: [],
   sessions: [],
+  granularities: [],
 }
 
 export function hasActivePatternFilters(filters: PatternFilterState): boolean {
   return filters.datePreset !== DEFAULT_PATTERN_FILTERS.datePreset ||
     filters.patternTypes.length > 0 || filters.assetClasses.length > 0 || filters.marketIds.length > 0 ||
-    filters.directions.length > 0 || filters.sessions.length > 0
+    filters.directions.length > 0 || filters.sessions.length > 0 || filters.granularities.length > 0
 }
 
 export interface AiFilterState {
