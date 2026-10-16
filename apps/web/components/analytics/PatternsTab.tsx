@@ -276,10 +276,10 @@ export function PatternsTab() {
   // "what pattern types/asset classes/markets exist" is just whatever's actually present
   // in this fetch. Family is the raw code (e.g. "FLAG") -- labelled via FAMILY_LABELS,
   // same mapping the By Pattern Family table already uses.
-  const patternTypeOptions = useMemo(() => {
-    const codes = [...new Set(allTrades.map(t => t.family).filter((f): f is string => !!f))].sort()
-    return codes.map(code => ({ value: code, label: FAMILY_LABELS[code] ?? code }))
-  }, [allTrades])
+  const patternTypeOptions = useMemo(
+    () => Object.entries(FAMILY_LABELS).map(([value, label]) => ({ value, label })),
+    []
+  )
 
   const assetClassOptions = useMemo(() => {
     const classes = [...new Set(allTrades.map(t => t.asset_class).filter((c): c is string => !!c))].sort()
