@@ -114,8 +114,9 @@ function getAssetMap(): Promise<Map<string, string>> {
 async function resolveAssetId(symbol: string): Promise<string> {
   const map = await getAssetMap()
   const assetId = map.get(symbol)
-  if (assetId === undefined) {
-    throw new Error(`No AssetId mapping found for Finnhub symbol "${symbol}" in asset map CSV`)
+    if (assetId === undefined) {
+    console.warn(`[azurePrices] No mapping for "${symbol}" — skipping`)
+    return null as unknown as string
   }
   return assetId
 }
@@ -197,7 +198,8 @@ export async function getCandles(
   from: number,
   to: number,
 ): Promise<FinnhubCandleResponse> {
-  const assetId = await resolveAssetId(symbol)
+    const assetId = await resolveAssetId(symbol)
+  if (!assetId) return { s: 'no_data', t: [], o: [], h: [], l: [], c: [], v: [] }
   const tableClient = getTableClient(resolution)
 
   const bars = await fetchRange(tableClient, assetId, rowKey(from), rowKey(to + 1))
