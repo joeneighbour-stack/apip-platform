@@ -2,10 +2,11 @@
 // APIP Trading Intelligence & Performance Platform
 // Intraday Market State Snapshot Script
 // ============================================================================
-// Captures current APIP session high/low from Finnhub 5-minute OANDA bars,
-// derives previous_close from the final bar before session open, loads ATR20
-// from market_state_daily, applies Pine-style band construction, and writes
-// to market_state_intraday.
+// Captures current APIP session high/low from Azure Table Storage 5-minute
+// OHLC bars (see src/lib/azurePrices.ts -- drop-in replacement for the old
+// Finnhub forex/crypto candle endpoints), derives previous_close from the
+// final bar before session open, loads ATR20 from market_state_daily, applies
+// Pine-style band construction, and writes to market_state_intraday.
 //
 // APIP SESSION BOUNDARY:
 //   Sessions open at 22:00 UTC (17:00 America/New_York, DST-aware).
@@ -19,9 +20,9 @@
 //   lower_band    = top_anchor    - previous_atr20
 //
 // DATA SOURCES:
-//   previous_close, session h/l: Finnhub 5-min OANDA (FINNHUB_CANDLE_API_KEY)
+//   previous_close, session h/l: Azure Table Storage 5-min bars (PRICES_TABLE_CONN)
 //   previous_atr20:              market_state_daily.atr20 (Wilder RMA period 20)
-//   current_price:               Finnhub quote (FINNHUB_API_KEY)
+//   current_price:               last 5-min bar close (same Azure source)
 //
 // Run:
 //   npx tsx src/scripts/captureIntradaySnapshot.ts --session=EUROPEAN
@@ -30,13 +31,14 @@
 //
 // Required env vars:
 //   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
-//   FINNHUB_API_KEY          (quote endpoint -- production key)
-//   FINNHUB_CANDLE_API_KEY   (forex/candle resolution=5 -- candle-enabled key)
+//   PRICES_TABLE_CONN   Azure Table Storage connection string (see
+//                       src/lib/azurePrices.ts)
 // ============================================================================
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { buildMarketState } from '../services/marketStateService.js'
+import { getCandles } from '../lib/azurePrices.js'
 
 const ZONE_COUNT = 4
 
@@ -59,16 +61,12 @@ const SESSION_MARKETS: Record<string, string[]> = {
   ],
 }
 
-interface FinnhubQuote { c: number; h: number; l: number; o: number; t: number }
-interface FinnhubCandle { c: number[]; h: number[]; l: number[]; o: number[]; t: number[]; s: string }
-
 interface ApipSessionResult {
   previousClose: number;
   sessionHigh: number;
   sessionLow: number;
   currentPrice: number;
   barCount: number;
-  provenance: 'FIVE_MIN_BARS' | 'FALLBACK_QUOTE';
 }
 
 /**
@@ -88,106 +86,72 @@ function currentApipSessionOpenTs(): number {
 }
 
 /**
- * Fetches Finnhub 5-minute OANDA bars for the current APIP session.
+ * Fetches Azure Table Storage 5-minute bars for the current APIP session.
  * Returns previousClose (last bar before session open), session high/low,
  * and current price (last bar close).
- * Falls back to quote.c/h/l if candle fetch fails.
  */
-async function fetchApipSessionBars(
-  finnhubSymbol: string,
-  candleApiKey: string,
-  quoteApiKey: string,
-  isCrypto = false,
-): Promise<ApipSessionResult> {
+async function fetchApipSessionBars(finnhubSymbol: string): Promise<ApipSessionResult> {
   const sessionOpenTs = currentApipSessionOpenTs();
   const toTs = Math.floor(Date.now() / 1000);
   // Fetch from 1h before session open to capture the prev-close bar
   const fromTs = sessionOpenTs - 3600;
 
-  const resolution = isCrypto ? '5' : '5';
-  const endpoint = isCrypto
-    ? `https://finnhub.io/api/v1/crypto/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=${resolution}&from=${fromTs}&to=${toTs}&token=${candleApiKey}`
-    : `https://finnhub.io/api/v1/forex/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=${resolution}&from=${fromTs}&to=${toTs}&token=${candleApiKey}`;
+  const candles = await getCandles(finnhubSymbol, '5', fromTs, toTs);
+  if (candles.s !== 'ok' || !candles.t.length) {
+    throw new Error(`No price data for ${finnhubSymbol}`);
+  }
 
-  const res = await fetch(endpoint);
-  if (res.ok) {
-    const body: FinnhubCandle = await res.json();
-    if (body.s === 'ok' && body.t?.length > 0) {
-      // Split bars into pre-session (for prev close) and in-session (for h/l)
-      const preBars:  { ts: number; c: number }[] = [];
-      const sessH: number[] = [];
-      const sessL: number[] = [];
-      let latestC = 0;
+  // Split bars into pre-session (for prev close) and in-session (for h/l)
+  const preBars:  { ts: number; c: number }[] = [];
+  const sessH: number[] = [];
+  const sessL: number[] = [];
+  let latestC = 0;
 
-      for (let i = 0; i < body.t.length; i++) {
-        const ts = body.t[i]!;
-        const c  = body.c[i]!;
-        const h  = body.h[i]!;
-        const l  = body.l[i]!;
-        latestC = c;
-        if (ts < sessionOpenTs) {
-          preBars.push({ ts, c });
-        } else {
-          sessH.push(h);
-          sessL.push(l);
-        }
-      }
-
-      const previousClose = preBars.length > 0
-        ? preBars[preBars.length - 1]!.c
-        : (sessH.length > 0 ? body.c[0]! : latestC); // fallback: first in-session bar open
-
-      if (sessH.length === 0) {
-        // Session hasn't started yet — treat latest bar as current
-        return {
-          previousClose,
-          sessionHigh: body.h[body.h.length - 1]!,
-          sessionLow:  body.l[body.l.length - 1]!,
-          currentPrice: latestC,
-          barCount: 0,
-          provenance: 'FIVE_MIN_BARS',
-        };
-      }
-
-      return {
-        previousClose,
-        sessionHigh: Math.max(...sessH),
-        sessionLow:  Math.min(...sessL),
-        currentPrice: latestC,
-        barCount: sessH.length,
-        provenance: 'FIVE_MIN_BARS',
-      };
+  for (let i = 0; i < candles.t.length; i++) {
+    const ts = candles.t[i]!;
+    const c  = candles.c[i]!;
+    const h  = candles.h[i]!;
+    const l  = candles.l[i]!;
+    latestC = c;
+    if (ts < sessionOpenTs) {
+      preBars.push({ ts, c });
+    } else {
+      sessH.push(h);
+      sessL.push(l);
     }
   }
 
-  // Fallback: use quote endpoint (midnight-UTC boundary -- noted as approximate)
-  const quoteUrl = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(finnhubSymbol)}&token=${quoteApiKey}`;
-  const qRes = await fetch(quoteUrl);
-  if (!qRes.ok) throw new Error(`Finnhub quote HTTP ${qRes.status}`);
-  const q: FinnhubQuote = await qRes.json();
-  if (!q.c || q.c === 0) throw new Error(`No price for ${finnhubSymbol}`);
+  const previousClose = preBars.length > 0
+    ? preBars[preBars.length - 1]!.c
+    : (sessH.length > 0 ? candles.c[0]! : latestC); // fallback: first in-session bar open
+
+  if (sessH.length === 0) {
+    // Session hasn't started yet — treat latest bar as current
+    return {
+      previousClose,
+      sessionHigh: candles.h[candles.h.length - 1]!,
+      sessionLow:  candles.l[candles.l.length - 1]!,
+      currentPrice: latestC,
+      barCount: 0,
+    };
+  }
+
   return {
-    previousClose: q.c,   // best available; midnight boundary
-    sessionHigh: q.h > 0 ? q.h : q.c,
-    sessionLow:  q.l > 0 ? q.l : q.c,
-    currentPrice: q.c,
-    barCount: -1,         // -1 signals quote fallback
-    provenance: 'FALLBACK_QUOTE',
+    previousClose,
+    sessionHigh: Math.max(...sessH),
+    sessionLow:  Math.min(...sessL),
+    currentPrice: latestC,
+    barCount: sessH.length,
   };
 }
 
 async function main() {
   const SUPABASE_URL              = process.env.SUPABASE_URL
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
-  const FINNHUB_API_KEY           = process.env.FINNHUB_API_KEY
-  const FINNHUB_CANDLE_API_KEY    = process.env.FINNHUB_CANDLE_API_KEY
 
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !FINNHUB_API_KEY) {
-    console.error('Missing: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, FINNHUB_API_KEY')
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !process.env.PRICES_TABLE_CONN) {
+    console.error('Missing: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, PRICES_TABLE_CONN')
     process.exit(1)
-  }
-  if (!FINNHUB_CANDLE_API_KEY) {
-    console.warn('FINNHUB_CANDLE_API_KEY not set — will fall back to quote endpoint for session h/l (boundary mismatch risk)')
   }
 
   const isDryRun    = process.argv.includes('--dry-run')
@@ -240,7 +204,7 @@ async function main() {
     }
   }
 
-  const summary = { captured: 0, skipped: 0, errors: 0, fallbacks: 0 }
+  const summary = { captured: 0, skipped: 0, errors: 0 }
 
   for (const symbol of sessionSymbols) {
     const market = marketBySymbol.get(symbol)
@@ -264,18 +228,7 @@ async function main() {
     }
 
     try {
-      const isCrypto = market.price_data_provider === 'FINNHUB_CRYPTO'
-      const sess = await fetchApipSessionBars(
-        market.price_data_symbol,
-        FINNHUB_CANDLE_API_KEY ?? FINNHUB_API_KEY,
-        FINNHUB_API_KEY,
-        isCrypto,
-      )
-
-      if (sess.provenance === 'FALLBACK_QUOTE') {
-        console.warn(`  ${symbol}: using quote fallback (FINNHUB_CANDLE_API_KEY unavailable or no bars returned)`)
-        summary.fallbacks++
-      }
+      const sess = await fetchApipSessionBars(market.price_data_symbol)
 
       // Pine-style band construction
       const bottomAnchor = Math.min(sess.previousClose, sess.sessionLow)
@@ -325,7 +278,7 @@ async function main() {
         `  ${symbol}: price=${sess.currentPrice}, zone=${state.currentZone}` +
         `, h=${sess.sessionHigh}, l=${sess.sessionLow}` +
         `, prevClose=${sess.previousClose}, atr20=${dailyAtr.atr20.toFixed(5)}` +
-        ` [${sess.barCount < 0 ? 'QUOTE_FALLBACK' : sess.barCount + ' bars'}]`
+        ` [${sess.barCount} bars]`
       )
       summary.captured++
     } catch (err) {
@@ -340,7 +293,6 @@ async function main() {
   console.log(`Captured: ${summary.captured}`)
   console.log(`Skipped:  ${summary.skipped}`)
   console.log(`Errors:   ${summary.errors}`)
-  console.log(`Fallbacks (quote instead of 5-min): ${summary.fallbacks}`)
   if (isDryRun) console.log('\nDRY RUN -- nothing written.')
   if (!isDryRun && summary.errors > 0 && summary.captured === 0) {
     console.error('All markets failed -- exiting with code 1')
@@ -354,4 +306,3 @@ const invokedDirectly = process.argv[1] !== undefined &&
 if (invokedDirectly) {
   main().catch(err => { console.error('Fatal:', err); process.exit(1) })
 }
-

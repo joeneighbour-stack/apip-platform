@@ -22,18 +22,23 @@
 // That function is idempotent (never overwrites an existing entry_zone),
 // so this script is safe to re-run.
 //
+// Daily history is fetched from Azure Table Storage (see
+// src/lib/azurePrices.ts -- drop-in replacement for the old Finnhub
+// forex/candle endpoint used here).
+//
 // Run (dry run strongly recommended first):
 //   npx tsx src/scripts/reconstructHistoricalEntryZones.ts --dry-run
 //   npx tsx src/scripts/reconstructHistoricalEntryZones.ts
 //
 // Required environment variables:
-//   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, FINNHUB_API_KEY
+//   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, PRICES_TABLE_CONN
 // ============================================================================
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { buildMarketState, type OhlcBar } from '../services/marketStateService.js';
+import { getCandles } from '../lib/azurePrices.js';
 
 // Confirmed by finnhub-coverage-pilot.js -- real evidence, not assumed.
 const PILOT_BOUNDARY_DATE = '2018-04-18';
@@ -59,27 +64,23 @@ const CONFIRMED_MARKETS: { symbol: string; finnhubSymbol: string }[] = [
   { symbol: 'Copper', finnhubSymbol: 'OANDA:XCU_USD' },
 ];
 
-// db, FINNHUB_API_KEY, and isDryRun are assigned inside main(), not at
-// module load time -- so this file can be imported for unit testing (e.g.
-// findLastBarIndexOnOrBefore) without requiring real credentials present.
+// db and isDryRun are assigned inside main(), not at module load time -- so
+// this file can be imported for unit testing (e.g. findLastBarIndexOnOrBefore)
+// without requiring real credentials present.
 let db: SupabaseClient;
-let FINNHUB_API_KEY: string;
 let isDryRun: boolean;
-
-interface FinnhubCandleResponse { c: number[]; h: number[]; l: number[]; o: number[]; t: number[]; s: string; }
 
 async function fetchFullHistory(finnhubSymbol: string, fromDate: string): Promise<OhlcBar[]> {
   const from = Math.floor(new Date(fromDate).getTime() / 1000);
   const to = Math.floor(Date.now() / 1000);
-  const url = `https://finnhub.io/api/v1/forex/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=D&from=${from}&to=${to}&token=${FINNHUB_API_KEY}`;
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Finnhub HTTP ${response.status} for ${finnhubSymbol}`);
-  const body: FinnhubCandleResponse = await response.json();
-  if (body.s !== 'ok' || !body.c?.length) throw new Error(`Finnhub returned status '${body.s}' for ${finnhubSymbol}, no usable candles`);
+  const candles = await getCandles(finnhubSymbol, 'D', from, to);
+  if (candles.s !== 'ok' || !candles.c?.length) {
+    throw new Error(`No usable candles for ${finnhubSymbol}`);
+  }
 
-  const bars: OhlcBar[] = body.t.map((ts, i) => ({
+  const bars: OhlcBar[] = candles.t.map((ts, i) => ({
     date: new Date(ts * 1000).toISOString().slice(0, 10),
-    open: body.o[i]!, high: body.h[i]!, low: body.l[i]!, close: body.c[i]!,
+    open: candles.o[i]!, high: candles.h[i]!, low: candles.l[i]!, close: candles.c[i]!,
   }));
   bars.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   return bars;
@@ -103,13 +104,11 @@ interface TradeRow { trade_id: string; published_at: string; entry: number; }
 async function main() {
   const SUPABASE_URL = process.env.SUPABASE_URL;
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const finnhubKey = process.env.FINNHUB_API_KEY;
 
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !finnhubKey) {
-    console.error('SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and FINNHUB_API_KEY must all be set.');
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !process.env.PRICES_TABLE_CONN) {
+    console.error('SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and PRICES_TABLE_CONN must all be set.');
     process.exit(1);
   }
-  FINNHUB_API_KEY = finnhubKey;
   isDryRun = process.argv.includes('--dry-run');
   db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
@@ -194,7 +193,7 @@ async function main() {
     overallSummary.skippedInsufficientHistory += skippedInsufficient;
     overallSummary.skippedNullAtr += skippedNullAtr;
 
-    await new Promise((r) => setTimeout(r, 250)); // gentle pacing between markets' Finnhub calls
+    await new Promise((r) => setTimeout(r, 250)); // gentle pacing between markets' price lookups
   }
 
   console.log('=== OVERALL SUMMARY ===');

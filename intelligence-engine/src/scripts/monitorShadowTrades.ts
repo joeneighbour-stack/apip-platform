@@ -2,7 +2,9 @@
 // APIP Shadow Trade Lifecycle Monitor
 // ============================================================================
 // Runs every 5 minutes via GitHub Actions cron.
-// Uses Finnhub 5-minute OANDA OHLC bars as canonical price source.
+// Uses Azure Table Storage 5-minute OHLC bars as canonical price source
+// (see src/lib/azurePrices.ts -- drop-in replacement for the old Finnhub
+// forex/crypto candle endpoints, same { s, t, o, h, l, c } response shape).
 // Implements the full state machine defined in APIP Shadow Trade Lifecycle v1.0.
 //
 // State transitions:
@@ -19,19 +21,16 @@
 //
 // Required env vars:
 //   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
-//   FINNHUB_CANDLE_API_KEY   (5-min OANDA bars)
-//   FINNHUB_API_KEY          (quote fallback for latest forming bar)
+//   PRICES_TABLE_CONN   Azure Table Storage connection string (5-min bars,
+//                       see src/lib/azurePrices.ts)
 // ============================================================================
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { getCandles } from '../lib/azurePrices.js'
 
 // ── Types ───────────────────────────────────────────────────────────────────
-
-interface FinnhubCandle {
-  c: number[]; h: number[]; l: number[]; o: number[]; t: number[]; s: string
-}
 
 interface Bar {
   ts: number   // unix seconds
@@ -109,37 +108,17 @@ function computeExpiresAt(
 }
 
 // ── Price fetching ───────────────────────────────────────────────────────────
+// fetch5MinBars/fetchCryptoBars (separate Finnhub forex/crypto candle
+// endpoints) are gone -- getCandles() from azurePrices.ts resolves the
+// correct Azure table/partition for a symbol regardless of asset class, so
+// one call covers what used to need two functions.
 
-async function fetch5MinBars(
-  finnhubSymbol: string,
-  fromTs: number,
-  toTs: number,
-  candleKey: string,
-): Promise<Bar[]> {
-  const url = `https://finnhub.io/api/v1/forex/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=5&from=${fromTs}&to=${toTs}&token=${candleKey}`
-  const res = await fetch(url)
-  if (!res.ok) return []
-  const body: FinnhubCandle = await res.json()
-  if (body.s !== 'ok' || !body.t?.length) return []
-  return body.t.map((ts, i) => ({
-    ts, o: body.o[i]!, h: body.h[i]!, l: body.l[i]!, c: body.c[i]!
-  })).sort((a, b) => a.ts - b.ts)
-}
-
-async function fetchCryptoBars(
-  finnhubSymbol: string,
-  fromTs: number,
-  toTs: number,
-  candleKey: string,
-): Promise<Bar[]> {
-  const url = `https://finnhub.io/api/v1/crypto/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=5&from=${fromTs}&to=${toTs}&token=${candleKey}`
-  const res = await fetch(url)
-  if (!res.ok) return []
-  const body: FinnhubCandle = await res.json()
-  if (body.s !== 'ok' || !body.t?.length) return []
-  return body.t.map((ts, i) => ({
-    ts, o: body.o[i]!, h: body.h[i]!, l: body.l[i]!, c: body.c[i]!
-  })).sort((a, b) => a.ts - b.ts)
+async function fetch5MinBarsFromAzure(symbol: string, fromTs: number, toTs: number): Promise<Bar[]> {
+  const candles = await getCandles(symbol, '5', fromTs, toTs)
+  if (candles.s !== 'ok' || !candles.t.length) return []
+  return candles.t
+    .map((ts, i) => ({ ts, o: candles.o[i]!, h: candles.h[i]!, l: candles.l[i]!, c: candles.c[i]! }))
+    .sort((a, b) => a.ts - b.ts)
 }
 
 // ── Result R calculation ─────────────────────────────────────────────────────
@@ -181,10 +160,8 @@ function finiteOrNull(value: number): number | null {
 async function main() {
   const SUPABASE_URL              = process.env.SUPABASE_URL!
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
-  const CANDLE_KEY                = process.env.FINNHUB_CANDLE_API_KEY!
-  const QUOTE_KEY                 = process.env.FINNHUB_API_KEY!
 
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !CANDLE_KEY) {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !process.env.PRICES_TABLE_CONN) {
     console.error('Missing required env vars')
     process.exit(1)
   }
@@ -257,7 +234,7 @@ async function main() {
   // exactly as it always did, so a wider shared window changes nothing about
   // which bars a given trade actually acts on.
   const barCache = new Map<string, Bar[]>()
-  const uniqueSymbols = new Map<string, { finnhubSym: string; isCrypto: boolean; fromTs: number }>()
+  const uniqueSymbols = new Map<string, { finnhubSym: string; fromTs: number }>()
 
   for (const trade of activeTrades) {
     const market = (trade.opportunities as any)?.markets
@@ -265,7 +242,6 @@ async function main() {
     if (!market || !outcome) continue
 
     const finnhubSym = market.price_data_symbol as string
-    const isCrypto = market.asset_class === 'CRYPTO'
     const status = outcome.trade_outcome_status
 
     // NOT_TRIGGERED trades gated by monitor_from (APAC/US, see migrations/
@@ -281,15 +257,13 @@ async function main() {
 
     const existing = uniqueSymbols.get(finnhubSym)
     if (!existing || fromTs < existing.fromTs) {
-      uniqueSymbols.set(finnhubSym, { finnhubSym, isCrypto, fromTs })
+      uniqueSymbols.set(finnhubSym, { finnhubSym, fromTs })
     }
   }
 
   console.log(`Unique symbols to fetch: ${uniqueSymbols.size}`)
-  for (const [finnhubSym, { isCrypto, fromTs }] of uniqueSymbols) {
-    const bars = isCrypto
-      ? await fetchCryptoBars(finnhubSym, fromTs, nowTs, CANDLE_KEY)
-      : await fetch5MinBars(finnhubSym, fromTs, nowTs, CANDLE_KEY)
+  for (const [finnhubSym, { fromTs }] of uniqueSymbols) {
+    const bars = await fetch5MinBarsFromAzure(finnhubSym, fromTs, nowTs)
     barCache.set(finnhubSym, bars)
     await new Promise(r => setTimeout(r, 200)) // rate limit -- same pacing as the per-trade loop below
   }
@@ -311,11 +285,11 @@ async function main() {
     if (terminalStates.includes(status)) { summary.skipped++; continue }
 
     try {
-      // Bars already fetched once per unique symbol above -- fromTs/isCrypto no
-      // longer computed here. An empty array (never populated -- shouldn't happen
+      // Bars already fetched once per unique symbol above -- fromTs no longer
+      // computed here. An empty array (never populated -- shouldn't happen
       // given every active trade's symbol was walked into uniqueSymbols above, but
       // matches the pre-fetch loop's own defensive fallback) just means this trade's
-      // loops below run zero iterations, same as a genuinely empty Finnhub response.
+      // loops below run zero iterations, same as a genuinely empty Azure response.
       const bars = barCache.get(finnhubSym) ?? []
 
       // ── Handle NOT_TRIGGERED ──────────────────────────────────────────────
@@ -614,11 +588,12 @@ async function main() {
 
         if (!closed) {
           // Force-expire if past expiry time, even if no bar reached expiresAt.
-          // This handles illiquid markets (e.g. USDTRY) where Finnhub may have no
-          // bars at or after the exact expiry timestamp -- the bar loop above only
-          // ever checks `barTime >= expiresAt` against bars that actually exist, so
-          // a symbol with a data gap spanning expiresAt would otherwise sit
-          // TRIGGERED forever, re-scanning the same stale bars every 5-minute run.
+          // This handles illiquid markets (e.g. USDTRY) where the price feed may
+          // have no bars at or after the exact expiry timestamp -- the bar loop
+          // above only ever checks `barTime >= expiresAt` against bars that
+          // actually exist, so a symbol with a data gap spanning expiresAt would
+          // otherwise sit TRIGGERED forever, re-scanning the same stale bars
+          // every 5-minute run.
           if (now >= expiresAt) {
             const barsBeforeExpiry = bars.filter(b => new Date(b.ts * 1000) < expiresAt)
             const lastBar = barsBeforeExpiry[barsBeforeExpiry.length - 1]
@@ -694,7 +669,3 @@ const invokedDirectly = process.argv[1] !== undefined &&
 if (invokedDirectly) {
   main().catch(err => { console.error('Fatal:', err); process.exit(1) })
 }
-
-
-
-
