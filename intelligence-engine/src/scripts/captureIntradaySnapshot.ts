@@ -25,12 +25,14 @@
 //   current_price:               last 5-min bar close (same Azure source)
 //
 // TEMPORARY FINNHUB FALLBACK (2026-10-23):
-//   finnhub_to_acuity.csv has no AssetId mapping for several symbols still
-//   referenced by live markets (e.g. the US session's 5 crypto markets).
-//   When Azure returns `no_mapping` for a symbol, and FINNHUB_CANDLE_API_KEY /
-//   FINNHUB_API_KEY are set, this script falls back to the old direct-Finnhub
-//   candle/quote fetch for that symbol only, loudly logged. Remove this once
-//   finnhub_to_acuity.csv has confirmed entries for every live market.
+//   finnhub_to_acuity.csv has no AssetId mapping at all for Solana or Litecoin
+//   (the only two live markets still missing one, as of 2026-10-23 -- USDTRY,
+//   NZDCAD, ESP35, Bitcoin, Ethereum and Ripple were backfilled with verified
+//   cross-venue AssetIds the same day). When Azure returns `no_mapping` for a
+//   symbol, and FINNHUB_CANDLE_API_KEY / FINNHUB_API_KEY are set, this script
+//   falls back to the old direct-Finnhub candle/quote fetch for that symbol
+//   only, loudly logged. Remove this once Solana/Litecoin have a confirmed
+//   Azure mapping too.
 //
 // Run:
 //   npx tsx src/scripts/captureIntradaySnapshot.ts --session=EUROPEAN

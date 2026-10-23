@@ -3731,3 +3731,9 @@ BINANCE:BCHUSDT,BINANCE,NULL,Binance BCH/USDT,NULL,NULL,,crypto,113114
 BINANCE:AVAXUSDT,BINANCE,NULL,Binance AVAX/USDT,NULL,NULL,,crypto,115342
 BINANCE:DOTUSDT,BINANCE,NULL,Binance DOT/USDT,NULL,NULL,,crypto,115396
 ECHO,US,Common Stock,ECHOSTAR CORP-A,USD,US2787681061,US,stock,116859
+OANDA:USD_TRY,oanda,NULL,USD/TRY - temp mapped to FXCM AssetId (pending native OANDA Azure coverage),NULL,NULL,,forex,102773
+OANDA:NZD_CAD,oanda,NULL,NZD/CAD - temp mapped to IC MARKETS AssetId (pending native OANDA Azure coverage),NULL,NULL,,forex,112977
+OANDA:ES35_USD,oanda,NULL,ES35 Spain IBEX 35 - temp mapped to IC MARKETS AssetId; price unverified vs Finnhub (no Finnhub data for this symbol),NULL,NULL,,forex,113055
+BINANCE:BTCUSDT,BINANCE,NULL,Bitcoin - temp mapped to COINBASE AssetId (pending native Binance Azure coverage),NULL,NULL,,crypto,113052
+BINANCE:ETHUSDT,BINANCE,NULL,Ethereum - temp mapped to COINBASE AssetId (pending native Binance Azure coverage),NULL,NULL,,crypto,113061
+BINANCE:XRPUSDT,BINANCE,NULL,Ripple - temp mapped to COINBASE AssetId (pending native Binance Azure coverage),NULL,NULL,,crypto,113063
