@@ -2,9 +2,11 @@
 // APIP Trading Intelligence & Performance Platform
 // Market State Daily Population Script
 // ============================================================================
-// Fetches daily OHLC from Finnhub for all FINNHUB_OANDA/FINNHUB_CRYPTO/IC_MARKETS
-// markets, computes ATR14 (backward compat) and ATR20 (canonical), and upserts
-// into market_state_daily.
+// Fetches daily OHLC from Azure Table Storage (see src/lib/azurePrices.ts --
+// drop-in replacement for the old Finnhub forex/crypto/stock candle
+// endpoints) for all FINNHUB_OANDA/FINNHUB_CRYPTO/IC_MARKETS markets,
+// computes ATR14 (backward compat) and ATR20 (canonical), and upserts into
+// market_state_daily.
 //
 // ATR20 Wilder RMA is the canonical zone input per locked methodology V1.4.
 // ATR14 is retained alongside for historical continuity during transition.
@@ -18,18 +20,16 @@
 //     DAYS_TO_FETCH days -- a one-off backfill for regime/analyst-profile
 //     history, not part of the regular daily run. Does not change --days=N
 //     or the default 60-day behaviour, which still use fetchRecentOhlc()
-//     exactly as before. Requires FINNHUB_CANDLE_API_KEY specifically
-//     (confirmed working back to 2019) rather than falling back to
-//     FINNHUB_API_KEY, whose historical coverage isn't confirmed.
+//     exactly as before.
 //
-// Required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, FINNHUB_API_KEY
-//   Note: FINNHUB_API_KEY must have access to forex/candle (resolution=D).
-//   Use FINNHUB_CANDLE_API_KEY if the primary key lacks candle access.
+// Required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, PRICES_TABLE_CONN
+//   (Azure Table Storage connection string -- see src/lib/azurePrices.ts)
 // ============================================================================
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { buildMarketState, type OhlcBar } from '../services/marketStateService.js'
+import { getCandles, type FinnhubCandleResponse } from '../lib/azurePrices.js'
 
 const ATR_PERIOD_PRIMARY = 20   // canonical -- stored as atr20
 const ATR_PERIOD_LEGACY  = 14   // retained for transition -- stored as atr14
@@ -50,59 +50,47 @@ const fromDate = isHistory
   ? HISTORY_START
   : new Date(Date.now() - DAYS_TO_FETCH * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
-interface FinnhubCandleResponse {
-  c: number[]; h: number[]; l: number[]; o: number[]; t: number[]; s: string
+/** Converts a getCandles() response into the sorted OhlcBar[] shape the rest of this script expects. */
+function candlesToOhlcBars(candles: FinnhubCandleResponse): OhlcBar[] {
+  const bars: OhlcBar[] = candles.t.map((ts, i) => ({
+    date: new Date(ts * 1000).toISOString().slice(0, 10),
+    open: candles.o[i]!, high: candles.h[i]!, low: candles.l[i]!, close: candles.c[i]!,
+  }))
+  bars.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+  return bars
 }
 
 /**
- * Aggregates Finnhub 5-minute bars for a single date into a synthetic daily
- * OHLC candle. Used to fill gaps left by Finnhub's daily (resolution=D)
- * endpoint, which lags 1-2 days behind for forex -- the 5-minute endpoint
- * (resolution=5) is current, so today/yesterday can be backfilled from it
- * rather than left missing until the daily candle catches up.
+ * Aggregates Azure 5-minute bars for a single date into a synthetic daily
+ * OHLC candle. Used to fill gaps left by the daily (resolution='D') table,
+ * which may lag behind for forex -- the 5-minute table (resolution='5') is
+ * current, so today/yesterday can be backfilled from it rather than left
+ * missing until the daily bar catches up.
  */
 async function fetchIntradayAsDailyBar(
-  finnhubSymbol: string, date: string, apiKey: string, isCrypto: boolean,
+  finnhubSymbol: string, date: string,
 ): Promise<OhlcBar | null> {
   const dayStart = Math.floor(new Date(date + 'T00:00:00Z').getTime() / 1000)
   const dayEnd   = Math.floor(new Date(date + 'T23:59:59Z').getTime() / 1000)
 
-  const endpoint = isCrypto
-    ? `https://finnhub.io/api/v1/crypto/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=5&from=${dayStart}&to=${dayEnd}&token=${apiKey}`
-    : `https://finnhub.io/api/v1/forex/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=5&from=${dayStart}&to=${dayEnd}&token=${apiKey}`
-
-  const res = await fetch(endpoint)
-  if (!res.ok) return null
-  const data: FinnhubCandleResponse = await res.json()
-  if (data.s !== 'ok' || !data.c?.length) return null
+  const candles = await getCandles(finnhubSymbol, '5', dayStart, dayEnd)
+  if (candles.s !== 'ok' || !candles.c?.length) return null
 
   return {
     date,
-    open:  data.o[0]!,
-    high:  Math.max(...data.h),
-    low:   Math.min(...data.l),
-    close: data.c[data.c.length - 1]!,
+    open:  candles.o[0]!,
+    high:  Math.max(...candles.h),
+    low:   Math.min(...candles.l),
+    close: candles.c[candles.c.length - 1]!,
   }
 }
 
-async function fetchRecentOhlc(
-  finnhubSymbol: string, days: number, apiKey: string, isCrypto = false,
-): Promise<OhlcBar[]> {
+async function fetchRecentOhlc(finnhubSymbol: string, days: number): Promise<OhlcBar[]> {
   const to   = Math.floor(Date.now() / 1000)
   const from = to - days * 24 * 60 * 60
-  const endpoint = isCrypto
-    ? `https://finnhub.io/api/v1/crypto/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=D&from=${from}&to=${to}&token=${apiKey}`
-    : `https://finnhub.io/api/v1/forex/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=D&from=${from}&to=${to}&token=${apiKey}`
-  const response = await fetch(endpoint)
-  if (!response.ok) throw new Error(`Finnhub HTTP ${response.status}`)
-  const body: FinnhubCandleResponse = await response.json()
-  if (body.s !== 'ok' || !body.c?.length) throw new Error(`Finnhub status '${body.s}' for ${finnhubSymbol}`)
-  const bars: OhlcBar[] = body.t.map((ts, i) => ({
-    date: new Date(ts * 1000).toISOString().slice(0, 10),
-    open: body.o[i]!, high: body.h[i]!, low: body.l[i]!, close: body.c[i]!,
-  }))
-  bars.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
-  return bars
+  const candles = await getCandles(finnhubSymbol, 'D', from, to)
+  if (candles.s !== 'ok' || !candles.c?.length) throw new Error(`No price data for ${finnhubSymbol}`)
+  return candlesToOhlcBars(candles)
 }
 
 /**
@@ -111,69 +99,35 @@ async function fetchRecentOhlc(
  * --days=N / default path (fetchRecentOhlc, untouched) keeps its exact
  * existing seconds-based `to - days*86400` window.
  */
-async function fetchHistoricalOhlc(
-  finnhubSymbol: string, fromDateIso: string, apiKey: string, isCrypto = false,
-): Promise<OhlcBar[]> {
+async function fetchHistoricalOhlc(finnhubSymbol: string, fromDateIso: string): Promise<OhlcBar[]> {
   const from = Math.floor(new Date(fromDateIso + 'T00:00:00Z').getTime() / 1000)
   const to   = Math.floor(Date.now() / 1000)
-  const endpoint = isCrypto
-    ? `https://finnhub.io/api/v1/crypto/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=D&from=${from}&to=${to}&token=${apiKey}`
-    : `https://finnhub.io/api/v1/forex/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=D&from=${from}&to=${to}&token=${apiKey}`
-  const response = await fetch(endpoint)
-  if (!response.ok) throw new Error(`Finnhub HTTP ${response.status}`)
-  const body: FinnhubCandleResponse = await response.json()
-  if (body.s !== 'ok' || !body.c?.length) throw new Error(`Finnhub status '${body.s}' for ${finnhubSymbol}`)
-  const bars: OhlcBar[] = body.t.map((ts, i) => ({
-    date: new Date(ts * 1000).toISOString().slice(0, 10),
-    open: body.o[i]!, high: body.h[i]!, low: body.l[i]!, close: body.c[i]!,
-  }))
-  bars.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
-  return bars
+  const candles = await getCandles(finnhubSymbol, 'D', from, to)
+  if (candles.s !== 'ok' || !candles.c?.length) throw new Error(`No price data for ${finnhubSymbol}`)
+  return candlesToOhlcBars(candles)
 }
 
 /**
  * IC Markets-sourced instruments (currently just SA40 -- Finnhub OANDA doesn't
  * carry it, see migrations/044_markets_price_data_symbols.sql) come through
- * Finnhub's stock candle endpoint rather than forex/crypto.
+ * the same Azure daily table as everything else -- same table, same response
+ * shape as fetchRecentOhlc/fetchHistoricalOhlc.
  */
-async function fetchStockOhlc(
-  finnhubSymbol: string, days: number, apiKey: string
-): Promise<OhlcBar[]> {
+async function fetchStockOhlc(finnhubSymbol: string, days: number): Promise<OhlcBar[]> {
   const to   = Math.floor(Date.now() / 1000)
   const from = to - days * 24 * 60 * 60
-  const endpoint = `https://finnhub.io/api/v1/stock/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=D&from=${from}&to=${to}&token=${apiKey}`
-  const response = await fetch(endpoint)
-  const body: FinnhubCandleResponse = await response.json()
-  if (body.s !== 'ok' || !body.c?.length) throw new Error(`Finnhub stock status '${body.s}' for ${finnhubSymbol}`)
-  const bars: OhlcBar[] = body.t.map((ts, i) => ({
-    date: new Date(ts * 1000).toISOString().slice(0, 10),
-    open: body.o[i]!, high: body.h[i]!, low: body.l[i]!, close: body.c[i]!,
-  }))
-  bars.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
-  return bars
+  const candles = await getCandles(finnhubSymbol, 'D', from, to)
+  if (candles.s !== 'ok' || !candles.c?.length) throw new Error(`No price data for ${finnhubSymbol}`)
+  return candlesToOhlcBars(candles)
 }
 
 async function main() {
   const SUPABASE_URL              = process.env.SUPABASE_URL
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
-  // Prefer candle-enabled key; fall back to primary
-  const FINNHUB_API_KEY = process.env.FINNHUB_CANDLE_API_KEY ?? process.env.FINNHUB_API_KEY
-  // 5-minute intraday fetch (used to synthesize today/yesterday's daily bar
-  // when Finnhub's daily endpoint hasn't caught up yet) requires the
-  // intraday-licenced key specifically -- FINNHUB_API_KEY alone may not have
-  // resolution=5 access, so this is not allowed to fall back to it.
-  const FINNHUB_CANDLE_API_KEY = process.env.FINNHUB_CANDLE_API_KEY
 
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !FINNHUB_API_KEY) {
-    console.error('Missing required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, FINNHUB_API_KEY (or FINNHUB_CANDLE_API_KEY)')
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !process.env.PRICES_TABLE_CONN) {
+    console.error('Missing required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, PRICES_TABLE_CONN')
     process.exit(1)
-  }
-  if (isHistory && !FINNHUB_CANDLE_API_KEY) {
-    console.error('--history requires FINNHUB_CANDLE_API_KEY specifically (confirmed working back to 2019) -- FINNHUB_API_KEY alone is not confirmed to have that coverage.')
-    process.exit(1)
-  }
-  if (!FINNHUB_CANDLE_API_KEY) {
-    console.warn('FINNHUB_CANDLE_API_KEY not set -- missing today/yesterday daily candles will NOT be backfilled from 5-min data\n')
   }
 
   const isDryRun = process.argv.includes('--dry-run')
@@ -222,26 +176,22 @@ async function main() {
     if (!market.price_data_symbol) continue
     try {
       const isICMarkets = market.price_data_provider === 'IC_MARKETS'
-      const isCrypto = market.price_data_provider === 'FINNHUB_CRYPTO'
       const bars = isICMarkets
-        ? await fetchStockOhlc(market.price_data_symbol, DAYS_TO_FETCH, FINNHUB_API_KEY)
+        ? await fetchStockOhlc(market.price_data_symbol, DAYS_TO_FETCH)
         : isHistory
-          ? await fetchHistoricalOhlc(market.price_data_symbol, HISTORY_START, FINNHUB_CANDLE_API_KEY!, isCrypto)
-          : await fetchRecentOhlc(market.price_data_symbol, DAYS_TO_FETCH, FINNHUB_API_KEY, isCrypto)
+          ? await fetchHistoricalOhlc(market.price_data_symbol, HISTORY_START)
+          : await fetchRecentOhlc(market.price_data_symbol, DAYS_TO_FETCH)
 
-      // Finnhub's daily forex candle lags 1-2 days; fill today/yesterday from
-      // 5-minute bars when the daily endpoint hasn't caught up yet. Only
-      // fills genuinely missing dates -- never replaces a real daily candle.
-      // IC Markets (stock/candle) has no equivalent lag observed, and Finnhub's
-      // stock resolution=5 access isn't confirmed for this key -- skipped entirely.
+      // The daily table may lag 1-2 days; fill today/yesterday from 5-minute
+      // bars when the daily table hasn't caught up yet. Only fills genuinely
+      // missing dates -- never replaces a real daily candle. IC Markets has no
+      // equivalent lag observed -- skipped entirely.
       const syntheticDates = new Set<string>()
-      if (FINNHUB_CANDLE_API_KEY && !isICMarkets) {
+      if (!isICMarkets) {
         const existingDates = new Set(bars.map(b => b.date))
         for (const date of [yesterday, today]) {
           if (existingDates.has(date)) continue
-          const syntheticBar = await fetchIntradayAsDailyBar(
-            market.price_data_symbol, date, FINNHUB_CANDLE_API_KEY, isCrypto,
-          )
+          const syntheticBar = await fetchIntradayAsDailyBar(market.price_data_symbol, date)
           if (syntheticBar) {
             bars.push(syntheticBar)
             syntheticDates.add(date)
