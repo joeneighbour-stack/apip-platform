@@ -255,23 +255,48 @@ async function main() {
     process.exit(1)
   }
 
+  // --force bypasses the "Already succeeded" idempotency skip for a manual rerun
+  // (e.g. the original automated run completed with status SUCCESS but produced no
+  // opportunities due to an upstream data gap). It never touches the original
+  // engine_runs row -- it always writes a NEW row under a suffixed idempotency key,
+  // so the original run's audit trail is preserved untouched.
+  const isForce = process.argv.includes('--force')
+  const operatorEmailArg = process.argv.find(a => a.startsWith('--operator-email='))?.split('=')[1]
+
   const db: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false }
   })
+
+  if (isForce && !operatorEmailArg) {
+    console.error('--force requires --operator-email=<your app_users email>, since a human is bypassing the idempotency guard, not the system.')
+    process.exit(1)
+  }
+
+  let operatorId: string | null = null
+  if (isForce) {
+    const { data: operator, error: operatorError } = await db
+      .from('app_users').select('app_user_id').eq('email', operatorEmailArg).single()
+    if (operatorError || !operator) {
+      console.error(`Could not resolve app_users row for email '${operatorEmailArg}': ${operatorError?.message}`)
+      process.exit(1)
+    }
+    operatorId = operator.app_user_id
+  }
 
   const now = new Date()
   const today = now.toISOString().slice(0, 10)
   const { windowStartHour, windowEndHour } = SESSION_WINDOWS[session as string]!
   const windowStart = new Date(`${today}T${String(windowStartHour).padStart(2,'0')}:00:00Z`)
   const windowEnd   = new Date(`${today}T${String(windowEndHour).padStart(2,'0')}:00:00Z`)
-  const idempotencyKey = `${session}:${today}:${windowStartHour}`
+  const baseIdempotencyKey = `${session}:${today}:${windowStartHour}`
+  const idempotencyKey = isForce ? `${baseIdempotencyKey}:rerun1` : baseIdempotencyKey
   const generatedAt = now.toISOString()
 
   console.log(`\n=== APIP Engine Session Runner ===`)
   console.log(`Session:  ${session}`)
   console.log(`Date:     ${today}`)
   console.log(`Window:   ${windowStart.toISOString()} → ${windowEnd.toISOString()}`)
-  console.log(`Mode:     ${isDryRun ? 'DRY RUN (no writes)' : 'LIVE'}`)
+  console.log(`Mode:     ${isDryRun ? 'DRY RUN (no writes)' : 'LIVE'}${isForce ? ' [FORCE RERUN, operator: ' + operatorEmailArg + ']' : ''}`)
   console.log(`Key:      ${idempotencyKey}\n`)
 
   let engineRunId: string
@@ -301,7 +326,9 @@ async function main() {
         run_type: 'SESSION', session,
         window_start: windowStart.toISOString(), window_end: windowEnd.toISOString(),
         idempotency_key: idempotencyKey, started_at: generatedAt,
-        status: 'RUNNING', triggered_by_type: 'SYSTEM', triggered_by_id: SYSTEM_ENGINE_ID,
+        status: 'RUNNING',
+        triggered_by_type: isForce ? 'USER' : 'SYSTEM',
+        triggered_by_id: isForce ? operatorId! : SYSTEM_ENGINE_ID,
       }).select('engine_run_id').single()
       if (error || !newRun) { console.error('Failed to create engine_run:', error?.message); process.exit(1) }
       engineRunId = newRun.engine_run_id
