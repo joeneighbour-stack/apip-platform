@@ -24,6 +24,14 @@
 //   previous_atr20:              market_state_daily.atr20 (Wilder RMA period 20)
 //   current_price:               last 5-min bar close (same Azure source)
 //
+// TEMPORARY FINNHUB FALLBACK (2026-10-23):
+//   finnhub_to_acuity.csv has no AssetId mapping for several symbols still
+//   referenced by live markets (e.g. the US session's 5 crypto markets).
+//   When Azure returns `no_mapping` for a symbol, and FINNHUB_CANDLE_API_KEY /
+//   FINNHUB_API_KEY are set, this script falls back to the old direct-Finnhub
+//   candle/quote fetch for that symbol only, loudly logged. Remove this once
+//   finnhub_to_acuity.csv has confirmed entries for every live market.
+//
 // Run:
 //   npx tsx src/scripts/captureIntradaySnapshot.ts --session=EUROPEAN
 //   npx tsx src/scripts/captureIntradaySnapshot.ts --session=US
@@ -33,6 +41,8 @@
 //   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 //   PRICES_TABLE_CONN   Azure Table Storage connection string (see
 //                       src/lib/azurePrices.ts)
+// Optional env vars (temporary Finnhub fallback, see above):
+//   FINNHUB_API_KEY, FINNHUB_CANDLE_API_KEY
 // ============================================================================
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { fileURLToPath } from 'node:url'
@@ -67,7 +77,11 @@ interface ApipSessionResult {
   sessionLow: number;
   currentPrice: number;
   barCount: number;
+  provenance?: 'AZURE' | 'FINNHUB_CANDLE' | 'FINNHUB_QUOTE_FALLBACK';
 }
+
+interface FinnhubQuote { c: number; h: number; l: number; o: number; t: number }
+interface FinnhubCandle { c: number[]; h: number[]; l: number[]; o: number[]; t: number[]; s: string }
 
 /**
  * Returns the Unix timestamp (seconds) of the most recent APIP session open
@@ -85,26 +99,12 @@ function currentApipSessionOpenTs(): number {
   return Math.floor(sessionOpen.getTime() / 1000);
 }
 
-/**
- * Fetches Azure Table Storage 5-minute bars for the current APIP session.
- * Returns previousClose (last bar before session open), session high/low,
- * and current price (last bar close).
- */
-async function fetchApipSessionBars(finnhubSymbol: string): Promise<ApipSessionResult> {
-  const sessionOpenTs = currentApipSessionOpenTs();
-  const toTs = Math.floor(Date.now() / 1000);
-  // Fetch from 1h before session open to capture the prev-close bar
-  const fromTs = sessionOpenTs - 3600;
-
-  const candles = await getCandles(finnhubSymbol, '5', fromTs, toTs);
-  if (candles.s === 'no_mapping') {
-    throw new Error(`No Azure asset mapping for "${finnhubSymbol}" (finnhub_to_acuity.csv)`);
-  }
-  if (candles.s !== 'ok' || !candles.t.length) {
-    throw new Error(`No price data for ${finnhubSymbol}`);
-  }
-
-  // Split bars into pre-session (for prev close) and in-session (for h/l)
+/** Splits a candle response into previousClose/session h-l/currentPrice, shared by the Azure and Finnhub-fallback paths. */
+function candlesToSessionResult(
+  candles: { t: number[]; o: number[]; h: number[]; l: number[]; c: number[] },
+  sessionOpenTs: number,
+  provenance: ApipSessionResult['provenance'],
+): ApipSessionResult {
   const preBars:  { ts: number; c: number }[] = [];
   const sessH: number[] = [];
   const sessL: number[] = [];
@@ -136,6 +136,7 @@ async function fetchApipSessionBars(finnhubSymbol: string): Promise<ApipSessionR
       sessionLow:  candles.l[candles.l.length - 1]!,
       currentPrice: latestC,
       barCount: 0,
+      provenance,
     };
   }
 
@@ -145,12 +146,96 @@ async function fetchApipSessionBars(finnhubSymbol: string): Promise<ApipSessionR
     sessionLow:  Math.min(...sessL),
     currentPrice: latestC,
     barCount: sessH.length,
+    provenance,
   };
+}
+
+/**
+ * TEMPORARY (2026-10-23): direct Finnhub candle/quote fetch, used only when
+ * Azure has no asset mapping for this symbol. See the file header for why.
+ * Ported from the pre-migration version of this script (git history: d87bdfa^).
+ */
+async function fetchFinnhubFallback(
+  finnhubSymbol: string,
+  isCrypto: boolean,
+  candleApiKey: string | undefined,
+  quoteApiKey: string,
+  sessionOpenTs: number,
+): Promise<ApipSessionResult> {
+  const toTs = Math.floor(Date.now() / 1000);
+  const fromTs = sessionOpenTs - 3600;
+
+  if (candleApiKey) {
+    const endpoint = isCrypto
+      ? `https://finnhub.io/api/v1/crypto/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=5&from=${fromTs}&to=${toTs}&token=${candleApiKey}`
+      : `https://finnhub.io/api/v1/forex/candle?symbol=${encodeURIComponent(finnhubSymbol)}&resolution=5&from=${fromTs}&to=${toTs}&token=${candleApiKey}`;
+    const res = await fetch(endpoint);
+    if (res.ok) {
+      const body: FinnhubCandle = await res.json();
+      if (body.s === 'ok' && body.t?.length > 0) {
+        return candlesToSessionResult(body, sessionOpenTs, 'FINNHUB_CANDLE');
+      }
+    }
+  }
+
+  // Fallback: quote endpoint (midnight-UTC boundary -- approximate)
+  const quoteUrl = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(finnhubSymbol)}&token=${quoteApiKey}`;
+  const qRes = await fetch(quoteUrl);
+  if (!qRes.ok) throw new Error(`Finnhub quote HTTP ${qRes.status}`);
+  const q: FinnhubQuote = await qRes.json();
+  if (!q.c || q.c === 0) throw new Error(`No price for ${finnhubSymbol} (Finnhub quote fallback)`);
+  return {
+    previousClose: q.c,
+    sessionHigh: q.h > 0 ? q.h : q.c,
+    sessionLow:  q.l > 0 ? q.l : q.c,
+    currentPrice: q.c,
+    barCount: -1, // -1 signals quote fallback
+    provenance: 'FINNHUB_QUOTE_FALLBACK',
+  };
+}
+
+/**
+ * Fetches Azure Table Storage 5-minute bars for the current APIP session.
+ * Returns previousClose (last bar before session open), session high/low,
+ * and current price (last bar close). Falls back to Finnhub (see file header)
+ * when Azure has no asset mapping for this symbol and Finnhub keys are set.
+ */
+async function fetchApipSessionBars(
+  finnhubSymbol: string,
+  isCrypto: boolean,
+  finnhubCandleApiKey: string | undefined,
+  finnhubQuoteApiKey: string | undefined,
+): Promise<ApipSessionResult> {
+  const sessionOpenTs = currentApipSessionOpenTs();
+  const toTs = Math.floor(Date.now() / 1000);
+  // Fetch from 1h before session open to capture the prev-close bar
+  const fromTs = sessionOpenTs - 3600;
+
+  const candles = await getCandles(finnhubSymbol, '5', fromTs, toTs);
+
+  if (candles.s === 'no_mapping') {
+    if (!finnhubQuoteApiKey) {
+      throw new Error(`No Azure asset mapping for "${finnhubSymbol}" (finnhub_to_acuity.csv), and no FINNHUB_API_KEY set for fallback`);
+    }
+    console.warn(`  WARN: ${finnhubSymbol}: no Azure mapping, falling back to Finnhub (TEMPORARY -- see file header)`);
+    return fetchFinnhubFallback(finnhubSymbol, isCrypto, finnhubCandleApiKey, finnhubQuoteApiKey, sessionOpenTs);
+  }
+  if (candles.s !== 'ok' || !candles.t.length) {
+    throw new Error(`No price data for ${finnhubSymbol}`);
+  }
+
+  return candlesToSessionResult(candles, sessionOpenTs, 'AZURE');
 }
 
 async function main() {
   const SUPABASE_URL              = process.env.SUPABASE_URL
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
+  // Optional -- only used as a fallback when Azure has no mapping for a symbol (see file header).
+  const FINNHUB_API_KEY           = process.env.FINNHUB_API_KEY
+  const FINNHUB_CANDLE_API_KEY    = process.env.FINNHUB_CANDLE_API_KEY
+  if (!FINNHUB_API_KEY) {
+    console.warn('FINNHUB_API_KEY not set -- markets with no Azure mapping will fail instead of falling back to Finnhub\n')
+  }
 
   const requiredEnvVars = { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, PRICES_TABLE_CONN: process.env.PRICES_TABLE_CONN }
   const missingEnvVars = Object.entries(requiredEnvVars).filter(([, v]) => !v).map(([k]) => k)
@@ -238,7 +323,8 @@ async function main() {
     }
 
     try {
-      const sess = await fetchApipSessionBars(market.price_data_symbol)
+      const isCrypto = market.price_data_provider === 'FINNHUB_CRYPTO'
+      const sess = await fetchApipSessionBars(market.price_data_symbol, isCrypto, FINNHUB_CANDLE_API_KEY, FINNHUB_API_KEY)
 
       // Pine-style band construction
       const bottomAnchor = Math.min(sess.previousClose, sess.sessionLow)
@@ -290,7 +376,8 @@ async function main() {
         `  ${symbol}: price=${sess.currentPrice}, zone=${state.currentZone}` +
         `, h=${sess.sessionHigh}, l=${sess.sessionLow}` +
         `, prevClose=${sess.previousClose}, atr20=${dailyAtr.atr20.toFixed(5)}` +
-        ` [${sess.barCount} bars]`
+        ` [${sess.barCount} bars]` +
+        (sess.provenance && sess.provenance !== 'AZURE' ? ` (source: ${sess.provenance})` : '')
       )
       summary.captured++
     } catch (err) {

@@ -139,6 +139,9 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           PRICES_TABLE_CONN: ${{ secrets.PRICES_TABLE_CONN }}
+          # TEMPORARY (2026-10-23): fallback for symbols with no Azure mapping yet (USDTRY). Remove once finnhub_to_acuity.csv is complete.
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          FINNHUB_CANDLE_API_KEY: ${{ secrets.FINNHUB_CANDLE_API_KEY }}
 
   engine-european:
     name: Engine Session -- European
@@ -192,6 +195,9 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           PRICES_TABLE_CONN: ${{ secrets.PRICES_TABLE_CONN }}
+          # TEMPORARY (2026-10-23): fallback for the 5 crypto markets with no Azure mapping yet. Remove once finnhub_to_acuity.csv is complete.
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          FINNHUB_CANDLE_API_KEY: ${{ secrets.FINNHUB_CANDLE_API_KEY }}
 
   engine-us:
     name: Engine Session -- US
