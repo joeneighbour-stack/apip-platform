@@ -125,13 +125,15 @@ async function main() {
   const SUPABASE_URL              = process.env.SUPABASE_URL
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !process.env.PRICES_TABLE_CONN) {
-    console.error('Missing required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, PRICES_TABLE_CONN')
+  const requiredEnvVars = { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, PRICES_TABLE_CONN: process.env.PRICES_TABLE_CONN }
+  const missingEnvVars = Object.entries(requiredEnvVars).filter(([, v]) => !v).map(([k]) => k)
+  if (missingEnvVars.length > 0) {
+    console.error(`Missing required env vars: ${missingEnvVars.join(', ')}`)
     process.exit(1)
   }
 
   const isDryRun = process.argv.includes('--dry-run')
-  const db: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  const db: SupabaseClient = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!, {
     auth: { persistSession: false }
   })
 
