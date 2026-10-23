@@ -111,12 +111,12 @@ function getAssetMap(): Promise<Map<string, string>> {
   return assetMapPromise
 }
 
-async function resolveAssetId(symbol: string): Promise<string> {
+async function resolveAssetId(symbol: string): Promise<string | null> {
   const map = await getAssetMap()
   const assetId = map.get(symbol)
-    if (assetId === undefined) {
+  if (assetId === undefined) {
     console.warn(`[azurePrices] No mapping for "${symbol}" — skipping`)
-    return null as unknown as string
+    return null
   }
   return assetId
 }
@@ -198,8 +198,8 @@ export async function getCandles(
   from: number,
   to: number,
 ): Promise<FinnhubCandleResponse> {
-    const assetId = await resolveAssetId(symbol)
-  if (!assetId) return { s: 'no_data', t: [], o: [], h: [], l: [], c: [], v: [] }
+  const assetId = await resolveAssetId(symbol)
+  if (assetId === null) return { s: 'no_mapping', t: [], o: [], h: [], l: [], c: [], v: [] }
   const tableClient = getTableClient(resolution)
 
   const bars = await fetchRange(tableClient, assetId, rowKey(from), rowKey(to + 1))
@@ -224,6 +224,7 @@ export async function getCandles(
 /** Most recent bar within a trailing window (10 days for 'D', 2 days otherwise), or null. */
 export async function getLatestBar(symbol: string, resolution: string): Promise<AzureBar | null> {
   const assetId = await resolveAssetId(symbol)
+  if (assetId === null) return null
   const tableClient = getTableClient(resolution)
 
   const windowDays = resolution === 'D' ? 10 : 2

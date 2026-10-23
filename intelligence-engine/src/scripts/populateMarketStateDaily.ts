@@ -85,11 +85,20 @@ async function fetchIntradayAsDailyBar(
   }
 }
 
+function checkCandleStatus(candles: FinnhubCandleResponse, finnhubSymbol: string): void {
+  if (candles.s === 'no_mapping') {
+    throw new Error(`No Azure asset mapping for "${finnhubSymbol}" (finnhub_to_acuity.csv)`)
+  }
+  if (candles.s !== 'ok' || !candles.c?.length) {
+    throw new Error(`No price data for ${finnhubSymbol}`)
+  }
+}
+
 async function fetchRecentOhlc(finnhubSymbol: string, days: number): Promise<OhlcBar[]> {
   const to   = Math.floor(Date.now() / 1000)
   const from = to - days * 24 * 60 * 60
   const candles = await getCandles(finnhubSymbol, 'D', from, to)
-  if (candles.s !== 'ok' || !candles.c?.length) throw new Error(`No price data for ${finnhubSymbol}`)
+  checkCandleStatus(candles, finnhubSymbol)
   return candlesToOhlcBars(candles)
 }
 
@@ -103,7 +112,7 @@ async function fetchHistoricalOhlc(finnhubSymbol: string, fromDateIso: string): 
   const from = Math.floor(new Date(fromDateIso + 'T00:00:00Z').getTime() / 1000)
   const to   = Math.floor(Date.now() / 1000)
   const candles = await getCandles(finnhubSymbol, 'D', from, to)
-  if (candles.s !== 'ok' || !candles.c?.length) throw new Error(`No price data for ${finnhubSymbol}`)
+  checkCandleStatus(candles, finnhubSymbol)
   return candlesToOhlcBars(candles)
 }
 
@@ -117,7 +126,7 @@ async function fetchStockOhlc(finnhubSymbol: string, days: number): Promise<Ohlc
   const to   = Math.floor(Date.now() / 1000)
   const from = to - days * 24 * 60 * 60
   const candles = await getCandles(finnhubSymbol, 'D', from, to)
-  if (candles.s !== 'ok' || !candles.c?.length) throw new Error(`No price data for ${finnhubSymbol}`)
+  checkCandleStatus(candles, finnhubSymbol)
   return candlesToOhlcBars(candles)
 }
 
@@ -171,11 +180,16 @@ async function main() {
   }
 
   const summary = { upserted: 0, skipped: 0, errors: 0 }
+  const skippedDetails: { symbol: string; reason: string }[] = []
   const today = new Date().toISOString().slice(0, 10)
   const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
   for (const market of markets) {
-    if (!market.price_data_symbol) continue
+    if (!market.price_data_symbol) {
+      const reason = 'no price_data_symbol mapped'
+      console.log(`  ${market.symbol}: ${reason}, skipping`)
+      skippedDetails.push({ symbol: market.symbol, reason }); summary.skipped++; continue
+    }
     try {
       const isICMarkets = market.price_data_provider === 'IC_MARKETS'
       const bars = isICMarkets
@@ -206,8 +220,9 @@ async function main() {
       }
 
       if (bars.length < ATR_PERIOD_PRIMARY) {
-        console.log(`  ${market.symbol}: insufficient bars (${bars.length} < ${ATR_PERIOD_PRIMARY}), skipping`)
-        summary.skipped++; continue
+        const reason = `insufficient bars (${bars.length} < ${ATR_PERIOD_PRIMARY})`
+        console.log(`  ${market.symbol}: ${reason}, skipping`)
+        skippedDetails.push({ symbol: market.symbol, reason }); summary.skipped++; continue
       }
 
       const rows: object[] = []
@@ -253,8 +268,9 @@ async function main() {
           .from('market_state_daily')
           .upsert(rows, { onConflict: 'market_id,date' })
         if (error) {
-          console.error(`  ${market.symbol}: upsert error -- ${error.message}`)
-          summary.errors++; continue
+          const reason = `upsert error -- ${error.message}`
+          console.error(`  ${market.symbol}: ${reason}`)
+          skippedDetails.push({ symbol: market.symbol, reason }); summary.errors++; continue
         }
       }
 
@@ -272,10 +288,18 @@ async function main() {
       )
       summary.upserted += rows.length
     } catch (err) {
-      console.error(`  ${market.symbol}: ${(err as Error).message}`)
-      summary.errors++
+      const reason = (err as Error).message
+      console.error(`  ${market.symbol}: ${reason}`)
+      skippedDetails.push({ symbol: market.symbol, reason }); summary.errors++
     }
     await new Promise(r => setTimeout(r, isHistory ? 200 : 150))
+  }
+
+  if (skippedDetails.length > 0) {
+    console.warn('\n=== SKIPPED / FAILED MARKETS ===')
+    for (const { symbol, reason } of skippedDetails) {
+      console.warn(`  WARN: ${symbol} -- ${reason}`)
+    }
   }
 
   console.log('\n=== SUMMARY ===')

@@ -97,6 +97,9 @@ async function fetchApipSessionBars(finnhubSymbol: string): Promise<ApipSessionR
   const fromTs = sessionOpenTs - 3600;
 
   const candles = await getCandles(finnhubSymbol, '5', fromTs, toTs);
+  if (candles.s === 'no_mapping') {
+    throw new Error(`No Azure asset mapping for "${finnhubSymbol}" (finnhub_to_acuity.csv)`);
+  }
   if (candles.s !== 'ok' || !candles.t.length) {
     throw new Error(`No price data for ${finnhubSymbol}`);
   }
@@ -207,26 +210,31 @@ async function main() {
   }
 
   const summary = { captured: 0, skipped: 0, errors: 0 }
+  const skippedDetails: { symbol: string; reason: string }[] = []
 
   for (const symbol of sessionSymbols) {
     const market = marketBySymbol.get(symbol)
     if (!market) {
-      console.log(`  ${symbol}: not found in markets table, skipping`)
-      summary.skipped++; continue
+      const reason = 'not found in markets table'
+      console.log(`  ${symbol}: ${reason}, skipping`)
+      skippedDetails.push({ symbol, reason }); summary.skipped++; continue
     }
     if (!market.price_data_symbol) {
-      console.log(`  ${symbol}: no price_data_symbol mapped, skipping`)
-      summary.skipped++; continue
+      const reason = 'no price_data_symbol mapped'
+      console.log(`  ${symbol}: ${reason}, skipping`)
+      skippedDetails.push({ symbol, reason }); summary.skipped++; continue
     }
     if (market.price_data_provider === 'IC_MARKETS') {
-      console.log(`  ${symbol}: IC Markets provider -- manual feed required, skipping`)
-      summary.skipped++; continue
+      const reason = 'IC Markets provider -- manual feed required'
+      console.log(`  ${symbol}: ${reason}, skipping`)
+      skippedDetails.push({ symbol, reason }); summary.skipped++; continue
     }
 
     const dailyAtr = atr20ByMarketId.get(market.market_id)
     if (!dailyAtr?.atr20) {
-      console.log(`  ${symbol}: no atr20 in market_state_daily, skipping (run populate first)`)
-      summary.skipped++; continue
+      const reason = 'no atr20 in market_state_daily (run populate first)'
+      console.log(`  ${symbol}: ${reason}, skipping`)
+      skippedDetails.push({ symbol, reason }); summary.skipped++; continue
     }
 
     try {
@@ -253,8 +261,9 @@ async function main() {
       })
 
       if (!state.currentZone) {
-        console.log(`  ${symbol}: could not determine zone, skipping`)
-        summary.skipped++; continue
+        const reason = 'could not determine zone'
+        console.log(`  ${symbol}: ${reason}, skipping`)
+        skippedDetails.push({ symbol, reason }); summary.skipped++; continue
       }
 
       const row = {
@@ -271,8 +280,9 @@ async function main() {
       if (!isDryRun) {
         const { error } = await db.from('market_state_intraday').insert(row)
         if (error) {
-          console.error(`  ${symbol}: insert error -- ${error.message}`)
-          summary.errors++; continue
+          const reason = `insert error -- ${error.message}`
+          console.error(`  ${symbol}: ${reason}`)
+          skippedDetails.push({ symbol, reason }); summary.errors++; continue
         }
       }
 
@@ -284,11 +294,19 @@ async function main() {
       )
       summary.captured++
     } catch (err) {
-      console.error(`  ${symbol}: ${(err as Error).message}`)
-      summary.errors++
+      const reason = (err as Error).message
+      console.error(`  ${symbol}: ${reason}`)
+      skippedDetails.push({ symbol, reason }); summary.errors++
     }
 
     await new Promise(r => setTimeout(r, 200))
+  }
+
+  if (skippedDetails.length > 0) {
+    console.warn('\n=== SKIPPED / FAILED MARKETS ===')
+    for (const { symbol, reason } of skippedDetails) {
+      console.warn(`  WARN: ${symbol} -- ${reason}`)
+    }
   }
 
   console.log('\n=== SUMMARY ===')
