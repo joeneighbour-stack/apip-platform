@@ -8,6 +8,7 @@ import { EmergencyAbsence } from '@/components/management/EmergencyAbsence'
 import { LiveTradesPanel } from '@/components/management/LiveTradesPanel'
 import { ManagementMonitor } from '@/components/management/ManagementMonitor'
 import { ManagementTabs } from '@/components/management/ManagementTabs'
+import { fetchAllPages } from '@/lib/paginatedFetch'
 
 export default async function ManagementWorkspacePage() {
   const user = await getCurrentUser()
@@ -198,28 +199,17 @@ export default async function ManagementWorkspacePage() {
   // every other full-history fetch in this file (allTrades/allReviews/allDisputes above)
   // and in lib/shadowBreakdown.ts -- ordering by review_id purely for pagination
   // determinism, not because it carries any meaning here.
-  const coachingAlignment: any[] = []
-  {
-    const PAGE_SIZE = 1000
-    let page = 0
-    let hasMore = true
-    while (hasMore) {
-      const { data, error } = await adminDb
-        .from('post_trade_reviews')
-        .select(`
-          direction_alignment, alignment_score,
-          trade:trade_id!inner ( result_r, analyst_id )
-        `)
-        .order('review_id', { ascending: true })
-        .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
-      if (error) { console.error('coaching alignment query failed:', error); break }
-      if (!data?.length) { hasMore = false } else {
-        coachingAlignment.push(...data)
-        hasMore = data.length === PAGE_SIZE
-        page++
-      }
-    }
-  }
+  const coachingAlignment = await fetchAllPages<any>(
+    page => adminDb
+      .from('post_trade_reviews')
+      .select(`
+        direction_alignment, alignment_score,
+        trade:trade_id!inner ( result_r, analyst_id )
+      `)
+      .order('review_id', { ascending: true })
+      .range(page * 1000, page * 1000 + 999),
+    { label: 'post_trade_reviews (coaching alignment)' },
+  )
 
   // Aggregate per analyst
   const alignmentByAnalyst = (activeAnalysts ?? []).map(analyst => {

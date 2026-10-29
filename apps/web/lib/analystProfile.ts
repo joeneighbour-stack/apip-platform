@@ -1,5 +1,6 @@
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { maxDrawdown, type MetricsTrade } from '@/lib/metrics'
+import { fetchAllPages } from '@/lib/paginatedFetch'
 
 export interface AnalystProfileData {
   analyst: { analyst_id: string; display_name: string; active: boolean } | null
@@ -151,34 +152,21 @@ export async function getAnalystProfileData(
   }
 
   // All trades for breakdown
-  const allTrades: any[] = []
-  {
-    const PAGE_SIZE = 1000
-    let page = 0
-    let hasMore = true
-    while (hasMore) {
-      const { data: batch, error } = await supabase
-        .from('actual_trades')
-        .select(`
-          trade_id, direction, result_r, triggered,
-          published_at, historical_backfill,
-          market:market_id ( symbol, asset_class )
-        `)
-        .eq('analyst_id', analystId)
-        .gte('published_at', historyFloor)
-        .order('published_at', { ascending: false })
-        .order('trade_id', { ascending: false })
-        .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
-      if (error) {
-        console.error('[getAnalystProfileData] Failed to fetch allTrades:', error.message)
-        hasMore = false
-      } else if (!batch?.length) { hasMore = false } else {
-        allTrades.push(...batch)
-        hasMore = batch.length === PAGE_SIZE
-        page++
-      }
-    }
-  }
+  const allTrades = await fetchAllPages<any>(
+    page => supabase
+      .from('actual_trades')
+      .select(`
+        trade_id, direction, result_r, triggered,
+        published_at, historical_backfill,
+        market:market_id ( symbol, asset_class )
+      `)
+      .eq('analyst_id', analystId)
+      .gte('published_at', historyFloor)
+      .order('published_at', { ascending: false })
+      .order('trade_id', { ascending: false })
+      .range(page * 1000, page * 1000 + 999),
+    { label: 'actual_trades (analyst profile)' },
+  )
 
   // Post-trade reviews -- post_trade_reviews has no analyst_id column, only
   // trade_id (FK to actual_trades), so it's scoped to this analyst via the

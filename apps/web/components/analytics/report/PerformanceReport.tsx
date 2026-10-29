@@ -14,6 +14,7 @@ import { MonthlyPerformanceMatrix } from '../MonthlyPerformanceMatrix'
 import { AttributionTable } from '../AttributionTable'
 import { ContributionChart } from '../ContributionChart'
 import { TradeStatistics } from '../TradeStatistics'
+import { FullBreakdownTable, buildGroupedBreakdownRows } from './FullBreakdownTable'
 
 interface Props {
   data: ReportData
@@ -100,7 +101,11 @@ export function PerformanceReport({ data }: Props) {
         <section className="break-after-page p-2">
           {dims.map(dim => (
             <div key={dim} className="space-y-4 mb-4">
-              {hasAttribution && (
+              {/* 'market' is excluded here -- it's covered by the always-on, unfiltered
+                  Full Asset Breakdown page below instead of this sample-size-filtered
+                  table (see that page's own comment for why). The Contribution chart for
+                  'market' is unaffected and still renders when selected. */}
+              {hasAttribution && dim !== 'market' && (
                 <AttributionTable title={DIMENSION_LABEL[dim] ?? dim} rows={data.attribution[dim] ?? []} minTrades={MIN_TRADES_PER_ATTRIBUTION_ROW} />
               )}
               {hasContribution && (
@@ -109,6 +114,28 @@ export function PerformanceReport({ data }: Props) {
             </div>
           ))}
           <ReportFooter pageLabel="Page 3" />
+        </section>
+      )}
+
+      {/* PAGE 3B -- Full Asset Breakdown. Unconditional (not gated by the
+          attributionDimensions checkboxes or any section toggle) -- this is the fix for
+          the per-asset breakdown not rendering: it used to only exist as the 'market'
+          entry in the Page 3 Attribution table above, which (a) required the report
+          author to tick "Market" under Attribution Breakdown (off by default) and (b)
+          even then silently dropped any market below MIN_TRADES_PER_ATTRIBUTION_ROW (5)
+          triggered trades via AttributionTable's minTrades filter. Every asset with >=1
+          triggered trade in the report's scope appears here, grouped by asset class with
+          a subtotal per class and a grand total that reconciles exactly to the Executive
+          Summary's Total R / Triggered Trades (both are computed from the same `trades`
+          array -- see ReportBuilder.tsx's handleGenerate()). */}
+      {data.assetBreakdown.length > 0 && (
+        <section className="break-after-page p-2">
+          <FullBreakdownTable
+            title="Full Asset Breakdown"
+            showAssetClass
+            rows={buildGroupedBreakdownRows(data.assetBreakdown, data.assetBreakdownTotal, { rowGroupLabelAsAssetClass: true })}
+          />
+          <ReportFooter pageLabel="Asset Breakdown" />
         </section>
       )}
 

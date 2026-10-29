@@ -1,5 +1,8 @@
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { fetchAllPages, verifyExpectedCount, PaginationError } from '@/lib/paginatedFetch'
+
+const MAX_ROWS = 150_000
 
 // analyst_publications RLS denies EXECUTIVE entirely and scopes MANAGER to only the
 // analysts they manage (migrations/018_publication_rls.sql) -- the Analytics page's
@@ -39,34 +42,45 @@ export async function GET(req: Request) {
   const adminDb = createAdminClient()
   const FIELDS = 'analyst_id, market_id, published_at, reconciliation_status'
 
-  const allPubs: any[] = []
-  let page = 0
-  let hasMore = true
-
-  while (hasMore) {
-    let query = adminDb
-      .from('analyst_publications')
-      .select(FIELDS)
+  // See the identical helper's comment in app/api/analytics/trades/route.ts -- filters
+  // applied without .select() so callers can chain either the data select or the
+  // count-query select fresh off .from(), since Supabase's count overload only exists
+  // directly on .select() itself.
+  function withFilters<Q extends { eq: any; gte: any; lte: any }>(query: Q): Q {
+    let q: any = query
       .eq('source_system', 'ACUITY_PERFORMANCE_API')
       .gte('published_at', from + 'T00:00:00Z')
-    if (to) query = query.lte('published_at', to + 'T23:59:59Z')
-    if (scopedAnalystId) query = query.eq('analyst_id', scopedAnalystId)
-
-    const { data, error } = await query
-      .order('published_at', { ascending: false })
-      .order('publication_id', { ascending: false })
-      .range(page * 1000, page * 1000 + 999)
-
-    if (error || !data?.length) {
-      hasMore = false
-    } else {
-      allPubs.push(...data)
-      hasMore = data.length === 1000
-      page++
-    }
-
-    if (allPubs.length >= 150_000) break
+    if (to) q = q.lte('published_at', to + 'T23:59:59Z')
+    if (scopedAnalystId) q = q.eq('analyst_id', scopedAnalystId)
+    return q
   }
 
-  return NextResponse.json(allPubs)
+  try {
+    const allPubs = await fetchAllPages<any>(
+      page => withFilters(adminDb.from('analyst_publications').select(FIELDS))
+        .order('published_at', { ascending: false })
+        .order('publication_id', { ascending: false })
+        .range(page * 1000, page * 1000 + 999),
+      { label: 'analyst_publications', maxRows: MAX_ROWS },
+    )
+
+    if (allPubs.length < MAX_ROWS) {
+      await verifyExpectedCount(
+        allPubs.length,
+        async () => {
+          const { count, error } = await withFilters(adminDb.from('analyst_publications').select('analyst_id', { count: 'exact', head: true }))
+          return { count, error }
+        },
+        'analyst_publications',
+      )
+    }
+
+    return NextResponse.json(allPubs)
+  } catch (err) {
+    if (err instanceof PaginationError) {
+      console.error('[api/analytics/publications]', err.message)
+      return NextResponse.json({ error: `Failed to load publications: ${err.message}` }, { status: 502 })
+    }
+    throw err
+  }
 }

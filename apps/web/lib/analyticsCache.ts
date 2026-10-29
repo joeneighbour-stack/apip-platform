@@ -13,57 +13,73 @@ import {
   attributionBy, computeTradeStatistics, resultDistribution, bestWorstTrades,
   rankAttribution, MIN_TRADES_FOR_MARKET_RANKING,
 } from './metrics'
+import { fetchAllPages, verifyExpectedCount } from './paginatedFetch'
 
 const CACHE_KEY = 'default-analytics-view'
+const MAX_ROWS = 150_000
 
 async function fetchAllTrades(): Promise<any[]> {
   const db = createAdminClient()
   const FIELDS = `trade_id, analyst_id, direction, result_r,
     triggered, published_at, closed_at, source_system, session,
     market:market_id ( market_id, symbol, asset_class )`
-  const all: any[] = []
-  let page = 0, hasMore = true
-  while (hasMore) {
-    const { data, error } = await db.from('actual_trades').select(FIELDS)
-      .gte('published_at', SINCE_INCEPTION_FLOOR + 'T00:00:00Z')
+
+  // Filters applied without .select() so the data query and the count query can each
+  // chain their own .select() fresh off .from() -- Supabase's count overload
+  // ({count:'exact',head:true}) is only available directly on .select() itself, not
+  // after chaining further filters onto an already-selected builder.
+  const withFilters = <Q extends { gte: any }>(query: Q): Q =>
+    query.gte('published_at', SINCE_INCEPTION_FLOOR + 'T00:00:00Z')
+
+  const all = await fetchAllPages<any>(
+    page => withFilters(db.from('actual_trades').select(FIELDS))
       .order('published_at', { ascending: false })
       .order('trade_id', { ascending: false })
-      .range(page * 1000, page * 1000 + 999)
-    if (error) {
-      console.error('[analyticsCache] Failed to fetch actual_trades:', error.message)
-      const msg = error.message.toLowerCase()
-      if (msg.includes('statement timeout') || msg.includes('canceling statement')) {
-        throw new Error('fetchAllTrades timed out')
-      }
-      hasMore = false
-    } else if (!data?.length) { hasMore = false } else { all.push(...data); hasMore = data.length === 1000; page++ }
-    if (all.length >= 150_000) break
+      .range(page * 1000, page * 1000 + 999),
+    { label: 'actual_trades', maxRows: MAX_ROWS },
+  )
+
+  if (all.length < MAX_ROWS) {
+    await verifyExpectedCount(
+      all.length,
+      async () => {
+        const { count, error } = await withFilters(db.from('actual_trades').select('trade_id', { count: 'exact', head: true }))
+        return { count, error }
+      },
+      'actual_trades',
+    )
   }
+
   return all
 }
 
 async function fetchAllPublications(): Promise<any[]> {
   const db = createAdminClient()
-  const all: any[] = []
-  let page = 0, hasMore = true
-  while (hasMore) {
-    const { data, error } = await db.from('analyst_publications')
-      .select('analyst_id, market_id, published_at, reconciliation_status')
+
+  const withFilters = <Q extends { eq: any; gte: any }>(query: Q): Q =>
+    query
       .eq('source_system', 'ACUITY_PERFORMANCE_API')
       .gte('published_at', SINCE_INCEPTION_FLOOR + 'T00:00:00Z')
+
+  const all = await fetchAllPages<any>(
+    page => withFilters(db.from('analyst_publications').select('analyst_id, market_id, published_at, reconciliation_status'))
       .order('published_at', { ascending: false })
       .order('publication_id', { ascending: false })
-      .range(page * 1000, page * 1000 + 999)
-    if (error) {
-      console.error('[analyticsCache] Failed to fetch analyst_publications:', error.message)
-      const msg = error.message.toLowerCase()
-      if (msg.includes('statement timeout') || msg.includes('canceling statement')) {
-        throw new Error('analyst_publications fetch timed out')
-      }
-      hasMore = false
-    } else if (!data?.length) { hasMore = false } else { all.push(...data); hasMore = data.length === 1000; page++ }
-    if (all.length >= 150_000) break
+      .range(page * 1000, page * 1000 + 999),
+    { label: 'analyst_publications', maxRows: MAX_ROWS },
+  )
+
+  if (all.length < MAX_ROWS) {
+    await verifyExpectedCount(
+      all.length,
+      async () => {
+        const { count, error } = await withFilters(db.from('analyst_publications').select('analyst_id', { count: 'exact', head: true }))
+        return { count, error }
+      },
+      'analyst_publications',
+    )
   }
+
   return all
 }
 

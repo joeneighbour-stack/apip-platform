@@ -1,6 +1,7 @@
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { computePatternSummary, type PatternTradePoint } from '@/lib/patternAnalytics'
+import { fetchAllPages, PaginationError } from '@/lib/paginatedFetch'
 
 // Same reasoning as /api/analytics/publications: pattern_trades RLS grants
 // ADMIN/MANAGER/RESEARCH only (migrations/065_pattern_trades.sql) -- no ANALYST
@@ -40,36 +41,31 @@ export async function GET(req: Request) {
   const adminDb = createAdminClient()
   const FIELDS = 'family, granularity, asset_class, direction, status, triggered, rr, published_at, symbol, exit_date'
 
-  const allRows: PatternTradePoint[] = []
-  let page = 0
-  let hasMore = true
-
-  while (hasMore) {
+  function baseQuery() {
     let query = adminDb.from('pattern_trades').select(FIELDS)
     if (from) query = query.gte('published_at', from + 'T00:00:00Z')
     if (to) query = query.lte('published_at', to + 'T23:59:59Z')
     if (granularity) query = query.eq('granularity', granularity)
     if (direction) query = query.eq('direction', direction)
     if (assetClass) query = query.eq('asset_class', assetClass)
-
-    const { data, error } = await query
-      .order('published_at', { ascending: false })
-      .order('report_id', { ascending: false })
-      .range(page * 1000, page * 1000 + 999)
-
-    if (error) {
-      console.error('[api/analytics/patterns] Failed to fetch pattern_trades:', error.message)
-      hasMore = false
-    } else if (!data?.length) {
-      hasMore = false
-    } else {
-      allRows.push(...(data as unknown as PatternTradePoint[]))
-      hasMore = data.length === 1000
-      page++
-    }
-
-    if (allRows.length >= MAX_ROWS) break
+    return query
   }
 
-  return NextResponse.json({ ...computePatternSummary(allRows), trades: allRows })
+  try {
+    const allRows = await fetchAllPages<PatternTradePoint>(
+      page => baseQuery()
+        .order('published_at', { ascending: false })
+        .order('report_id', { ascending: false })
+        .range(page * 1000, page * 1000 + 999) as unknown as PromiseLike<{ data: PatternTradePoint[] | null; error: { message: string } | null }>,
+      { label: 'pattern_trades', maxRows: MAX_ROWS },
+    )
+
+    return NextResponse.json({ ...computePatternSummary(allRows), trades: allRows })
+  } catch (err) {
+    if (err instanceof PaginationError) {
+      console.error('[api/analytics/patterns]', err.message)
+      return NextResponse.json({ error: `Failed to load pattern trades: ${err.message}` }, { status: 502 })
+    }
+    throw err
+  }
 }

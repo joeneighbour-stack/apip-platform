@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { TeamPerformanceGrid } from '@/components/management/LazyCharts'
 import { getShadowBreakdownData } from '@/lib/shadowBreakdown'
+import { fetchAllPages } from '@/lib/paginatedFetch'
 
 export default async function ManagementPerformancePage() {
   const user = await getCurrentUser()
@@ -53,29 +54,16 @@ export default async function ManagementPerformancePage() {
   // silently drops rows between page boundaries (confirmed: caused specific analysts' trades
   // to disappear from later pages even though the total row count looked correct).
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-  const actualTrades: any[] = []
-  {
-    const PAGE_SIZE = 1000
-    let page = 0
-    let hasMore = true
-    while (hasMore) {
-      const { data, error } = await supabase
-        .from('actual_trades')
-        .select('result_r, triggered, published_at, analyst_id, source_system')
-        .in('source_system', ['ACUITY_PERFORMANCE_API', 'MANUAL_BACKFILL'])
-        .gte('published_at', thirtyDaysAgo)
-        .order('trade_id', { ascending: true })
-        .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
-      if (error) {
-        console.error('[ManagementPerformancePage] Failed to fetch actual_trades (30-day):', error.message)
-        hasMore = false
-      } else if (!data?.length) { hasMore = false } else {
-        actualTrades.push(...data)
-        hasMore = data.length === PAGE_SIZE
-        page++
-      }
-    }
-  }
+  const actualTrades = await fetchAllPages<any>(
+    page => supabase
+      .from('actual_trades')
+      .select('result_r, triggered, published_at, analyst_id, source_system')
+      .in('source_system', ['ACUITY_PERFORMANCE_API', 'MANUAL_BACKFILL'])
+      .gte('published_at', thirtyDaysAgo)
+      .order('trade_id', { ascending: true })
+      .range(page * 1000, page * 1000 + 999),
+    { label: 'actual_trades (30-day)' },
+  )
 
   // Fetch last week API publications for trigger rate denominator
   const lwNow = new Date()
@@ -136,29 +124,16 @@ export default async function ManagementPerformancePage() {
   // since ShadowSinceLaunchStats needs the raw trade/publication rows, not the breakdown rows.
   const { shadowStartDate, analysts: shadowBreakdownAnalysts, rows: shadowBreakdownRows } = await getShadowBreakdownData(adminDb)
 
-  const rawSinceLaunchTrades: any[] = []
-  {
-    const PAGE_SIZE = 1000
-    let page = 0
-    let hasMore = true
-    while (hasMore) {
-      const { data, error } = await supabase
-        .from('actual_trades')
-        .select('result_r, triggered, published_at, analyst_id, source_system')
-        .in('source_system', ['ACUITY_PERFORMANCE_API', 'MANUAL_BACKFILL'])
-        .gte('published_at', shadowStartDate)
-        .order('trade_id', { ascending: true })
-        .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
-      if (error) {
-        console.error('[ManagementPerformancePage] Failed to fetch actual_trades (since launch):', error.message)
-        hasMore = false
-      } else if (!data?.length) { hasMore = false } else {
-        rawSinceLaunchTrades.push(...data)
-        hasMore = data.length === PAGE_SIZE
-        page++
-      }
-    }
-  }
+  const rawSinceLaunchTrades = await fetchAllPages<any>(
+    page => supabase
+      .from('actual_trades')
+      .select('result_r, triggered, published_at, analyst_id, source_system')
+      .in('source_system', ['ACUITY_PERFORMANCE_API', 'MANUAL_BACKFILL'])
+      .gte('published_at', shadowStartDate)
+      .order('trade_id', { ascending: true })
+      .range(page * 1000, page * 1000 + 999),
+    { label: 'actual_trades (since launch)' },
+  )
   const sinceLaunchApiDatesByAnalyst = new Map<string, Set<string>>()
   for (const t of rawSinceLaunchTrades) {
     if (t.source_system === 'ACUITY_PERFORMANCE_API' && t.triggered && t.analyst_id && t.published_at) {
@@ -173,30 +148,17 @@ export default async function ManagementPerformancePage() {
     return !sinceLaunchApiDatesByAnalyst.get(t.analyst_id)?.has(t.published_at.slice(0, 10))
   })
 
-  const sinceLaunchActualPublications: any[] = []
-  {
-    const PAGE_SIZE = 1000
-    let page = 0
-    let hasMore = true
-    while (hasMore) {
-      const { data, error } = await adminDb
-        .from('analyst_publications')
-        .select('published_at, reconciliation_status')
-        .eq('source_system', 'ACUITY_PERFORMANCE_API')
-        .gte('published_at', shadowStartDate)
-        .order('published_at', { ascending: false })
-        .order('publication_id', { ascending: false })
-        .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
-      if (error) {
-        console.error('[ManagementPerformancePage] Failed to fetch analyst_publications (since launch):', error.message)
-        hasMore = false
-      } else if (!data?.length) { hasMore = false } else {
-        sinceLaunchActualPublications.push(...data)
-        hasMore = data.length === PAGE_SIZE
-        page++
-      }
-    }
-  }
+  const sinceLaunchActualPublications = await fetchAllPages<any>(
+    page => adminDb
+      .from('analyst_publications')
+      .select('published_at, reconciliation_status')
+      .eq('source_system', 'ACUITY_PERFORMANCE_API')
+      .gte('published_at', shadowStartDate)
+      .order('published_at', { ascending: false })
+      .order('publication_id', { ascending: false })
+      .range(page * 1000, page * 1000 + 999),
+    { label: 'analyst_publications (since launch)' },
+  )
 
   return (
     <div className="space-y-8">

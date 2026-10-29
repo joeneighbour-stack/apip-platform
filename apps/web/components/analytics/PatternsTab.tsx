@@ -530,8 +530,14 @@ export function PatternsTab() {
     </div>
 
     {reportOpen && (
+      // rawTrades (pre-toAnalyticsTrade, i.e. still carrying `family`) is for the report's
+      // Pattern Summary / Asset x Pattern tables only -- toAnalyticsTrade() drops `family`
+      // entirely (see its own comment), so there's no way to group by pattern type from
+      // `trades` alone. Both arrays come from the same filteredTrades, so totals from
+      // either reconcile exactly.
       <PatternReportBuilder
-        trades={analyticsTrades} summary={summary} assetClassRows={assetClassRows}
+        trades={analyticsTrades} rawTrades={filteredTrades} summary={summary} assetClassRows={assetClassRows}
+        filters={filters}
         onClose={() => setReportOpen(false)}
       />
     )}

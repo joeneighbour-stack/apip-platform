@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchAllPages } from './paginatedFetch'
 
 export interface ShadowBreakdownRow {
   analystId: string
@@ -114,95 +115,56 @@ async function fetchShadowBreakdownData(adminDb: SupabaseClient): Promise<Shadow
   if (breakdownAnalystsError) console.error('[getShadowBreakdownData] Failed to fetch analysts:', breakdownAnalystsError.message)
   const analysts = (breakdownAnalystsRaw as any[]) ?? []
 
-  const breakdownShadowRaw: any[] = []
-  {
-    const PAGE_SIZE = 1000
-    let page = 0
-    let hasMore = true
-    while (hasMore) {
-      const { data, error } = await adminDb
-        .from('shadow_trade_outcomes')
-        .select(`
-          shadow_outcome_id,
-          trade_outcome_status,
-          result_r,
-          shadow_trade:shadow_trade_id!inner (
-            rr, direction, generated_at,
-            opportunity:opportunity_id (
-              market_id,
-              market:market_id ( symbol )
-            )
+  const breakdownShadowRaw = await fetchAllPages<any>(
+    page => adminDb
+      .from('shadow_trade_outcomes')
+      .select(`
+        shadow_outcome_id,
+        trade_outcome_status,
+        result_r,
+        shadow_trade:shadow_trade_id!inner (
+          rr, direction, generated_at,
+          opportunity:opportunity_id (
+            market_id,
+            market:market_id ( symbol )
           )
-        `)
-        // shadow_trade_id!inner is required for these two filters to actually restrict
-        // the outer shadow_trade_outcomes rows -- a plain (non-!inner) embed only nulls
-        // out the embedded shadow_trade object for non-matching rows, it does not filter
-        // the outer query (verified against this exact table earlier in the codebase,
-        // e.g. monitor/page.tsx's post_trade_reviews fetch). Without !inner, this would
-        // still return every outcome across all variants/systems, defeating the point of
-        // this fix.
-        .eq('shadow_trade.shadow_system', 'ANALYST_MIRROR')
-        .eq('shadow_trade.entry_variant', 'MID')
-        .order('shadow_outcome_id', { ascending: true })
-        .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
-      if (error) {
-        console.error('[getShadowBreakdownData] Failed to fetch shadow_trade_outcomes:', error.message)
-        hasMore = false
-      } else if (!data?.length) { hasMore = false } else {
-        breakdownShadowRaw.push(...data)
-        hasMore = data.length === PAGE_SIZE
-        page++
-      }
-    }
-  }
+        )
+      `)
+      // shadow_trade_id!inner is required for these two filters to actually restrict
+      // the outer shadow_trade_outcomes rows -- a plain (non-!inner) embed only nulls
+      // out the embedded shadow_trade object for non-matching rows, it does not filter
+      // the outer query (verified against this exact table earlier in the codebase,
+      // e.g. monitor/page.tsx's post_trade_reviews fetch). Without !inner, this would
+      // still return every outcome across all variants/systems, defeating the point of
+      // this fix.
+      .eq('shadow_trade.shadow_system', 'ANALYST_MIRROR')
+      .eq('shadow_trade.entry_variant', 'MID')
+      .order('shadow_outcome_id', { ascending: true })
+      .range(page * 1000, page * 1000 + 999),
+    { label: 'shadow_trade_outcomes' },
+  )
 
-  const breakdownPublications: any[] = []
-  {
-    const PAGE_SIZE = 1000
-    let page = 0
-    let hasMore = true
-    while (hasMore) {
-      const { data, error } = await adminDb
-        .from('analyst_publications')
-        .select('analyst_id, market_id, direction, published_at, effective_triggered')
-        .eq('source_system', 'ACUITY_PERFORMANCE_API')
-        .gte('published_at', shadowStartDate)
-        .order('publication_id', { ascending: true })
-        .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
-      if (error) {
-        console.error('[getShadowBreakdownData] Failed to fetch analyst_publications:', error.message)
-        hasMore = false
-      } else if (!data?.length) { hasMore = false } else {
-        breakdownPublications.push(...data)
-        hasMore = data.length === PAGE_SIZE
-        page++
-      }
-    }
-  }
+  const breakdownPublications = await fetchAllPages<any>(
+    page => adminDb
+      .from('analyst_publications')
+      .select('analyst_id, market_id, direction, published_at, effective_triggered')
+      .eq('source_system', 'ACUITY_PERFORMANCE_API')
+      .gte('published_at', shadowStartDate)
+      .order('publication_id', { ascending: true })
+      .range(page * 1000, page * 1000 + 999),
+    { label: 'analyst_publications' },
+  )
 
-  const breakdownActualTrades: any[] = []
-  {
-    const PAGE_SIZE = 1000
-    let page = 0
-    let hasMore = true
-    while (hasMore) {
-      const { data, error } = await adminDb
-        .from('actual_trades')
-        .select('analyst_id, market_id, direction, published_at, result_r, triggered, source_system')
-        .in('source_system', ['ACUITY_PERFORMANCE_API', 'MANUAL_BACKFILL'])
-        .gte('published_at', shadowStartDate)
-        .order('trade_id', { ascending: true })
-        .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
-      if (error) {
-        console.error('[getShadowBreakdownData] Failed to fetch actual_trades:', error.message)
-        hasMore = false
-      } else if (!data?.length) { hasMore = false } else {
-        breakdownActualTrades.push(...data)
-        hasMore = data.length === PAGE_SIZE
-        page++
-      }
-    }
-  }
+  const breakdownActualTrades = await fetchAllPages<any>(
+    page => adminDb
+      .from('actual_trades')
+      .select('analyst_id, market_id, direction, published_at, result_r, triggered, source_system')
+      .in('source_system', ['ACUITY_PERFORMANCE_API', 'MANUAL_BACKFILL'])
+      .gte('published_at', shadowStartDate)
+      .order('trade_id', { ascending: true })
+      .range(page * 1000, page * 1000 + 999),
+    { label: 'actual_trades' },
+  )
 
   // Shadow side, keyed by market_id + date only -- one shadow trade per market/day is
   // expected, so the first match wins if that's ever violated rather than silently

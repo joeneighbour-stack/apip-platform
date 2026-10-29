@@ -339,6 +339,104 @@ export function attributionBy(trades: MetricsTrade[], dimension: (t: MetricsTrad
     .sort((a, b) => b.totalR - a.totalR)
 }
 
+// Full (non-sample-filtered) per-entity breakdown -- used by the generated PDF reports'
+// "Full Asset Breakdown" / "Pattern Summary" / "Asset x Pattern" tables, which must show
+// every entity in scope (not a top/bottom N, not a minimum-sample cutoff the way
+// AttributionRow's consumers like AttributionTable apply via its `minTrades` prop).
+// Adds Payout Ratio and Best/Worst Trade (R) on top of AttributionRow's fields, all
+// reusing the exact same underlying helpers (winRate/avgR/totalR/profitFactor/
+// payoutRatio) so a report's per-entity rows always reconcile exactly to any headline
+// figure computed from the same trade set.
+export interface FullBreakdownRow {
+  key: string
+  label: string
+  trades: number
+  winRate: number | null
+  avgR: number | null
+  totalR: number
+  profitFactor: number | null
+  payoutRatio: number | null
+  bestTradeR: number | null
+  worstTradeR: number | null
+}
+
+export function fullBreakdownRow(trades: MetricsTrade[], key: string, label: string): FullBreakdownRow {
+  const triggered = triggeredTrades(trades)
+  const avg = avgR(trades)
+  const pf = profitFactor(trades)
+  const pr = payoutRatio(trades)
+  const resultRs = triggered.map(t => t.result_r ?? 0)
+  return {
+    key, label,
+    trades: triggered.length,
+    winRate: winRate(trades),
+    avgR: avg !== null ? round2(avg) : null,
+    // totalR is deliberately NOT rounded here, unlike every other field -- this is the
+    // one value callers sum across many rows (per-asset -> class subtotal -> grand
+    // total) and a report's grand total must reconcile *exactly* to the headline Total R
+    // (same requirement verified against live data: 209 markets' worth of
+    // independently-rounded totals summed to a figure up to 0.09R off the true total,
+    // since round(a) + round(b) != round(a + b) in general). Rounding only ever happens
+    // once, at final display time, via formatR()'s own toFixed(2) -- never here.
+    totalR: totalR(trades),
+    profitFactor: pf !== null ? round2(pf) : null,
+    payoutRatio: pr,
+    bestTradeR: resultRs.length > 0 ? round2(Math.max(...resultRs)) : null,
+    worstTradeR: resultRs.length > 0 ? round2(Math.min(...resultRs)) : null,
+  }
+}
+
+// Flat, fully-populated breakdown (every entity with >=1 triggered trade), sorted by
+// Total R descending -- the "not a top/bottom N" full list. Generic over T so callers
+// can pass a MetricsTrade subtype (e.g. PatternReportBuilder.tsx's trades-with-family)
+// and group by a field fullBreakdownRow itself never needs to know about.
+export function fullBreakdownBy<T extends MetricsTrade>(trades: T[], dimension: (t: T) => { key: string; label: string }): FullBreakdownRow[] {
+  const groups = new Map<string, { label: string; trades: T[] }>()
+  for (const t of trades) {
+    const { key, label } = dimension(t)
+    if (!groups.has(key)) groups.set(key, { label, trades: [] })
+    groups.get(key)!.trades.push(t)
+  }
+  return [...groups.entries()]
+    .map(([key, { label, trades: groupTrades }]) => fullBreakdownRow(groupTrades, key, label))
+    .filter(row => row.trades > 0)
+    .sort((a, b) => b.totalR - a.totalR)
+}
+
+export interface FullBreakdownGroup {
+  groupKey: string
+  groupLabel: string
+  rows: FullBreakdownRow[]
+  subtotal: FullBreakdownRow
+}
+
+// Two-level breakdown (e.g. asset class -> asset, or asset -> pattern): each group's
+// `rows` are sorted by Total R descending within the group, `subtotal` is computed over
+// every trade in the group (not a sum of the already-rounded row figures, so ratios
+// stay correct), and groups themselves are ordered by their own subtotal Total R
+// descending.
+export function fullBreakdownGrouped<T extends MetricsTrade>(
+  trades: T[],
+  groupDimension: (t: T) => { key: string; label: string },
+  rowDimension: (t: T) => { key: string; label: string },
+): FullBreakdownGroup[] {
+  const groups = new Map<string, { label: string; trades: T[] }>()
+  for (const t of trades) {
+    const { key, label } = groupDimension(t)
+    if (!groups.has(key)) groups.set(key, { label, trades: [] })
+    groups.get(key)!.trades.push(t)
+  }
+  return [...groups.entries()]
+    .map(([key, { label, trades: groupTrades }]) => ({
+      groupKey: key,
+      groupLabel: label,
+      rows: fullBreakdownBy(groupTrades, rowDimension),
+      subtotal: fullBreakdownRow(groupTrades, `${key}__subtotal`, label),
+    }))
+    .filter(g => g.rows.length > 0)
+    .sort((a, b) => b.subtotal.totalR - a.subtotal.totalR)
+}
+
 export const MIN_TRADES_FOR_MARKET_RANKING = 20
 
 export function rankAttribution(rows: AttributionRow[], minTrades: number, direction: 'best' | 'worst', n = 10): AttributionRow[] {

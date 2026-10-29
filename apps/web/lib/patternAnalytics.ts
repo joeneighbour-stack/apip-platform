@@ -76,7 +76,19 @@ export const FAMILY_LABELS: Record<string, string> = {
   DT: 'Double Top',
   DB: 'Double Bottom',
   DESC_TRIANGLE_CONT: 'Descending Triangle (Continuation)',
+  // Confirmed present in live pattern_trades data but missing from this map (fell back
+  // to the raw code via FAMILY_LABELS[key] ?? key everywhere this map is used) --
+  // added while building the Patterns report's Pattern Summary table, which surfaces
+  // every family's label prominently.
+  ASC_TRIANGLE_CONT: 'Ascending Triangle (Continuation)',
+  REV_WEDGE: 'Reversal Wedge',
 }
+
+// Below this many trades, a pattern/asset combination's win rate and R figures are too
+// thin a sample to read as a real signal (a 3-trade 100% win rate looks dramatic but
+// means nothing) -- used by the Patterns report's Asset x Pattern breakdown to mark
+// (not hide) low-sample rows rather than silently show them at face value.
+export const LOW_SAMPLE_THRESHOLD = 10
 
 // Fixed, always-shown row sets -- unlike Family (a dynamic "what actually showed up,
 // sorted by count" table), Granularity and Asset Class are meant to read as a
