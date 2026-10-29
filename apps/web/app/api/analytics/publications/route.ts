@@ -1,6 +1,6 @@
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { fetchAllPages, verifyExpectedCount, PaginationError } from '@/lib/paginatedFetch'
+import { fetchAllPages, PaginationError } from '@/lib/paginatedFetch'
 
 const MAX_ROWS = 150_000
 
@@ -64,17 +64,9 @@ export async function GET(req: Request) {
       { label: 'analyst_publications', maxRows: MAX_ROWS },
     )
 
-    if (allPubs.length < MAX_ROWS) {
-      await verifyExpectedCount(
-        allPubs.length,
-        async () => {
-          const { count, error } = await withFilters(adminDb.from('analyst_publications').select('analyst_id', { count: 'exact', head: true }))
-          return { count, error }
-        },
-        'analyst_publications',
-      )
-    }
-
+    // No separate count-check here -- see the identical note in
+    // app/api/analytics/trades/route.ts: it doubled the query cost of every report
+    // generation for coverage fetchAllPages() already provides on its own.
     return NextResponse.json(allPubs)
   } catch (err) {
     if (err instanceof PaginationError) {

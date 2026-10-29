@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { fetchAllPages, verifyExpectedCount, PaginationError } from '@/lib/paginatedFetch'
+import { fetchAllPages, PaginationError } from '@/lib/paginatedFetch'
 
 // Safety valve only -- the actual bound on result size is the `from` date filter, not
 // this cap. Raised from the previous 35,000 so "Since Inception" queries have headroom
@@ -55,20 +55,14 @@ export async function GET(req: Request) {
       { label: 'actual_trades', maxRows: MAX_ROWS },
     )
 
-    // Skipped once the deliberate MAX_ROWS safety valve kicks in -- that's an
-    // intentional truncation, not the bug this check is for, and would always
-    // "mismatch" against the full unbounded count.
-    if (allTrades.length < MAX_ROWS) {
-      await verifyExpectedCount(
-        allTrades.length,
-        async () => {
-          const { count, error } = await withFilters(supabase.from('actual_trades').select('trade_id', { count: 'exact', head: true }))
-          return { count, error }
-        },
-        'actual_trades',
-      )
-    }
-
+    // No separate count-check here (there was one briefly) -- it added a second
+    // full-table COUNT query on every request, on top of an already-expensive
+    // unindexed OFFSET-paginated scan (see migrations/069_actual_trades_paging_index.sql),
+    // and fetchAllPages() already guarantees completeness on its own: it only stops
+    // once a page comes back shorter than pageSize, and throws rather than returning
+    // partial data on any persistent error. The count-check's only extra coverage was a
+    // concurrent delete landing exactly mid-scan -- too rare to justify doubling the
+    // query cost of every report generation.
     return NextResponse.json(allTrades)
   } catch (err) {
     if (err instanceof PaginationError) {
