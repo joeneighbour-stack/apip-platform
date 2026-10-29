@@ -107,10 +107,22 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
       fetch(`/api/analytics/trades?from=${SINCE_INCEPTION_FLOOR}${analystParam}`).then(r => r.json()),
       fetch(`/api/analytics/publications?from=${SINCE_INCEPTION_FLOOR}${analystParam}`).then(r => r.json()),
     ]).then(([tradeRows, pubRows]) => {
-      // A failed fetch (e.g. a 403 Forbidden body like { error: 'Forbidden' }) is truthy and
-      // not null/undefined, so `?? []` alone doesn't catch it -- Array.isArray does.
-      setTrades(normaliseTrades(Array.isArray(tradeRows) ? tradeRows : []))
-      setPubs(Array.isArray(pubRows) ? pubRows : [])
+      // A failed fetch (e.g. a 403 Forbidden body, or a 502 from the pagination helper
+      // giving up after retries -- see lib/paginatedFetch.ts) returns a truthy, non-array
+      // body like { error: '...' }. Previously this silently became an empty dataset via
+      // `?? []`/Array.isArray fallbacks, which let a failed fetch render as "zero trades"
+      // instead of surfacing the failure -- exactly the silent-truncation bug that fix
+      // replaced server-side. Throwing here instead means every caller's existing
+      // .catch() (loadData, updateFilters, handleGenerateReport) now actually fires and
+      // shows an error instead of rendering a report or dashboard from partial/empty data.
+      if (!Array.isArray(tradeRows)) {
+        throw new Error(typeof tradeRows?.error === 'string' ? tradeRows.error : 'Failed to load trade data')
+      }
+      if (!Array.isArray(pubRows)) {
+        throw new Error(typeof pubRows?.error === 'string' ? pubRows.error : 'Failed to load publication data')
+      }
+      setTrades(normaliseTrades(tradeRows))
+      setPubs(pubRows)
       setRawDataLoaded(true)
     })
   }
@@ -285,8 +297,17 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
   // Report Builder needs the raw trade/publication rows (it computes its own report-safe
   // projection from them), not the pre-aggregated cache -- fetch them now if the page
   // loaded straight into the cached default view and the background fetch hasn't landed yet.
+  // If that fetch fails, the report must NOT open against stale/empty state -- show the
+  // error instead (same refusal as the PDF-generation requirement this satisfies).
   async function handleGenerateReport() {
-    if (!rawDataLoaded) await fetchRawData().catch(() => {})
+    if (!rawDataLoaded) {
+      try {
+        await fetchRawData()
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load trade data. Please refresh the page.')
+        return
+      }
+    }
     setReportOpen(true)
   }
 
@@ -484,7 +505,16 @@ export function AnalyticsPage({ analysts, markets, lockedAnalystId }: Props) {
         previousTrades={previousTrades} previousPubs={previousPubs}
         dateRange={dateRange} comparisonLabel={comparison.label}
         defaultTitle={universe.title}
-        defaultSubtitle={universe.segments.join(' • ')}
+        // Fix: with no asset-class/market filter active (the default "since inception,
+        // everything" view), universe.segments is [] -- describeUniverse() only ever
+        // pushes a segment when that specific filter is active (lib/analyticsFilters.ts).
+        // An empty join('') leaves both the report's subtitle AND filterSummary (which
+        // is just subtitle, see ReportBuilder.tsx's handleGenerate()) blank, which
+        // reportSanitiser.ts then rejects outright ("Report universe description is
+        // missing") -- confirmed live: Generate Report was completely blocked for the
+        // single most common case, a no-filter report. Falls back to stating the (also
+        // real) unfiltered scope explicitly instead of leaving it blank.
+        defaultSubtitle={universe.segments.length > 0 ? universe.segments.join(' • ') : 'All Asset Classes • All Markets'}
         dataThroughDate={dataThroughDate}
         onClose={() => setReportOpen(false)}
       />

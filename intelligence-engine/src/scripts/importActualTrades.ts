@@ -18,6 +18,11 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+// apps/web and intelligence-engine are separate deployable packages with no shared lib,
+// so this is a cross-package relative import rather than a workspace package reference --
+// apps/web/lib/symbolNormalization.ts is the single source of truth for this map (see its
+// own comment); this file used to keep its own drifting copy.
+import { SYMBOL_OVERRIDES } from '../../../apps/web/lib/symbolNormalization'
 
 const WEBHOOK_URL = process.env.N8N_WEBHOOK_URL ?? 'https://n8n.srv1104653.hstgr.cloud/webhook/signal-performance'
 const WEBHOOK_USERNAME = process.env.N8N_WEBHOOK_USERNAME ?? 'product'
@@ -34,47 +39,6 @@ const ANALYST_CODE_MAP: Record<string, string> = {
   TIV:        'Tibor Vrbovsky',
   TIVS:       'Tibor Vrbovsky',
   JN:         'Joe Neighbour',
-}
-
-// Symbol normalisations — API name → APIP market symbol
-const SYMBOL_OVERRIDES: Record<string, string> = {
-  // Duplicate feed for Natural Gas -- already covered by the NATGAS/NATURAL GAS
-  // alias below. Matched case-insensitively via rawSymbol.toUpperCase(), so one
-  // uppercase key is enough; the API has been observed sending both
-  // "NATURAL GAS.1" and "Natural Gas.1" for this same duplicate feed.
-  'NATURAL GAS.1': 'SKIP',
-  'US100':                'NASDAQ',
-  'NAS100':               'NASDAQ',
-  'WTI':                  'Oil',
-  'CRUDE':                'Oil',
-  'XAUUSD':               'Gold',
-  'XAGUSD':               'Silver',
-  'BTCUSD':               'Bitcoin',
-  'ETHUSD':               'Ethereum',
-  'UK100':                'FTSE',
-  'GER30':                'DAX',
-  'GER40':                'DAX',
-  'FRA40':                'CAC',
-  'JP225':                'NIKKEI',
-  'NIK225':               'NIKKEI',
-  'AUS200':               'ASX200',
-  'HK50':                 'HS50',
-  'CHN50':                'CHINA A50',
-  'CHINA50':              'CHINA A50',
-  'US30':                 'DOW',
-  'DOWJONES':             'DOW',
-  'SPX500':               'SP500',
-  'US500':                'SP500',
-  'US2000':               'US2000',
-  'XCUUSD':               'Copper',
-  'COPPER':               'Copper',
-  'PLATINUM':             'Platinum',
-  'PALLADIUM':            'Palladium',
-  'NATGAS':               'Natural Gas',
-  'NATURAL GAS':          'Natural Gas',
-  'BRENT':                'Brent',
-  'XRP':                  'Ripple',
-  // Equities not in APIP market universe -- will be skipped
 }
 
 // Derive session from publication hour (UTC)

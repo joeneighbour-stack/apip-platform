@@ -5,6 +5,7 @@ import {
   buildAssetClassBreakdown, buildDayOfWeekBreakdown, buildMonthBreakdown, buildYearGrid, buildTopMarkets,
   type EnrichedSignal, type SignalTypeData,
 } from '@/lib/combinedSignalAnalytics'
+import { fetchAllPages, PaginationError } from '@/lib/paginatedFetch'
 
 const ALLOWED_ROLES = ['MANAGER', 'ADMIN', 'EXECUTIVE']
 const MAX_ROWS = 200_000
@@ -12,28 +13,11 @@ const MAX_ROWS = 200_000
 const PATTERN_OUTCOME_STATUSES = new Set(['Closed - Profit', 'Closed - Loss'])
 const AI_OUTCOME_STATUSES = new Set(['Closed - Profit', 'Closed - Loss', 'Closed - Flat', 'Expired'])
 
-async function fetchAll<T>(
+function fetchAll<T>(
   query: (page: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
   label: string,
 ): Promise<T[]> {
-  const all: T[] = []
-  let page = 0
-  let hasMore = true
-  while (hasMore) {
-    const { data, error } = await query(page)
-    if (error) {
-      console.error(`[api/analytics/combined] Failed to fetch ${label}:`, error.message)
-      hasMore = false
-    } else if (!data?.length) {
-      hasMore = false
-    } else {
-      all.push(...data)
-      hasMore = data.length === 1000
-      page++
-    }
-    if (all.length >= MAX_ROWS) break
-  }
-  return all
+  return fetchAllPages<T>(query, { label: `api/analytics/combined:${label}`, maxRows: MAX_ROWS })
 }
 
 type CumulativeRPoint = { date: string; cumulativeR: number }
@@ -61,6 +45,7 @@ export async function GET(req: Request) {
 
   const adminDb = createAdminClient()
 
+  try {
   const [analystRows, marketsResult, patternRows, aiRows] = await Promise.all([
     fetchAll<{
       triggered: boolean | null; result_r: number | null; published_at: string | null; market_id: string | null
@@ -167,4 +152,11 @@ export async function GET(req: Request) {
       ),
     },
   })
+  } catch (err) {
+    if (err instanceof PaginationError) {
+      console.error('[api/analytics/combined]', err.message)
+      return NextResponse.json({ error: `Failed to load signal data: ${err.message}` }, { status: 502 })
+    }
+    throw err
+  }
 }

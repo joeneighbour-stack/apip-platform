@@ -5,6 +5,7 @@ import {
   triggeredTrades, computeSummary, cumulativeSeries, drawdownSeries,
   rollingWindows, monthlyMatrix, attributionBy, computeTradeStatistics, resultDistribution,
   distinctAnalystCount, bestWorstTrades, rankAttribution, MIN_TRADES_FOR_MARKET_RANKING,
+  fullBreakdownGrouped, fullBreakdownRow, fullBreakdownBy,
 } from '@/lib/metrics'
 import {
   type ReportData, type ReportSections, type ReportAttributionDimension, type ReportSafeTrade,
@@ -13,6 +14,7 @@ import {
 import { COMPANY_NAME, FCA_REGULATORY_STATEMENT, DISCLAIMER_PARAGRAPHS, PAST_PERFORMANCE_WARNING } from '@/lib/compliance'
 import { formatDate } from '@/lib/format'
 import type { DateRange } from '@/lib/dateRanges'
+import { downloadAnalystWorkbook } from '@/lib/analystExcelExport'
 import { PerformanceReport } from './report/PerformanceReport'
 
 interface Props {
@@ -100,6 +102,8 @@ export function ReportBuilder({
   const [errors, setErrors] = useState<string[] | null>(null)
   const [presets, setPresets] = useState<Preset[]>([])
   const [presetName, setPresetName] = useState('')
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
 
   useEffect(() => { setPresets(loadPresets()) }, [])
 
@@ -155,6 +159,15 @@ export function ReportBuilder({
     const bestMarkets = rankAttribution(marketAttribution, MIN_TRADES_FOR_MARKET_RANKING, 'best')
     const worstMarkets = rankAttribution(marketAttribution, MIN_TRADES_FOR_MARKET_RANKING, 'worst')
 
+    // Full per-asset breakdown (Fix: this used to be the checkbox-gated 'market'
+    // AttributionTable on the Attribution & Contribution page, which (a) only appeared
+    // at all if the report author ticked "Market" under Attribution Breakdown -- off by
+    // default -- and (b) even then dropped any market under MIN_TRADES_PER_ATTRIBUTION_ROW
+    // (5) triggered trades. Unconditional now, same as Best/Worst Markets below, and
+    // never filtered by sample size -- every asset with >=1 triggered trade appears.
+    const assetBreakdown = fullBreakdownGrouped(trades, dimensionFn('asset_class'), dimensionFn('market'))
+    const assetBreakdownTotal = fullBreakdownRow(trades, 'GRAND_TOTAL', 'Grand Total')
+
     const data: ReportData = {
       universe: {
         title, subtitle,
@@ -179,6 +192,8 @@ export function ReportBuilder({
       bestWorst: allowTradeLevelSections ? { best } : null,
       bestMarkets,
       worstMarkets,
+      assetBreakdown,
+      assetBreakdownTotal,
       distinctAnalystCount: distinctAnalysts,
       compliance: {
         logoPresent: true,
@@ -205,6 +220,35 @@ export function ReportBuilder({
       window.dispatchEvent(new Event('resize'))
       setTimeout(() => window.print(), 80)
     })
+  }
+
+  async function handleExportExcel() {
+    setExportError(null)
+    setExporting(true)
+    try {
+      const assetClassSummaryRows = fullBreakdownBy(trades, dimensionFn('asset_class'))
+      const marketSummaryRows = fullBreakdownBy(trades, dimensionFn('market'))
+      const assetBreakdown = fullBreakdownGrouped(trades, dimensionFn('asset_class'), dimensionFn('market'))
+      const grandTotal = fullBreakdownRow(trades, 'GRAND_TOTAL', 'Grand Total')
+
+      await downloadAnalystWorkbook({
+        reportName: title,
+        dateRangeLabel: `${formatDate(dateRange.start)} – ${formatDate(dateRange.end)}`,
+        // subtitle is this report's own free-text description of what's currently
+        // scoped (defaultSubtitle is pre-filled from describeUniverse()'s active
+        // filters, see AnalyticsPage.tsx) -- reused here rather than re-deriving a
+        // second filter description, so the PDF and the Excel always say the same thing.
+        filterSummary: subtitle,
+        assetClassSummaryRows,
+        marketSummaryRows,
+        assetBreakdown,
+        grandTotal,
+      })
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : 'Failed to generate the Excel file.')
+    } finally {
+      setExporting(false)
+    }
   }
 
   return (
@@ -293,11 +337,18 @@ export function ReportBuilder({
           </p>
         </div>
 
-        <div className="p-4 border-t border-border shrink-0">
-          <button onClick={handleGenerate}
-            className="w-full text-sm px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
-            Generate Report
-          </button>
+        <div className="p-4 border-t border-border shrink-0 space-y-2">
+          <div className="flex gap-2">
+            <button onClick={handleGenerate}
+              className="flex-1 text-sm px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
+              Generate Report
+            </button>
+            <button onClick={handleExportExcel} disabled={exporting}
+              className="flex-1 text-sm px-3 py-2 rounded-md border border-border hover:bg-black/5 disabled:opacity-50 transition-colors">
+              {exporting ? 'Exporting…' : 'Export Excel'}
+            </button>
+          </div>
+          {exportError && <p className="text-[11px] text-red-600">{exportError}</p>}
         </div>
       </div>
 

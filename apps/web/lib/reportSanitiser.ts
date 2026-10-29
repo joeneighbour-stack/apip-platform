@@ -9,6 +9,7 @@
 import type {
   PerformanceSummary, ComparisonResult, CumulativePoint, DrawdownPoint,
   RollingRow, MonthlyMatrixRow, AttributionRow, DistributionBucket,
+  FullBreakdownGroup, FullBreakdownRow,
 } from './metrics'
 
 export type ReportAttributionDimension = 'asset_class' | 'market' | 'strategy'
@@ -88,6 +89,13 @@ export interface ReportData {
   bestWorst: { best: ReportSafeTrade[] } | null
   bestMarkets: AttributionRow[]
   worstMarkets: AttributionRow[]
+  // Full per-asset breakdown, grouped by asset class -- unconditional (not gated by
+  // the attributionDimensions checkboxes the way `attribution`/`contribution` above
+  // are), every asset with >=1 triggered trade in scope, no minimum-sample cutoff.
+  // assetBreakdownTotal is computed over the exact same `trades` the report's headline
+  // totalR/triggeredCount come from, so it reconciles exactly by construction.
+  assetBreakdown: FullBreakdownGroup[]
+  assetBreakdownTotal: FullBreakdownRow
   distinctAnalystCount: number
   compliance: ReportCompliance
 }

@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { fetchAllPages, verifyExpectedCount, PaginationError } from '@/lib/paginatedFetch'
 
 // Safety valve only -- the actual bound on result size is the `from` date filter, not
 // this cap. Raised from the previous 35,000 so "Since Inception" queries have headroom
@@ -34,35 +35,48 @@ export async function GET(req: Request) {
     triggered, published_at, closed_at, expiry, historical_backfill, source_system, session,
     market:market_id ( market_id, symbol, asset_class )`
 
-  const allTrades: any[] = []
-  let page = 0
-  let hasMore = true
-
-  while (hasMore) {
-    let query = supabase
-      .from('actual_trades')
-      .select(FIELDS)
-      .gte('published_at', from + 'T00:00:00Z')
-    if (to) query = query.lte('published_at', to + 'T23:59:59Z')
-    if (scopedAnalystId) query = query.eq('analyst_id', scopedAnalystId)
-
-    const { data, error } = await query
-      .order('published_at', { ascending: false })
-      .order('trade_id', { ascending: false })
-      .range(page * 1000, page * 1000 + 999)
-
-    if (error || !data?.length) {
-      hasMore = false
-    } else {
-      allTrades.push(...data)
-      hasMore = data.length === 1000
-      page++
-    }
-
-    if (allTrades.length >= MAX_ROWS) break
+  // Applies the shared filters without calling .select() -- callers chain their own
+  // .select() first, since Supabase's count-query overload (`{count:'exact',head:true}`)
+  // is only available directly off .select(), not after chaining further filters onto an
+  // already-selected builder.
+  function withFilters<Q extends { gte: any; lte: any; eq: any }>(query: Q): Q {
+    let q: any = query.gte('published_at', from + 'T00:00:00Z')
+    if (to) q = q.lte('published_at', to + 'T23:59:59Z')
+    if (scopedAnalystId) q = q.eq('analyst_id', scopedAnalystId)
+    return q
   }
 
-  return NextResponse.json(allTrades)
+  try {
+    const allTrades = await fetchAllPages<any>(
+      page => withFilters(supabase.from('actual_trades').select(FIELDS))
+        .order('published_at', { ascending: false })
+        .order('trade_id', { ascending: false })
+        .range(page * 1000, page * 1000 + 999),
+      { label: 'actual_trades', maxRows: MAX_ROWS },
+    )
+
+    // Skipped once the deliberate MAX_ROWS safety valve kicks in -- that's an
+    // intentional truncation, not the bug this check is for, and would always
+    // "mismatch" against the full unbounded count.
+    if (allTrades.length < MAX_ROWS) {
+      await verifyExpectedCount(
+        allTrades.length,
+        async () => {
+          const { count, error } = await withFilters(supabase.from('actual_trades').select('trade_id', { count: 'exact', head: true }))
+          return { count, error }
+        },
+        'actual_trades',
+      )
+    }
+
+    return NextResponse.json(allTrades)
+  } catch (err) {
+    if (err instanceof PaginationError) {
+      console.error('[api/analytics/trades]', err.message)
+      return NextResponse.json({ error: `Failed to load trades: ${err.message}` }, { status: 502 })
+    }
+    throw err
+  }
 }
 
 

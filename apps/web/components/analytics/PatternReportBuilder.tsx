@@ -3,15 +3,19 @@ import { useState } from 'react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import {
   type MetricsTrade, type AttributionRow, type CumulativePoint, type DrawdownPoint,
-  type RollingRow, type MonthlyMatrixRow,
+  type RollingRow, type MonthlyMatrixRow, type FullBreakdownRow, type FullBreakdownGroup,
   totalR, winRate, triggeredTrades, profitFactor, maxDrawdown, cumulativeSeries, drawdownSeries,
   rollingWindows, monthlyMatrix, attributionBy, rankAttribution, computeTradeStatistics, bestWorstTrades,
-  MIN_TRADES_FOR_MARKET_RANKING,
+  MIN_TRADES_FOR_MARKET_RANKING, fullBreakdownBy, fullBreakdownGrouped, fullBreakdownRow,
 } from '@/lib/metrics'
-import type { PatternSummary } from '@/lib/patternAnalytics'
+import { FAMILY_LABELS, LOW_SAMPLE_THRESHOLD, type PatternSummary, type PatternTradePoint } from '@/lib/patternAnalytics'
+import { normaliseSymbol } from '@/lib/symbolNormalization'
 import type { ReportSafeUniverse, ReportSafeTrade } from '@/lib/reportSanitiser'
 import { COMPANY_NAME, FCA_REGULATORY_STATEMENT, DISCLAIMER_PARAGRAPHS, PAST_PERFORMANCE_WARNING } from '@/lib/compliance'
 import { formatR, formatPercent, formatDate } from '@/lib/format'
+import { type PatternFilterState, hasActivePatternFilters } from '@/lib/analyticsFilters'
+import { DATE_PRESET_OPTIONS } from '@/lib/dateRanges'
+import { downloadPatternWorkbook, type AssetSummaryRow } from '@/lib/patternExcelExport'
 import { ReportHeader } from './report/ReportHeader'
 import { ReportFooter } from './report/ReportFooter'
 import { ReportBestPerformers } from './report/ReportBestPerformers'
@@ -21,6 +25,7 @@ import { RollingPerformanceTable } from './RollingPerformanceTable'
 import { MonthlyPerformanceMatrix } from './MonthlyPerformanceMatrix'
 import { AttributionTable } from './AttributionTable'
 import { ContributionChart } from './ContributionChart'
+import { FullBreakdownTable, buildFlatBreakdownRows } from './report/FullBreakdownTable'
 
 // A deliberately separate component from ReportBuilder/PerformanceReport (the internal
 // analyst report) and from AiSignalsReportBuilder (the AI signal report): this report is
@@ -36,9 +41,39 @@ import { ContributionChart } from './ContributionChart'
 
 interface Props {
   trades: MetricsTrade[]
+  // Pre-toAnalyticsTrade rows (still carrying `family`) -- needed for the Pattern
+  // Summary / Asset x Pattern tables below, since PatternsTab.tsx's toAnalyticsTrade()
+  // drops `family` entirely (it exists only to feed lib/metrics.ts's series/window
+  // functions, which never read it). Same underlying filteredTrades as `trades`, so
+  // totals from either reconcile exactly.
+  rawTrades: PatternTradePoint[]
   summary: PatternSummary
   assetClassRows: AttributionRow[]
+  // Currently-applied Patterns tab filters -- used only for the Excel export's header
+  // block/filename (PDF-derived data.periodLabel already covers the date range, but
+  // nothing in PatternReportData describes which asset class/direction/granularity
+  // filters are active, since the PDF itself never displays that).
+  filters: PatternFilterState
   onClose: () => void
+}
+
+// "All patterns, all assets, all markets" when no Patterns-tab filter is active (the
+// most common case), otherwise a comma-joined list of the active segments -- same
+// "describe what's actually scoped" approach as lib/analyticsFilters.ts's own
+// describeUniverse(), kept local since this report is deliberately self-contained (see
+// this file's own header comment on why it doesn't share logic with the other reports).
+function describePatternFilters(filters: PatternFilterState): string {
+  if (!hasActivePatternFilters(filters)) return 'None (full history, all patterns, all assets, all markets)'
+  const segments: string[] = []
+  const datePresetLabel = DATE_PRESET_OPTIONS.find(o => o.key === filters.datePreset)?.label
+  if (filters.datePreset !== 'SINCE_INCEPTION' && datePresetLabel) segments.push(`Date: ${datePresetLabel}`)
+  if (filters.patternTypes.length > 0) segments.push(`Pattern: ${filters.patternTypes.join(', ')}`)
+  if (filters.assetClasses.length > 0) segments.push(`Asset Class: ${filters.assetClasses.join(', ')}`)
+  if (filters.marketIds.length > 0) segments.push(`Markets: ${filters.marketIds.length} selected`)
+  if (filters.directions.length > 0) segments.push(`Direction: ${filters.directions.join(', ')}`)
+  if (filters.sessions.length > 0) segments.push(`Session: ${filters.sessions.join(', ')}`)
+  if (filters.granularities.length > 0) segments.push(`Granularity: ${filters.granularities.join(', ')}`)
+  return segments.join(' • ') || 'None (full history, all patterns, all assets, all markets)'
 }
 
 function round2(n: number): number {
@@ -51,6 +86,36 @@ function monthYear(dateStr: string): string {
 
 function toReportSafeTrade(t: MetricsTrade): ReportSafeTrade {
   return { date: t.published_at.slice(0, 10), symbol: t.symbol, direction: t.direction, resultR: t.result_r ?? 0 }
+}
+
+interface PatternAnalyticsTrade extends MetricsTrade {
+  family: string | null
+}
+
+// Same triggered/result_r rule as PatternsTab.tsx's own toAnalyticsTrade() (so the new
+// Pattern Summary / Asset x Pattern tables below reconcile exactly to the headline KPI
+// tiles, which are computed from `trades` via that same rule) -- this version
+// additionally keeps `family` and normalises `symbol` through SYMBOL_OVERRIDES so
+// pattern-trade asset names (raw vendor symbols, e.g. "BTCUSD") match the Analyst
+// report's canonical names (e.g. "Bitcoin"). Keyed and labelled by the normalised
+// symbol so two raw symbols that happen to normalise to the same name merge into one
+// row rather than appearing as separate assets.
+function toNormalisedTrade(t: PatternTradePoint): PatternAnalyticsTrade {
+  const symbol = normaliseSymbol(t.symbol)
+  return {
+    analyst_id: '', market_id: symbol, symbol, asset_class: t.asset_class ?? '',
+    direction: (t.direction ?? '') as 'BUY' | 'SELL', session: null, source_system: '',
+    triggered: t.triggered === true,
+    result_r: t.triggered && t.rr !== null ? t.rr : null,
+    published_at: t.published_at,
+    closed_at: t.triggered ? t.exit_date : null,
+    family: t.family,
+  }
+}
+
+function familyLabel(family: string | null): string {
+  if (!family) return 'Unknown'
+  return FAMILY_LABELS[family] ?? family
 }
 
 // Fixed R-multiple buckets for the Winner/Loser Distribution chart -- unlike
@@ -125,10 +190,23 @@ interface PatternReportData {
   bestPerformers: ReportSafeTrade[]
   bestMarkets: AttributionRow[]
   worstMarkets: AttributionRow[]
+  // Pattern Summary (flat, sorted by Total R desc), Asset Summary (flat, one row per
+  // asset with its Asset Class), and Asset x Pattern (grouped by asset, sub-row per
+  // pattern, asset subtotal) -- all three computed from the same normalised-symbol
+  // trade set, all reconciling to breakdownGrandTotal, which in turn reconciles to
+  // totalR/totalTrades above (same underlying rawTrades, same triggered/result_r rule
+  // -- see toNormalisedTrade()). Rendered in the PDF (Pattern Summary only) and in the
+  // Excel export (all three, see lib/patternExcelExport.ts).
+  patternSummaryRows: FullBreakdownRow[]
+  assetSummaryRows: AssetSummaryRow[]
+  assetPatternGroups: FullBreakdownGroup[]
+  breakdownGrandTotal: FullBreakdownRow
   dataThroughDate: string
 }
 
-function buildReportData(trades: MetricsTrade[], summary: PatternSummary, assetClassRows: AttributionRow[]): PatternReportData {
+function buildReportData(
+  trades: MetricsTrade[], rawTrades: PatternTradePoint[], summary: PatternSummary, assetClassRows: AttributionRow[],
+): PatternReportData {
   const dates = trades.map(t => t.published_at.slice(0, 10)).filter(Boolean).sort()
   const earliest = dates[0] ?? null
   const latest = dates[dates.length - 1] ?? null
@@ -164,6 +242,27 @@ function buildReportData(trades: MetricsTrade[], summary: PatternSummary, assetC
 
   const pf = profitFactor(trades)
 
+  const normalisedTrades = rawTrades.map(toNormalisedTrade)
+  const patternSummaryRows = fullBreakdownBy(normalisedTrades, t => ({ key: t.family ?? 'UNKNOWN', label: familyLabel(t.family) }))
+  const assetPatternGroups = fullBreakdownGrouped(
+    normalisedTrades,
+    t => ({ key: t.symbol, label: t.symbol }),
+    t => ({ key: t.family ?? 'UNKNOWN', label: familyLabel(t.family) }),
+  )
+  const breakdownGrandTotal = fullBreakdownRow(normalisedTrades, 'GRAND_TOTAL', 'Grand Total')
+
+  // Asset Summary (Excel-only): one row per normalised symbol, with that symbol's
+  // asset class attached -- fullBreakdownBy() only groups/labels by the key given
+  // (symbol here), so asset_class is looked up separately via the first trade seen for
+  // each symbol (a given normalised symbol maps to exactly one asset class in
+  // practice, confirmed against live data during the original breakdown-feature work).
+  const assetClassBySymbol = new Map<string, string>()
+  for (const t of normalisedTrades) {
+    if (!assetClassBySymbol.has(t.symbol)) assetClassBySymbol.set(t.symbol, t.asset_class || 'Unknown')
+  }
+  const assetSummaryRows: AssetSummaryRow[] = fullBreakdownBy(normalisedTrades, t => ({ key: t.symbol, label: t.symbol }))
+    .map(row => ({ ...row, assetClass: assetClassBySymbol.get(row.key) ?? 'Unknown' }))
+
   return {
     periodLabel,
     sinceLabel,
@@ -187,6 +286,10 @@ function buildReportData(trades: MetricsTrade[], summary: PatternSummary, assetC
     bestPerformers: bestPerformerTrades.map(toReportSafeTrade),
     bestMarkets,
     worstMarkets,
+    patternSummaryRows,
+    assetSummaryRows,
+    assetPatternGroups,
+    breakdownGrandTotal,
     dataThroughDate: latest ? formatDate(latest) : 'N/A',
   }
 }
@@ -344,9 +447,30 @@ function PatternPerformanceReportView({ data }: { data: PatternReportData }) {
         <ReportFooter pageLabel="Page 5" />
       </section>
 
+      {/* PAGE 5B -- Pattern Summary: one row per pattern type (family), flat, sorted by
+          Total R descending, every pattern with >=1 triggered trade -- not a top/bottom
+          N. Reconciles to the Executive Summary's Total R / Total Trades (same
+          normalised-trade set, see toNormalisedTrade()). The Asset x Pattern breakdown
+          (1,605 distinct normalised-symbol x family combinations at full history --
+          checked against live data) used to run as a long appendix after this; moved to
+          the Excel export instead so the PDF stays a short, client-ready document -- the
+          note below points readers there. */}
+      <section className="p-2">
+        <FullBreakdownTable
+          title="Pattern Summary"
+          rows={[...buildFlatBreakdownRows(data.patternSummaryRows), { type: 'grand-total', row: data.breakdownGrandTotal }]}
+        />
+        <p className="mt-2 text-[8pt] text-black/60">
+          Full breakdown by asset and pattern is provided in the accompanying Excel file.
+        </p>
+        <ReportFooter pageLabel="Page 6" />
+      </section>
+
       {/* FINAL PAGE -- Methodology & Regulatory. FCA statement, disclaimer, sanctions
           line and past-performance warning are always rendered -- there is no toggle
-          anywhere in this report that could omit them. */}
+          anywhere in this report that could omit them. This is the literal last
+          section again now that the Asset x Pattern appendix has moved to the Excel
+          export, so no trailing break-after-page is needed. */}
       <section className="p-2">
         <div className="text-[8.5pt] leading-relaxed text-black/80 space-y-3">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-black">Methodology, Risk &amp; Regulatory Information</h2>
@@ -383,17 +507,41 @@ function PatternPerformanceReportView({ data }: { data: PatternReportData }) {
   )
 }
 
-export function PatternReportBuilder({ trades, summary, assetClassRows, onClose }: Props) {
+export function PatternReportBuilder({ trades, rawTrades, summary, assetClassRows, filters, onClose }: Props) {
   const [reportData, setReportData] = useState<PatternReportData | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
 
   function handleGenerate() {
-    const data = buildReportData(trades, summary, assetClassRows)
+    const data = buildReportData(trades, rawTrades, summary, assetClassRows)
     setReportData(data)
 
     requestAnimationFrame(() => {
       window.dispatchEvent(new Event('resize'))
       setTimeout(() => window.print(), 80)
     })
+  }
+
+  async function handleExportExcel() {
+    setExportError(null)
+    setExporting(true)
+    try {
+      const data = buildReportData(trades, rawTrades, summary, assetClassRows)
+      await downloadPatternWorkbook({
+        reportName: 'Pattern Performance Report',
+        dateRangeLabel: data.periodLabel,
+        filterSummary: describePatternFilters(filters),
+        patternSummaryRows: data.patternSummaryRows,
+        assetSummaryRows: data.assetSummaryRows,
+        assetPatternGroups: data.assetPatternGroups,
+        grandTotal: data.breakdownGrandTotal,
+        lowSampleThreshold: LOW_SAMPLE_THRESHOLD,
+      })
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : 'Failed to generate the Excel file.')
+    } finally {
+      setExporting(false)
+    }
   }
 
   return (
@@ -413,15 +561,29 @@ export function PatternReportBuilder({ trades, summary, assetClassRows, onClose 
             filters currently applied on this tab.
           </p>
           <p>Pattern signals carry no analyst identity, so this report is safe to share externally.</p>
+          <p>
+            The PDF&rsquo;s Pattern Summary page points to a separate Excel export for the full
+            breakdown by asset and pattern (Pattern Summary, Asset Summary, and Asset &times; Pattern
+            sheets) -- use the Export Excel button below for that file.
+          </p>
         </div>
 
-        <div className="p-4 border-t border-border shrink-0">
-          <button onClick={handleGenerate} disabled={trades.length === 0}
-            className="w-full text-sm px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors">
-            Generate Report
-          </button>
+        <div className="p-4 border-t border-border shrink-0 space-y-2">
+          <div className="flex gap-2">
+            <button onClick={handleGenerate} disabled={trades.length === 0}
+              className="flex-1 text-sm px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors">
+              Generate Report
+            </button>
+            <button onClick={handleExportExcel} disabled={trades.length === 0 || exporting}
+              className="flex-1 text-sm px-3 py-2 rounded-md border border-border hover:bg-black/5 disabled:opacity-50 transition-colors">
+              {exporting ? 'Exporting…' : 'Export Excel'}
+            </button>
+          </div>
           {trades.length === 0 && (
-            <p className="text-[11px] text-muted-foreground mt-1.5">No data for the current filters.</p>
+            <p className="text-[11px] text-muted-foreground">No data for the current filters.</p>
+          )}
+          {exportError && (
+            <p className="text-[11px] text-red-600">{exportError}</p>
           )}
         </div>
       </div>
