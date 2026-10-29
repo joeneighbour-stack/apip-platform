@@ -784,6 +784,7 @@ export function CombinedSignalsTab({ analysts }: Props) {
         byMonth={byMonth}
         byYear={byYear}
         topMarkets={topMarkets}
+        filters={filters}
         onClose={() => setReportOpen(false)}
       />
     )}

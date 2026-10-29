@@ -9,6 +9,9 @@ import type { ReportSafeUniverse } from '@/lib/reportSanitiser'
 import type { DrawdownPoint } from '@/lib/metrics'
 import { COMPANY_NAME, FCA_REGULATORY_STATEMENT, DISCLAIMER_PARAGRAPHS, PAST_PERFORMANCE_WARNING } from '@/lib/compliance'
 import { formatR, formatPercent, formatDate } from '@/lib/format'
+import { type CombinedFilterState, hasActiveCombinedFilters } from '@/lib/analyticsFilters'
+import { DATE_PRESET_OPTIONS } from '@/lib/dateRanges'
+import { downloadCombinedWorkbook } from '@/lib/combinedSignalsExcelExport'
 import { ReportHeader } from './report/ReportHeader'
 import { ReportFooter } from './report/ReportFooter'
 import { CombinedCumulativeChart } from './CombinedCumulativeChart'
@@ -35,7 +38,25 @@ interface Props {
   byMonth: MonthOfYearRow[]
   byYear: CombinedYearRow[]
   topMarkets: CombinedMarketRow[]
+  filters: CombinedFilterState
   onClose: () => void
+}
+
+// Mirrors PatternReportBuilder.tsx's describePatternFilters() / AiSignalsReportBuilder.tsx's
+// describeAiFilters() -- kept local for the same "self-contained report" reason those have.
+function describeCombinedFilters(filters: CombinedFilterState): string {
+  if (!hasActiveCombinedFilters(filters)) return 'None (full history, all signal types, all assets, all markets)'
+  const segments: string[] = []
+  const datePresetLabel = DATE_PRESET_OPTIONS.find(o => o.key === filters.datePreset)?.label
+  if (filters.datePreset !== 'SINCE_INCEPTION' && datePresetLabel) segments.push(`Date: ${datePresetLabel}`)
+  if (filters.signalTypes.length > 0) segments.push(`Signal Type: ${filters.signalTypes.join(', ')}`)
+  if (filters.analystIds.length > 0) segments.push(`Analysts: ${filters.analystIds.length} selected`)
+  if (filters.assetClasses.length > 0) segments.push(`Asset Class: ${filters.assetClasses.join(', ')}`)
+  if (filters.marketIds.length > 0) segments.push(`Markets: ${filters.marketIds.length} selected`)
+  if (filters.directions.length > 0) segments.push(`Direction: ${filters.directions.join(', ')}`)
+  if (filters.sessions.length > 0) segments.push(`Session: ${filters.sessions.join(', ')}`)
+  if (filters.triggerStatus !== 'ALL') segments.push(`Trigger Status: ${filters.triggerStatus}`)
+  return segments.join(' • ') || 'None (full history, all signal types, all assets, all markets)'
 }
 
 // Computed, not hardcoded to 2026 -- matches CombinedSignalsTab.tsx's own CURRENT_YEAR,
@@ -501,9 +522,11 @@ function CombinedSignalsReportView({ data }: { data: CombinedReportData }) {
 
 export function CombinedSignalsReportBuilder({
   analyst, patterns, ai, normalisedCumulative, cumulativeR,
-  byAssetClass, byDayOfWeek, byMonth, byYear, topMarkets, onClose,
+  byAssetClass, byDayOfWeek, byMonth, byYear, topMarkets, filters, onClose,
 }: Props) {
   const [reportData, setReportData] = useState<CombinedReportData | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
 
   function handleGenerate() {
     const data = buildReportData(
@@ -516,6 +539,33 @@ export function CombinedSignalsReportBuilder({
       window.dispatchEvent(new Event('resize'))
       setTimeout(() => window.print(), 80)
     })
+  }
+
+  async function handleExportExcel() {
+    setExportError(null)
+    setExporting(true)
+    try {
+      const types: Record<SignalTypeKey, SignalTypeData> = { analyst, patterns, ai }
+      const firstDates = TYPE_ORDER.map(k => types[k].summary.firstSignalDate).filter((d): d is string => d !== null)
+      const lastDates = TYPE_ORDER.map(k => types[k].summary.lastSignalDate).filter((d): d is string => d !== null)
+      const earliest = firstDates.length > 0 ? firstDates.reduce((a, b) => b < a ? b : a) : null
+      const latest = lastDates.length > 0 ? lastDates.reduce((a, b) => b > a ? b : a) : null
+      const periodLabel = earliest && latest ? `${monthYear(earliest)} – ${monthYear(latest)}` : 'No data available'
+
+      await downloadCombinedWorkbook({
+        reportName: 'Combined Signal Performance Report',
+        dateRangeLabel: periodLabel,
+        filterSummary: describeCombinedFilters(filters),
+        types,
+        byAssetClass,
+        byYear,
+        topMarkets,
+      })
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : 'Failed to generate the Excel file.')
+    } finally {
+      setExporting(false)
+    }
   }
 
   const hasData = TYPE_ORDER.some(key => ({ analyst, patterns, ai }[key].summary.totalSignals > 0))
@@ -538,14 +588,21 @@ export function CombinedSignalsReportBuilder({
           <p>No signal type here carries analyst identity, so this report is safe to share externally.</p>
         </div>
 
-        <div className="p-4 border-t border-border shrink-0">
-          <button onClick={handleGenerate} disabled={!hasData}
-            className="w-full text-sm px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors">
-            Generate Report
-          </button>
+        <div className="p-4 border-t border-border shrink-0 space-y-2">
+          <div className="flex gap-2">
+            <button onClick={handleGenerate} disabled={!hasData}
+              className="flex-1 text-sm px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors">
+              Generate Report
+            </button>
+            <button onClick={handleExportExcel} disabled={!hasData || exporting}
+              className="flex-1 text-sm px-3 py-2 rounded-md border border-border hover:bg-black/5 disabled:opacity-50 transition-colors">
+              {exporting ? 'Exporting…' : 'Export Excel'}
+            </button>
+          </div>
           {!hasData && (
-            <p className="text-[11px] text-muted-foreground mt-1.5">No data available yet.</p>
+            <p className="text-[11px] text-muted-foreground">No data available yet.</p>
           )}
+          {exportError && <p className="text-[11px] text-red-600">{exportError}</p>}
         </div>
       </div>
 

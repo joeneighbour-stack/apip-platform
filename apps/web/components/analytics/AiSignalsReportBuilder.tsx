@@ -6,12 +6,15 @@ import {
   type RollingRow, type MonthlyMatrixRow, type DistributionBucket,
   totalR, cumulativeSeries, drawdownSeries, rankAttribution, rollingWindows, monthlyMatrix,
   triggeredTrades, profitFactor, computeTradeStatistics, resultDistribution, bestWorstTrades,
-  MIN_TRADES_FOR_MARKET_RANKING,
+  MIN_TRADES_FOR_MARKET_RANKING, fullBreakdownBy, fullBreakdownGrouped, fullBreakdownRow,
 } from '@/lib/metrics'
-import type { AiSignalSummary } from '@/lib/aiSignalAnalytics'
+import type { AiSignalSummary, AiTradePoint } from '@/lib/aiSignalAnalytics'
 import type { ReportSafeUniverse } from '@/lib/reportSanitiser'
 import { COMPANY_NAME, FCA_REGULATORY_STATEMENT, DISCLAIMER_PARAGRAPHS, PAST_PERFORMANCE_WARNING } from '@/lib/compliance'
 import { formatR, formatPercent, formatDate } from '@/lib/format'
+import { type AiFilterState, hasActiveAiFilters } from '@/lib/analyticsFilters'
+import { DATE_PRESET_OPTIONS } from '@/lib/dateRanges'
+import { downloadAiSignalsWorkbook } from '@/lib/aiSignalsExcelExport'
 import { ReportHeader } from './report/ReportHeader'
 import { ReportFooter } from './report/ReportFooter'
 import { CumulativePerformanceChart } from './CumulativePerformanceChart'
@@ -40,12 +43,60 @@ import { ContributionChart } from './ContributionChart'
 
 interface Props {
   trades: MetricsTrade[]
+  // Pre-toAnalyticsTrade rows (still carrying `confidence`) -- needed for the Excel
+  // export's Asset Class x Confidence sheet, since AiSignalsTab.tsx's toAnalyticsTrade()
+  // drops `confidence` entirely (same reason PatternReportBuilder.tsx needs rawTrades
+  // for `family`). Same underlying filtered/deduped trades as `trades`, so totals from
+  // either reconcile exactly.
+  rawTrades: AiTradePoint[]
   summary: AiSignalSummary
   confidenceRows: AttributionRow[]
   assetClassRows: AttributionRow[]
   directionRows: AttributionRow[]
   byMarket: AttributionRow[]
+  filters: AiFilterState
   onClose: () => void
+}
+
+// Mirrors PatternReportBuilder.tsx's describePatternFilters() -- "None (full history...)"
+// when nothing is active (the common case), otherwise a comma-joined list of the active
+// segments. Kept local since this report is deliberately self-contained (see this file's
+// own header comment on why it doesn't share logic with the other report builders).
+function describeAiFilters(filters: AiFilterState): string {
+  if (!hasActiveAiFilters(filters)) return 'None (full history, all assets, all markets)'
+  const segments: string[] = []
+  const datePresetLabel = DATE_PRESET_OPTIONS.find(o => o.key === filters.datePreset)?.label
+  if (filters.datePreset !== 'SINCE_INCEPTION' && datePresetLabel) segments.push(`Date: ${datePresetLabel}`)
+  if (filters.assetClasses.length > 0) segments.push(`Asset Class: ${filters.assetClasses.join(', ')}`)
+  if (filters.marketIds.length > 0) segments.push(`Markets: ${filters.marketIds.length} selected`)
+  if (filters.directions.length > 0) segments.push(`Direction: ${filters.directions.join(', ')}`)
+  if (filters.sessions.length > 0) segments.push(`Session: ${filters.sessions.join(', ')}`)
+  return segments.join(' • ') || 'None (full history, all assets, all markets)'
+}
+
+// Same triggered/result_r rule as AiSignalsTab.tsx's own toAnalyticsTrade() (so the
+// Excel export's breakdown sheets reconcile exactly to the headline KPI tiles, which are
+// computed from `trades` via that same rule) -- this version additionally keeps
+// `confidence`, which that adapter drops.
+interface AiAnalyticsTrade extends MetricsTrade {
+  confidence: number | null
+}
+
+function toConfidenceTrade(t: AiTradePoint): AiAnalyticsTrade {
+  return {
+    analyst_id: '', market_id: t.symbol ?? '', symbol: t.asset_name || t.symbol || 'Unknown',
+    asset_class: t.asset_class ?? '', direction: (t.direction ?? '') as 'BUY' | 'SELL',
+    session: null, source_system: '',
+    triggered: t.rr !== null,
+    result_r: t.rr,
+    published_at: t.published_at,
+    closed_at: null,
+    confidence: t.confidence,
+  }
+}
+
+function confidenceLabel(confidence: number | null): string {
+  return confidence !== null ? `Confidence ${confidence}` : 'Unknown'
 }
 
 function round2(n: number): number {
@@ -451,8 +502,10 @@ function AiSignalPerformanceReportView({ data }: { data: AiReportData }) {
   )
 }
 
-export function AiSignalsReportBuilder({ trades, summary, confidenceRows, assetClassRows, directionRows, byMarket, onClose }: Props) {
+export function AiSignalsReportBuilder({ trades, rawTrades, summary, confidenceRows, assetClassRows, directionRows, byMarket, filters, onClose }: Props) {
   const [reportData, setReportData] = useState<AiReportData | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
 
   function handleGenerate() {
     const data = buildReportData(trades, summary, confidenceRows, assetClassRows, directionRows, byMarket)
@@ -462,6 +515,39 @@ export function AiSignalsReportBuilder({ trades, summary, confidenceRows, assetC
       window.dispatchEvent(new Event('resize'))
       setTimeout(() => window.print(), 80)
     })
+  }
+
+  async function handleExportExcel() {
+    setExportError(null)
+    setExporting(true)
+    try {
+      const dates = trades.map(t => t.published_at.slice(0, 10)).filter(Boolean).sort()
+      const periodLabel = dates.length > 0 ? `${monthYear(dates[0]!)} – ${monthYear(dates[dates.length - 1]!)}` : 'No data available'
+
+      const confidenceTrades = rawTrades.map(toConfidenceTrade)
+      const assetClassSummaryRows = fullBreakdownBy(confidenceTrades, t => ({ key: t.asset_class, label: t.asset_class }))
+      const marketSummaryRows = fullBreakdownBy(confidenceTrades, t => ({ key: t.market_id, label: t.symbol }))
+      const assetClassConfidenceGroups = fullBreakdownGrouped(
+        confidenceTrades,
+        t => ({ key: t.asset_class, label: t.asset_class }),
+        t => ({ key: String(t.confidence ?? 'UNKNOWN'), label: confidenceLabel(t.confidence) }),
+      )
+      const grandTotal = fullBreakdownRow(confidenceTrades, 'GRAND_TOTAL', 'Grand Total')
+
+      await downloadAiSignalsWorkbook({
+        reportName: 'AI Signal Performance Report',
+        dateRangeLabel: periodLabel,
+        filterSummary: describeAiFilters(filters),
+        assetClassSummaryRows,
+        marketSummaryRows,
+        assetClassConfidenceGroups,
+        grandTotal,
+      })
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : 'Failed to generate the Excel file.')
+    } finally {
+      setExporting(false)
+    }
   }
 
   return (
@@ -481,16 +567,27 @@ export function AiSignalsReportBuilder({ trades, summary, confidenceRows, assetC
             reflecting the filters currently applied on this tab.
           </p>
           <p>AI signals carry no analyst identity, so this report is safe to share externally.</p>
+          <p>
+            The Excel export adds a full (not top-N) Asset Class and Market breakdown, plus an
+            Asset Class &times; Confidence combination sheet.
+          </p>
         </div>
 
-        <div className="p-4 border-t border-border shrink-0">
-          <button onClick={handleGenerate} disabled={trades.length === 0}
-            className="w-full text-sm px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors">
-            Generate Report
-          </button>
+        <div className="p-4 border-t border-border shrink-0 space-y-2">
+          <div className="flex gap-2">
+            <button onClick={handleGenerate} disabled={trades.length === 0}
+              className="flex-1 text-sm px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors">
+              Generate Report
+            </button>
+            <button onClick={handleExportExcel} disabled={trades.length === 0 || exporting}
+              className="flex-1 text-sm px-3 py-2 rounded-md border border-border hover:bg-black/5 disabled:opacity-50 transition-colors">
+              {exporting ? 'Exporting…' : 'Export Excel'}
+            </button>
+          </div>
           {trades.length === 0 && (
-            <p className="text-[11px] text-muted-foreground mt-1.5">No data for the current filters.</p>
+            <p className="text-[11px] text-muted-foreground">No data for the current filters.</p>
           )}
+          {exportError && <p className="text-[11px] text-red-600">{exportError}</p>}
         </div>
       </div>
 

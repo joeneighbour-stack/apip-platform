@@ -586,9 +586,9 @@ export function AiSignalsTab() {
         report would silently show an inflated "Total Signals" figure. */}
     {reportOpen && (
       <AiSignalsReportBuilder
-        trades={analyticsTrades} summary={{ ...summary, totalSignals: summary.uniqueSignals }}
+        trades={analyticsTrades} rawTrades={dedupTrades} summary={{ ...summary, totalSignals: summary.uniqueSignals }}
         confidenceRows={confidenceRows} assetClassRows={assetClassRows} directionRows={directionRows}
-        byMarket={byMarket}
+        byMarket={byMarket} filters={filters}
         onClose={() => setReportOpen(false)}
       />
     )}
