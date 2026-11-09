@@ -34,7 +34,6 @@ on:
           - generate-profiles
           - generate-atr-profiles
           - calculate-kpis
-          - calculate-shadow-kpis
           - condition-awareness
           - generate-post-trade-reviews
           - run-shadow-trigger-probability
@@ -363,27 +362,6 @@ jobs:
           cache-dependency-path: intelligence-engine/package-lock.json
       - run: npm ci
       - run: npx tsx src/scripts/calculateKpis.ts --months=36
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-
-  calculate-shadow-kpis:
-    name: Calculate Shadow System KPIs
-    runs-on: ubuntu-latest
-    if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'calculate-shadow-kpis'
-    defaults:
-      run:
-        working-directory: intelligence-engine
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: intelligence-engine/package-lock.json
-      - run: npm ci
-      - run: npx tsx src/scripts/calculateShadowKpis.ts --months=36
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
