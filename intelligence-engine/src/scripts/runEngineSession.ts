@@ -343,6 +343,13 @@ async function main() {
   let opportunitiesCreated = 0, recommendationsCreated = 0
   let coachingCreated = 0, shadowTradesCreated = 0, shadowTradesSkippedUnreliableBand = 0
   let optimalShadowTradesCreated = 0, optimalSkippedNoSignal = 0, optimalSkippedUnreliableBand = 0
+  // Incremented whenever a shadow_trades or shadow_trade_outcomes insert fails below --
+  // checked at the end of main() to exit non-zero, so a failed shadow-trade write makes
+  // this run show as failed in CI instead of silently producing fewer shadow trades than
+  // it should have (previously only shadow_trades insert errors were even logged, via a
+  // plain console.log with no counter; shadow_trade_outcomes insert errors were ignored
+  // entirely).
+  let shadowTradeInsertErrors = 0
 
   try {
     // ── Step 1: Load market state ────────────────────────────────────────────
@@ -1300,7 +1307,7 @@ async function main() {
             }).select('shadow_trade_id').single()
 
             if (!shadowError && shadowRow) {
-              await db.from('shadow_trade_outcomes').insert({
+              const { error: outcomeError } = await db.from('shadow_trade_outcomes').insert({
                 shadow_outcome_id: shadowTradeOutcome.shadowOutcomeId,
                 shadow_trade_id: shadowRow.shadow_trade_id,
                 // shadow trade outcome always starts NOT_TRIGGERED -- price must reach
@@ -1310,9 +1317,15 @@ async function main() {
                 triggered_price: null,
                 trigger_source: null,
               })
-              shadowTradesCreated++
+              if (outcomeError) {
+                console.error(`  ${market.symbol} shadow_trade_outcomes (${variant}, shadow_trade_id=${shadowRow.shadow_trade_id}): ${outcomeError.message}`)
+                shadowTradeInsertErrors++
+              } else {
+                shadowTradesCreated++
+              }
             } else if (shadowError) {
-              console.log(`  ${market.symbol} shadow (${variant}): ${shadowError.message}`)
+              console.error(`  ${market.symbol} shadow_trades (${variant}): ${shadowError.message}`)
+              shadowTradeInsertErrors++
             }
           }
         } catch (err) {
@@ -1439,7 +1452,7 @@ async function main() {
             }).select('shadow_trade_id').single()
 
             if (!shadowError && shadowRow) {
-              await db.from('shadow_trade_outcomes').insert({
+              const { error: outcomeError } = await db.from('shadow_trade_outcomes').insert({
                 shadow_outcome_id: shadowTradeOutcome.shadowOutcomeId,
                 shadow_trade_id: shadowRow.shadow_trade_id,
                 trade_outcome_status: 'NOT_TRIGGERED',
@@ -1447,9 +1460,15 @@ async function main() {
                 triggered_price: null,
                 trigger_source: null,
               })
-              optimalShadowTradesCreated++
+              if (outcomeError) {
+                console.error(`  ${market.symbol} OPTIMAL shadow_trade_outcomes (${variant}, shadow_trade_id=${shadowRow.shadow_trade_id}): ${outcomeError.message}`)
+                shadowTradeInsertErrors++
+              } else {
+                optimalShadowTradesCreated++
+              }
             } else if (shadowError) {
-              console.log(`  ${market.symbol} OPTIMAL shadow (${variant}): ${shadowError.message}`)
+              console.error(`  ${market.symbol} OPTIMAL shadow_trades (${variant}): ${shadowError.message}`)
+              shadowTradeInsertErrors++
             }
           }
         } catch (err) {
@@ -1505,6 +1524,16 @@ async function main() {
       console.log(`OPTIMAL shadow trades: ${optimalShadowTradesCreated}`)
       console.log(`  skipped (no signal):       ${optimalSkippedNoSignal}`)
       console.log(`  skipped (unreliable band): ${optimalSkippedUnreliableBand}`)
+      console.log(`Shadow trade insert errors: ${shadowTradeInsertErrors}`)
+    }
+
+    // Fail the run (non-zero exit) if any shadow_trades/shadow_trade_outcomes insert
+    // failed above -- every one of those is now checked and logged, so a failed write
+    // no longer looks identical to "this opportunity's band just wasn't reliable" in CI
+    // (both used to just silently produce fewer shadow trades than expected).
+    if (!isDryRun && shadowTradeInsertErrors > 0) {
+      console.error(`\n${shadowTradeInsertErrors} shadow trade insert(s) failed this run -- see lines above.`)
+      process.exit(1)
     }
 
   } catch (err) {
