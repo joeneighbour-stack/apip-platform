@@ -41,6 +41,34 @@ const DAYS_TO_FETCH = Number(daysArg ?? 60)
 const isHistory = process.argv.includes('--history')
 const HISTORY_START = '2019-01-01' // provides warmup bars before 2020 analyst trades
 
+// Mirrors runEngineSession.ts's own SESSION_MARKETS exactly (duplicated, not shared --
+// same cross-file convention used elsewhere in this codebase) -- the markets that
+// actually feed live opportunity generation, as opposed to the ~200 other rows in
+// `markets` that are tracked but never session-active. Used only by the staleness
+// guard below, to scope "is this job silently failing for a market that matters" to
+// markets where it actually matters.
+const SESSION_MARKET_SYMBOLS = new Set([
+  'EURNZD', 'EURGBP', 'Natural Gas', 'AUDCAD', 'FTSE', 'GBPCHF', 'Silver', 'Brent', 'GBPUSD',
+  'USDMXN', 'AUDJPY', 'USDTRY', 'USDCAD', 'EURJPY', 'Oil', 'USDJPY', 'CAC', 'Palladium', 'Gold',
+  'EURSEK', 'AUDUSD', 'GBPJPY', 'EURCHF', 'Platinum', 'Copper', 'EURUSD', 'USDCHF', 'DAX',
+  'DOW', 'SP500', 'NASDAQ', 'US2000', 'Ripple', 'Solana', 'Ethereum', 'Bitcoin', 'Litecoin',
+  'CHINA A50', 'ASX200', 'GBPAUD', 'NZDJPY', 'NZDUSD', 'NIKKEI', 'EURAUD', 'GBPNZD',
+])
+
+/** `n` trading days (Mon-Fri) before `from`, as a YYYY-MM-DD string. Doesn't account for
+ * market holidays -- a simple, deliberately conservative approximation so the staleness
+ * guard below doesn't false-alarm every Monday on a market whose latest bar is Friday's. */
+function tradingDaysAgo(n: number, from: Date = new Date()): string {
+  const d = new Date(from)
+  let counted = 0
+  while (counted < n) {
+    d.setUTCDate(d.getUTCDate() - 1)
+    const dow = d.getUTCDay()
+    if (dow !== 0 && dow !== 6) counted++
+  }
+  return d.toISOString().slice(0, 10)
+}
+
 // Informational/logging only -- the actual fetch call is branched below
 // (fetchHistoricalOhlc vs the untouched fetchRecentOhlc) rather than unified
 // through this date, so --days=N and the default 60-day path keep their
@@ -94,12 +122,39 @@ function checkCandleStatus(candles: FinnhubCandleResponse, finnhubSymbol: string
   }
 }
 
-async function fetchRecentOhlc(finnhubSymbol: string, days: number): Promise<OhlcBar[]> {
+// fix/market-state-daily: USDTRY, Solana and Litecoin's 'D'-resolution fetch started
+// failing on 2026-10-21/22 (confirmed via the GitHub Actions run history: the
+// 2026-10-22T21:58 populate-daily run failed outright for every market; later runs
+// recovered for everything except these three, which then failed silently -- the
+// per-market try/catch in main() logs a WARN but doesn't fail the job, so this went
+// unnoticed for weeks) and never recovered, even after 08672f8's Azure mapping fix
+// (which only touched the intraday snapshot path, not this script). Azure's 5-minute
+// ('5') resolution data keeps flowing for all three throughout this window (confirmed
+// directly against market_state_intraday) -- this falls back to aggregating that into
+// synthetic daily candles, one day at a time, for the whole requested window, rather
+// than only for today/yesterday the way the lag-fill below already does. This
+// sidesteps the 'D'-resolution gap without knowing its exact Azure-side cause, which
+// isn't diagnosable further without direct Azure Table Storage access (not available
+// in this investigation).
+async function fetchRecentOhlcWithFallback(finnhubSymbol: string, days: number): Promise<OhlcBar[]> {
   const to   = Math.floor(Date.now() / 1000)
   const from = to - days * 24 * 60 * 60
-  const candles = await getCandles(finnhubSymbol, 'D', from, to)
-  checkCandleStatus(candles, finnhubSymbol)
-  return candlesToOhlcBars(candles)
+  try {
+    const candles = await getCandles(finnhubSymbol, 'D', from, to)
+    checkCandleStatus(candles, finnhubSymbol)
+    return candlesToOhlcBars(candles)
+  } catch (err) {
+    console.warn(`  ${finnhubSymbol}: 'D' resolution failed (${(err as Error).message}) -- falling back to 5-min aggregation for the full window`)
+    const bars: OhlcBar[] = []
+    for (let d = new Date(from * 1000); d.getTime() <= to * 1000; d.setUTCDate(d.getUTCDate() + 1)) {
+      const dateStr = d.toISOString().slice(0, 10)
+      const bar = await fetchIntradayAsDailyBar(finnhubSymbol, dateStr)
+      if (bar) bars.push(bar)
+      await new Promise(r => setTimeout(r, 150))
+    }
+    if (bars.length === 0) throw err // nothing recovered -- surface the original error
+    return bars
+  }
 }
 
 /**
@@ -196,7 +251,7 @@ async function main() {
         ? await fetchStockOhlc(market.price_data_symbol, DAYS_TO_FETCH)
         : isHistory
           ? await fetchHistoricalOhlc(market.price_data_symbol, HISTORY_START)
-          : await fetchRecentOhlc(market.price_data_symbol, DAYS_TO_FETCH)
+          : await fetchRecentOhlcWithFallback(market.price_data_symbol, DAYS_TO_FETCH)
 
       // The daily table may lag 1-2 days; fill today/yesterday from 5-minute
       // bars when the daily table hasn't caught up yet. Only fills genuinely
@@ -310,6 +365,36 @@ async function main() {
   if (!isDryRun && summary.errors > 0 && summary.upserted === 0) {
     console.error('All markets failed -- exiting with code 1')
     process.exit(1)
+  }
+
+  // Staleness guard (fix/market-state-daily): the check above only catches a TOTAL
+  // failure (every market errored). It did not catch -- and for weeks didn't notice --
+  // USDTRY/Solana/Litecoin's 'D'-resolution fetch failing every single run while every
+  // other market kept succeeding: the job kept exiting 0 (success) the whole time,
+  // because `summary.upserted` was never zero. This checks the DB's actual current
+  // state after the run, independent of what this run itself did, and fails the job if
+  // any live-session market's latest row is stale -- the exact signal that would have
+  // caught this incident on day 1 instead of after ~3 weeks.
+  if (!isDryRun && !isHistory) {
+    const cutoff = tradingDaysAgo(2)
+    const sessionMarkets = markets.filter(m => SESSION_MARKET_SYMBOLS.has(m.symbol))
+    const staleMarkets: { symbol: string; latest: string }[] = []
+    for (const m of sessionMarkets) {
+      const { data: latestRow } = await db
+        .from('market_state_daily')
+        .select('date')
+        .eq('market_id', m.market_id)
+        .order('date', { ascending: false })
+        .limit(1)
+      const latest = latestRow?.[0]?.date ?? 'NEVER'
+      if (latest === 'NEVER' || latest < cutoff) staleMarkets.push({ symbol: m.symbol, latest })
+    }
+    if (staleMarkets.length > 0) {
+      console.error(`\n=== STALE DATA GUARD (cutoff: ${cutoff}, 2 trading days) ===`)
+      for (const m of staleMarkets) console.error(`  STALE: ${m.symbol} -- latest market_state_daily row: ${m.latest}`)
+      console.error(`${staleMarkets.length} live-session market(s) have no fresh market_state_daily row -- exiting with code 1`)
+      process.exit(1)
+    }
   }
 }
 
