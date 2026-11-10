@@ -29,12 +29,24 @@ export default async function ManagementPerformancePage() {
     .order('display_name')
   if (analystsError) console.error('[ManagementPerformancePage] Failed to fetch analysts:', analystsError.message)
 
-  const { data: kpiData, error: kpiDataError } = await supabase
-    .from('executive_kpis')
-    .select('analyst_id, kpi_name, kpi_value, period_start')
-    .gte('period_start', thirtyySixMonthsAgo)
-    .order('period_start', { ascending: true })
-  if (kpiDataError) console.error('[ManagementPerformancePage] Failed to fetch executive_kpis:', kpiDataError.message)
+  // Paginated via fetchAllPages (same reasoning as actualTrades below) -- 36 months x
+  // every active analyst x ~5 kpi_names can exceed 1000 rows, and this query has no
+  // analyst filter at all, so an unranged select here silently drops whichever
+  // analysts/months sort last.
+  let kpiData: any[] = []
+  try {
+    kpiData = await fetchAllPages<any>(
+      page => supabase
+        .from('executive_kpis')
+        .select('analyst_id, kpi_name, kpi_value, period_start')
+        .gte('period_start', thirtyySixMonthsAgo)
+        .order('period_start', { ascending: true })
+        .range(page * 1000, page * 1000 + 999),
+      { label: 'management.performance.executive_kpis' },
+    )
+  } catch (err) {
+    console.error('[ManagementPerformancePage] Failed to fetch executive_kpis:', (err as Error).message)
+  }
 
   const { data: shadowOutcomes, error: shadowOutcomesError } = await supabase
     .from('shadow_trade_outcomes')

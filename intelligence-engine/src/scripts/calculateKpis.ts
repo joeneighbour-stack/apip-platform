@@ -111,22 +111,37 @@ async function main() {
   }
   console.log(`  Publications loaded: ${allPubRows.length}`)
 
-  // Load post-trade reviews for alignment rate
-  const { data: reviewRows } = await db
-    .from('post_trade_reviews')
-    .select(`
-      trade_id, alignment_score, direction_alignment, entry_alignment, created_at,
-      trade:trade_id ( analyst_id, published_at )
-    `)
+  // Load post-trade reviews for alignment rate. Bucketing below filters by the joined
+  // trade's published_at (not this query's own created_at), so this can't be scoped by a
+  // created_at filter without risking dropping a review for an in-window trade that was
+  // reviewed late -- paginate the full table instead, past 1000 (PostgREST's default page
+  // size), the same way the publications query above already is.
+  const reviewRows: any[] = []
+  let reviewPage = 0, reviewHasMore = true
+  while (reviewHasMore) {
+    const { data: reviewBatch } = await db
+      .from('post_trade_reviews')
+      .select(`
+        trade_id, alignment_score, direction_alignment, entry_alignment, created_at,
+        trade:trade_id ( analyst_id, published_at )
+      `)
+      .order('trade_id', { ascending: true })
+      .range(reviewPage * 1000, reviewPage * 1000 + 999)
+    if (!reviewBatch?.length) { reviewHasMore = false } else {
+      reviewRows.push(...reviewBatch)
+      reviewHasMore = reviewBatch.length === 1000
+      reviewPage++
+    }
+  }
 
   const reviewsByAnalystId = new Map<string, any[]>()
-  for (const r of (reviewRows ?? [])) {
+  for (const r of reviewRows) {
     const analystId = (r.trade as any)?.analyst_id
     if (!analystId) continue
     if (!reviewsByAnalystId.has(analystId)) reviewsByAnalystId.set(analystId, [])
     reviewsByAnalystId.get(analystId)!.push(r)
   }
-  console.log(`  Post-trade reviews loaded: ${reviewRows?.length ?? 0}`)
+  console.log(`  Post-trade reviews loaded: ${reviewRows.length}`)
 
   // Load all trades
   const PAGE_SIZE = 1000

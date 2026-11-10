@@ -4,6 +4,7 @@ import {
   selectEvidenceTier, type EvidenceTier, type TierProfile,
 } from '@/lib/workspaceUtils'
 import type { WorkspaceRow, RegimeInfo, EventRiskItem, HistoricalEdge, PriceBar } from '@/components/analyst/workspace/types'
+import { fetchAllPages } from '@/lib/paginatedFetch'
 
 const EVENT_CAP = 4
 // Trade context chart shows 10 trading days (redesign spec). Fetched over a wider
@@ -91,11 +92,22 @@ export async function getWorkspaceData(analystId: string): Promise<WorkspaceData
     // recommended ones. asset_class comes from the market:market_id FK embed
     // rather than a separate markets query. Mirrors
     // intelligence-engine/src/services/analystScoringService.ts's own tiers.
-    // Scoped by analystId only -- independent of allRecs/marketIds.
-    adminDb
-      .from('analyst_profiles')
-      .select('market_id, direction, profile_data, market:market_id ( asset_class )')
-      .eq('analyst_id', analystId),
+    // Scoped by analystId only -- independent of allRecs/marketIds. Paginated: this
+    // fans out per market x direction x regime x zone (generateAnalystProfiles.ts),
+    // easily past 1000 rows for a single analyst's full history, and an unranged
+    // select here would silently truncate the REGIME tier's rollup.
+    fetchAllPages<any>(
+      page => adminDb
+        .from('analyst_profiles')
+        .select('market_id, direction, profile_data, market:market_id ( asset_class )')
+        .eq('analyst_id', analystId)
+        .order('market_id', { ascending: true })
+        .range(page * 1000, page * 1000 + 999),
+      { label: 'workspaceData.analystProfiles' },
+    ).then(
+      data => ({ data, error: null }),
+      (error: Error) => ({ data: null, error: { message: error.message } }),
+    ),
     // Yesterday's trades, for the top-tile summary and the per-market "Your trade" line.
     // Scoped by analystId + a fixed date range only -- independent of allRecs/marketIds.
     supabase

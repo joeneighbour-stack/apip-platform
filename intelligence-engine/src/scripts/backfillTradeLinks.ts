@@ -5,10 +5,12 @@
 // ============================================================================
 // importActualTrades.ts links new trades to recommendation_versions at import time
 // by matching each trade's analyst against a coaching_recommendation shown within a
-// 4-hour window before the trade's published_at, then verifying market/direction
-// against that recommendation's opportunity. That window-based match can miss trades
-// (e.g. shown_at drift, a trade published outside the 4-hour window) and once missed,
-// those trades stay unlinked forever -- nothing re-attempts them.
+// 14-hour window before the trade's published_at (widened from 4 hours to cover APAC's
+// longer rec-to-publish gap), then verifying market (not direction -- deliberately left
+// unchecked there) against that recommendation's opportunity. That window-based match
+// can still miss trades (e.g. shown_at drift, a trade published outside the window), and
+// since migration 071 those get a daily retry via link_attempted_at, but a row whose
+// coaching_recommendations match never materialises stays unlinked indefinitely.
 //
 // This script is a coarser, one-off catch-up pass for those leftovers: same-day
 // matching on analyst + market alone (via the opportunity, then that opportunity's
@@ -61,20 +63,28 @@ async function main() {
   console.log(`Mode: ${isDryRun ? 'DRY RUN (no writes)' : 'LIVE'}`)
   console.log(`From: ${BACKFILL_START_DATE}\n`)
 
-  const { data: unlinkedTrades, error: fetchError } = await db
-    .from('actual_trades')
-    .select('trade_id, analyst_id, market_id, direction, published_at')
-    .eq('source_system', 'ACUITY_PERFORMANCE_API')
-    .is('opportunity_id', null)
-    .gte('published_at', BACKFILL_START_DATE)
-    .order('published_at', { ascending: true })
+  // Paginated past 1000 (PostgREST's default page size) -- this exact backlog has
+  // already been confirmed to exceed it (1,922 rows, see the importActualTrades.ts
+  // fix for the live-import version of this same query).
+  const trades: { trade_id: string; analyst_id: string; market_id: string; direction: string; published_at: string }[] = []
+  for (let page = 0; ; page++) {
+    const { data: batch, error: fetchError } = await db
+      .from('actual_trades')
+      .select('trade_id, analyst_id, market_id, direction, published_at')
+      .eq('source_system', 'ACUITY_PERFORMANCE_API')
+      .is('opportunity_id', null)
+      .gte('published_at', BACKFILL_START_DATE)
+      .order('published_at', { ascending: true })
+      .range(page * 1000, page * 1000 + 999)
 
-  if (fetchError) {
-    console.error(`Failed to load unlinked trades: ${fetchError.message}`)
-    process.exit(1)
+    if (fetchError) {
+      console.error(`Failed to load unlinked trades: ${fetchError.message}`)
+      process.exit(1)
+    }
+    if (!batch?.length) break
+    trades.push(...batch)
+    if (batch.length < 1000) break
   }
-
-  const trades = unlinkedTrades ?? []
   console.log(`Unlinked trades found: ${trades.length}\n`)
 
   let linked = 0

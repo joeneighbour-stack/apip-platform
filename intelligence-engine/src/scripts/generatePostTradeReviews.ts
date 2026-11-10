@@ -180,33 +180,56 @@ async function main() {
   console.log(`Mode: ${isDryRun ? 'DRY RUN' : 'LIVE'}`)
   console.log('Generating post-trade reviews...\n')
 
-  // Load trades with linked recommendation_versions not yet reviewed
-  const { data: linkedTrades } = await db
-    .from('actual_trades')
-    .select(`
-      trade_id, direction, entry, stop, target, result_r, triggered,
-      session, analyst_id, published_at,
-      market:market_id ( symbol, market_id ),
-      recommendation_version:recommendation_version_id (
-        recommendation_version_id,
-        entry_range_low,
-        entry_range_high,
-        opportunity_id,
-        regime_tags
-      )
-    `)
-    .not('recommendation_version_id', 'is', null)
+  // Load trades with linked recommendation_versions not yet reviewed. Paginated --
+  // PostgREST caps an unranged select at 1000 rows regardless of how many match, and
+  // this backlog is well past that (confirmed: 2,373 linked trades vs. a 1000-row
+  // silent cap) -- the same truncation bug already found and fixed twice elsewhere in
+  // this codebase (populateMarketStateDaily.ts's ATR lookups, runConditionAwareness.ts).
+  const linkedTrades: any[] = []
+  for (let page = 0; ; page++) {
+    const { data: batch } = await db
+      .from('actual_trades')
+      .select(`
+        trade_id, direction, entry, stop, target, result_r, triggered,
+        session, analyst_id, published_at,
+        market:market_id ( symbol, market_id ),
+        recommendation_version:recommendation_version_id (
+          recommendation_version_id,
+          entry_range_low,
+          entry_range_high,
+          opportunity_id,
+          regime_tags
+        )
+      `)
+      .not('recommendation_version_id', 'is', null)
+      .order('trade_id', { ascending: true })
+      .range(page * 1000, page * 1000 + 999)
+    if (!batch?.length) break
+    linkedTrades.push(...batch)
+    if (batch.length < 1000) break
+  }
 
-  if (!linkedTrades?.length) {
+  if (!linkedTrades.length) {
     console.log('No linked trades found.')
     return
   }
 
-  // Find already-reviewed trade IDs
-  const { data: existingReviews } = await db
-    .from('post_trade_reviews')
-    .select('trade_id')
-  const reviewedTradeIds = new Set((existingReviews ?? []).map(r => r.trade_id))
+  // Find already-reviewed trade IDs. Paginated past 1000 for the same reason as the
+  // linkedTrades fetch above -- post_trade_reviews already has 1000+ rows (confirmed:
+  // 1,107 created in a single backfill run), so an unranged select here would silently
+  // treat already-reviewed trades as unreviewed and re-review them.
+  const existingReviews: { trade_id: string }[] = []
+  for (let page = 0; ; page++) {
+    const { data: batch } = await db
+      .from('post_trade_reviews')
+      .select('trade_id')
+      .order('trade_id', { ascending: true })
+      .range(page * 1000, page * 1000 + 999)
+    if (!batch?.length) break
+    existingReviews.push(...batch)
+    if (batch.length < 1000) break
+  }
+  const reviewedTradeIds = new Set(existingReviews.map(r => r.trade_id))
   const unreviewed = linkedTrades.filter(t => !reviewedTradeIds.has(t.trade_id))
 
   console.log(`Linked: ${linkedTrades.length}, Reviewed: ${reviewedTradeIds.size}, To review: ${unreviewed.length}`)
