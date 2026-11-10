@@ -93,18 +93,26 @@ async function main() {
 
   const oppById = new Map(todayOpps.map(o => [o.opportunity_id, o]))
 
-  // Load latest ATR14 per market
+  // Load latest ATR14 per market -- one query per market (.limit(1), ordered by date),
+  // not a single bulk `.in(marketIds).order('date desc')` with no per-market limit.
+  // That bulk form has no deterministic tiebreak for the many rows sharing today's
+  // date across different markets, and with no row cap it can be silently truncated
+  // by PostgREST's default page size once the combined history across all of today's
+  // markets exceeds it (confirmed this exact failure mode in a sibling investigation,
+  // fix/shadow-monitor-diagnosis: it produced a false "zero data" read for a market
+  // that actually had full current history). A market-at-a-time query can't have
+  // either problem.
   const marketIds = [...new Set(todayOpps.map(o => (o.market as any).market_id))]
-  const { data: atrRows } = await db
-    .from('market_state_daily')
-    .select('market_id, atr14, date')
-    .in('market_id', marketIds)
-    .order('date', { ascending: false })
-
   const atr14ByMarketId = new Map<string, number>()
-  for (const row of (atrRows ?? [])) {
-    if (!atr14ByMarketId.has(row.market_id)) {
-      atr14ByMarketId.set(row.market_id, Number(row.atr14))
+  for (const marketId of marketIds) {
+    const { data: atrRow } = await db
+      .from('market_state_daily')
+      .select('atr14')
+      .eq('market_id', marketId)
+      .order('date', { ascending: false })
+      .limit(1)
+    if (atrRow?.[0]?.atr14 != null) {
+      atr14ByMarketId.set(marketId, Number(atrRow[0].atr14))
     }
   }
 
