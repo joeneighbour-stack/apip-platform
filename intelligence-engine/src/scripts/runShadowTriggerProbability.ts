@@ -36,22 +36,33 @@ async function main() {
   console.log(`Mode: ${isDryRun ? 'DRY RUN' : 'LIVE'}`)
   console.log('Computing shadow-based trigger probabilities...\n')
 
-  // Load all resolved shadow outcomes with market/direction context
-  const { data: outcomes, error } = await db
-    .from('shadow_trade_outcomes')
-    .select(`
-      trade_outcome_status,
-      shadow_trade:shadow_trade_id (
-        opportunity:opportunity_id (
-          market_id,
-          direction
+  // Load all resolved shadow outcomes with market/direction context. Paginated past
+  // 1000 (PostgREST's default page size) -- this table grows every time a shadow trade
+  // resolves, with no date bound here, so it's only a matter of time before an unranged
+  // select silently drops rows (same truncation bug already found/fixed elsewhere in
+  // this codebase).
+  const outcomes: any[] = []
+  for (let page = 0; ; page++) {
+    const { data: batch, error } = await db
+      .from('shadow_trade_outcomes')
+      .select(`
+        trade_outcome_status,
+        shadow_trade:shadow_trade_id (
+          opportunity:opportunity_id (
+            market_id,
+            direction
+          )
         )
-      )
-    `)
-    .in('trade_outcome_status', ['TRIGGERED', 'TARGET_HIT', 'STOP_HIT', 'EXPIRY'])
-
-  if (error) { console.error('Failed to load outcomes:', error.message); process.exit(1) }
-  if (!outcomes?.length) {
+      `)
+      .in('trade_outcome_status', ['TRIGGERED', 'TARGET_HIT', 'STOP_HIT', 'EXPIRY'])
+      .order('shadow_trade_id', { ascending: true })
+      .range(page * 1000, page * 1000 + 999)
+    if (error) { console.error('Failed to load outcomes:', error.message); process.exit(1) }
+    if (!batch?.length) break
+    outcomes.push(...batch)
+    if (batch.length < 1000) break
+  }
+  if (!outcomes.length) {
     console.log('No resolved shadow outcomes yet. Run again once more outcomes accumulate.')
     console.log(`Current minimum sample required: ${MIN_SHADOW_SAMPLE} per market/direction`)
     return

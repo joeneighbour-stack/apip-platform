@@ -23,17 +23,25 @@ export default async function OpportunityCentrePage() {
     .order('expected_r', { ascending: false })
   if (opportunitiesError) console.error('[OpportunityCentrePage] Failed to fetch opportunities:', opportunitiesError.message)
 
-  // For analyst view -- fetch their coaching recommendations to get ranges
+  // For analyst view -- fetch their coaching recommendations to get ranges. Scoped to
+  // today's opportunity_ids (the only ones this page ever looks up) instead of the
+  // analyst's full history -- an unfiltered-by-date fetch here had no .range() either,
+  // so a long-tenured analyst's history exceeding 1000 rows could silently push today's
+  // own recommendations out of the capped result.
   let coachingByOpportunity: Map<string, any> = new Map()
   if (!isManager && user.analystId) {
-    const { data: coaching, error: coachingError } = await supabase
-      .from('coaching_recommendations')
-      .select(`
-        opportunity_id, entry_range_low, entry_range_high,
-        risk_range, target_range, trigger_probability,
-        expected_r, coaching_note
-      `)
-      .eq('analyst_id', user.analystId)
+    const todaysOpportunityIds = (opportunities ?? []).map(o => o.opportunity_id)
+    const { data: coaching, error: coachingError } = todaysOpportunityIds.length
+      ? await supabase
+          .from('coaching_recommendations')
+          .select(`
+            opportunity_id, entry_range_low, entry_range_high,
+            risk_range, target_range, trigger_probability,
+            expected_r, coaching_note
+          `)
+          .eq('analyst_id', user.analystId)
+          .in('opportunity_id', todaysOpportunityIds)
+      : { data: [], error: null }
     if (coachingError) console.error('[OpportunityCentrePage] Failed to fetch coaching_recommendations:', coachingError.message)
     coachingByOpportunity = new Map(
       (coaching ?? []).map(c => [c.opportunity_id, c])

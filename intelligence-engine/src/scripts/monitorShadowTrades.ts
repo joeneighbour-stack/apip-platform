@@ -179,28 +179,40 @@ async function main() {
   console.log(`Time:   ${now.toISOString()}`)
 
   // ── Load active shadow trades (NOT_TRIGGERED and TRIGGERED) ────────────────
-  const { data: trades, error: tradesErr } = await db
-    .from('shadow_trades')
-    .select(`
-      shadow_trade_id, opportunity_id, recommendation_version_id,
-      direction, entry, stop, target, rr, session,
-      entry_variant, shadow_system,
-      entry_mode, generated_price, expires_at,
-      price_provider, price_resolution, created_at, generated_at, monitor_from,
-      opportunities!inner (
-        market_id,
-        markets!inner ( symbol, price_data_symbol, asset_class, price_data_provider )
-      ),
-      shadow_trade_outcomes!inner (
-        shadow_outcome_id, trade_outcome_status,
-        triggered_price, triggered_at, raw_price_evidence
-      )
-    `)
-    .in('shadow_trade_outcomes.trade_outcome_status', ['NOT_TRIGGERED', 'TRIGGERED'])
+  // Paginated past 1000 -- "active" is normally self-limiting (trades resolve within
+  // their expiry window), but a resolution backlog (the same starvation pattern
+  // already found in importActualTrades.ts/generatePostTradeReviews.ts) would silently
+  // cap this at 1000 and stop monitoring the rest.
+  const trades: any[] = []
+  for (let page = 0; ; page++) {
+    const { data: batch, error: tradesErr } = await db
+      .from('shadow_trades')
+      .select(`
+        shadow_trade_id, opportunity_id, recommendation_version_id,
+        direction, entry, stop, target, rr, session,
+        entry_variant, shadow_system,
+        entry_mode, generated_price, expires_at,
+        price_provider, price_resolution, created_at, generated_at, monitor_from,
+        opportunities!inner (
+          market_id,
+          markets!inner ( symbol, price_data_symbol, asset_class, price_data_provider )
+        ),
+        shadow_trade_outcomes!inner (
+          shadow_outcome_id, trade_outcome_status,
+          triggered_price, triggered_at, raw_price_evidence
+        )
+      `)
+      .in('shadow_trade_outcomes.trade_outcome_status', ['NOT_TRIGGERED', 'TRIGGERED'])
+      .order('shadow_trade_id', { ascending: true })
+      .range(page * 1000, page * 1000 + 999)
 
-  if (tradesErr) {
-    console.error('Failed to load trades:', tradesErr.message)
-    process.exit(1)
+    if (tradesErr) {
+      console.error('Failed to load trades:', tradesErr.message)
+      process.exit(1)
+    }
+    if (!batch?.length) break
+    trades.push(...batch)
+    if (batch.length < 1000) break
   }
 
   // shadow_trade_outcomes.trade_outcome_status is required for the !inner filter
@@ -208,7 +220,7 @@ async function main() {
   // embed only affects the embedded array, it does not filter the outer rows, so
   // this used to fetch every shadow trade ever generated (all terminal statuses too)
   // on every 5-minute run and rely entirely on the client-side re-check below.
-  const activeTrades = (trades ?? []).filter(t => {
+  const activeTrades = trades.filter(t => {
     const outcome = t.shadow_trade_outcomes?.[0]
     if (!outcome) return false  // shouldn't happen with !inner, but defensive
     if (!['NOT_TRIGGERED', 'TRIGGERED'].includes(outcome.trade_outcome_status)) return false

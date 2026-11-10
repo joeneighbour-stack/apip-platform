@@ -214,11 +214,22 @@ async function main() {
     return
   }
 
-  // Find already-reviewed trade IDs
-  const { data: existingReviews } = await db
-    .from('post_trade_reviews')
-    .select('trade_id')
-  const reviewedTradeIds = new Set((existingReviews ?? []).map(r => r.trade_id))
+  // Find already-reviewed trade IDs. Paginated past 1000 for the same reason as the
+  // linkedTrades fetch above -- post_trade_reviews already has 1000+ rows (confirmed:
+  // 1,107 created in a single backfill run), so an unranged select here would silently
+  // treat already-reviewed trades as unreviewed and re-review them.
+  const existingReviews: { trade_id: string }[] = []
+  for (let page = 0; ; page++) {
+    const { data: batch } = await db
+      .from('post_trade_reviews')
+      .select('trade_id')
+      .order('trade_id', { ascending: true })
+      .range(page * 1000, page * 1000 + 999)
+    if (!batch?.length) break
+    existingReviews.push(...batch)
+    if (batch.length < 1000) break
+  }
+  const reviewedTradeIds = new Set(existingReviews.map(r => r.trade_id))
   const unreviewed = linkedTrades.filter(t => !reviewedTradeIds.has(t.trade_id))
 
   console.log(`Linked: ${linkedTrades.length}, Reviewed: ${reviewedTradeIds.size}, To review: ${unreviewed.length}`)

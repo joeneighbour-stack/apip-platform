@@ -531,10 +531,21 @@ async function main() {
       tradesByAnalystSymbol.get(asKey)!.push(input)
     }
 
-    const { data: profileRows } = await db
-      .from('analyst_profiles')
-      .select('analyst_id, market_id, direction, zone, profile_data')
-      .in('analyst_id', eligibleAnalysts.map(a => a.analyst))
+    // Paginated past 1000 -- analyst_profiles fans out per analyst x market x direction
+    // x regime x zone (see generateAnalystProfiles.ts), so even eligibleAnalysts' small
+    // analyst count can produce thousands of rows, well past PostgREST's default page size.
+    const profileRows: any[] = []
+    for (let page = 0; ; page++) {
+      const { data: batch } = await db
+        .from('analyst_profiles')
+        .select('analyst_id, market_id, direction, zone, profile_data')
+        .in('analyst_id', eligibleAnalysts.map(a => a.analyst))
+        .order('analyst_id', { ascending: true })
+        .range(page * 1000, page * 1000 + 999)
+      if (!batch?.length) break
+      profileRows.push(...batch)
+      if (batch.length < 1000) break
+    }
 
     // Grouped by analyst for scoreAnalystForMarket()'s per-analyst scoring pass.
     // asset_class is joined in here (analyst_profiles itself has no such column)

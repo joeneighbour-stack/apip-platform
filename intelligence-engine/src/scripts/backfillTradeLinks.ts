@@ -63,20 +63,28 @@ async function main() {
   console.log(`Mode: ${isDryRun ? 'DRY RUN (no writes)' : 'LIVE'}`)
   console.log(`From: ${BACKFILL_START_DATE}\n`)
 
-  const { data: unlinkedTrades, error: fetchError } = await db
-    .from('actual_trades')
-    .select('trade_id, analyst_id, market_id, direction, published_at')
-    .eq('source_system', 'ACUITY_PERFORMANCE_API')
-    .is('opportunity_id', null)
-    .gte('published_at', BACKFILL_START_DATE)
-    .order('published_at', { ascending: true })
+  // Paginated past 1000 (PostgREST's default page size) -- this exact backlog has
+  // already been confirmed to exceed it (1,922 rows, see the importActualTrades.ts
+  // fix for the live-import version of this same query).
+  const trades: { trade_id: string; analyst_id: string; market_id: string; direction: string; published_at: string }[] = []
+  for (let page = 0; ; page++) {
+    const { data: batch, error: fetchError } = await db
+      .from('actual_trades')
+      .select('trade_id, analyst_id, market_id, direction, published_at')
+      .eq('source_system', 'ACUITY_PERFORMANCE_API')
+      .is('opportunity_id', null)
+      .gte('published_at', BACKFILL_START_DATE)
+      .order('published_at', { ascending: true })
+      .range(page * 1000, page * 1000 + 999)
 
-  if (fetchError) {
-    console.error(`Failed to load unlinked trades: ${fetchError.message}`)
-    process.exit(1)
+    if (fetchError) {
+      console.error(`Failed to load unlinked trades: ${fetchError.message}`)
+      process.exit(1)
+    }
+    if (!batch?.length) break
+    trades.push(...batch)
+    if (batch.length < 1000) break
   }
-
-  const trades = unlinkedTrades ?? []
   console.log(`Unlinked trades found: ${trades.length}\n`)
 
   let linked = 0

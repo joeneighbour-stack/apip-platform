@@ -241,13 +241,23 @@ async function main() {
   console.log(`Regime rows available (most recent = yesterday's): ${regimeByMarketId.size}`)
 
   // ── Load analyst profiles (all eligible analysts, joined with asset_class) ─
-  const { data: profileRows } = await db
-    .from('analyst_profiles')
-    .select('analyst_id, market_id, direction, zone, profile_data, market:market_id ( asset_class )')
-    .in('analyst_id', [...allEligibleToday])
+  // Paginated past 1000 -- analyst_profiles fans out per analyst x market x direction
+  // x regime x zone (see generateAnalystProfiles.ts / the same fix in runEngineSession.ts).
+  const profileRows: any[] = []
+  for (let page = 0; ; page++) {
+    const { data: batch } = await db
+      .from('analyst_profiles')
+      .select('analyst_id, market_id, direction, zone, profile_data, market:market_id ( asset_class )')
+      .in('analyst_id', [...allEligibleToday])
+      .order('analyst_id', { ascending: true })
+      .range(page * 1000, page * 1000 + 999)
+    if (!batch?.length) break
+    profileRows.push(...batch)
+    if (batch.length < 1000) break
+  }
 
   const profilesByAnalyst = new Map<string, AnalystProfileRow[]>()
-  for (const p of (profileRows ?? []) as any[]) {
+  for (const p of profileRows as any[]) {
     const assetClass = p.market?.asset_class
     if (!assetClass) continue
     if (!profilesByAnalyst.has(p.analyst_id)) profilesByAnalyst.set(p.analyst_id, [])

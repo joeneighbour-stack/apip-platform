@@ -128,20 +128,26 @@ export default async function ManagementWorkspacePage() {
   const adminDb = createAdminClient()
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
-  const { data: allTrades } = await adminDb
-    .from('actual_trades')
-    .select(`
-      trade_id, direction, result_r, triggered,
-      published_at, historical_backfill, analyst_id,
-      entry, stop, target, session, expiry,
-      market:market_id ( symbol, asset_class )
-    `)
-    .gte('published_at', thirtyDaysAgo + 'T00:00:00Z')
-    .in('source_system', ['ACUITY_PERFORMANCE_API', 'MANUAL_BACKFILL'])
-    .order('published_at', { ascending: false })
-    .limit(500)
+  // Paginated via fetchAllPages -- this 30-day/all-analyst window is confirmed to
+  // regularly exceed 500 rows (~1200+ some days), so the old .limit(500) was silently
+  // hiding the older half of "today's" Monitor tab stream, not just old history.
+  const allTrades = await fetchAllPages<any>(
+    (page) => adminDb
+      .from('actual_trades')
+      .select(`
+        trade_id, direction, result_r, triggered,
+        published_at, historical_backfill, analyst_id,
+        entry, stop, target, session, expiry,
+        market:market_id ( symbol, asset_class )
+      `)
+      .gte('published_at', thirtyDaysAgo + 'T00:00:00Z')
+      .in('source_system', ['ACUITY_PERFORMANCE_API', 'MANUAL_BACKFILL'])
+      .order('published_at', { ascending: false })
+      .range(page * 1000, page * 1000 + 999),
+    { label: 'management.allTrades' },
+  )
 
-  const allTradeIds = (allTrades ?? []).map((t: any) => t.trade_id)
+  const allTradeIds = allTrades.map((t: any) => t.trade_id)
 
   // post_trade_reviews has no analyst_id column -- `trade:trade_id!inner` filters via
   // the FK-joined actual_trades row instead (see monitor/page.tsx's identical pattern).
