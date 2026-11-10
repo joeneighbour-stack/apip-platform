@@ -89,6 +89,33 @@ function candlesToOhlcBars(candles: FinnhubCandleResponse): OhlcBar[] {
 }
 
 /**
+ * UTC [start, end) of the trading day `date` as Azure's real 'D' (Price1d) bars
+ * define it -- anchored to the 5pm New York close/rollover, not UTC midnight.
+ * Confirmed empirically against real D bars for EURUSD (fix/market-state-daily
+ * boundary check, Nov 2026): a UTC-midnight window differed from the real D bar
+ * by up to 0.00251 (25 pips), a ~15-40% distortion of a typical day's ATR20 range,
+ * on exactly the days this synthetic fallback is needed -- the NY-rollover window
+ * matched to within ~0.00005 (float/aggregation noise). 5pm NY is 21:00 UTC in EDT
+ * (summer) and 22:00 UTC in EST (winter), so this is resolved via Intl per-date
+ * rather than a fixed UTC hour. Verified against FX (EURUSD) only -- applied to
+ * crypto too since it shares this function and Azure's Price1d table, but that
+ * alignment itself isn't independently confirmed for a 24/7 asset.
+ */
+function tradingDayWindowUtcMs(date: string): { startMs: number; endMs: number } {
+  for (const hourUtc of [21, 22]) {
+    const candidate = new Date(`${date}T${String(hourUtc).padStart(2, '0')}:00:00Z`)
+    const nyHour = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York', hour: 'numeric', hour12: false,
+    }).format(candidate)
+    if (nyHour === '17') {
+      const endMs = candidate.getTime()
+      return { startMs: endMs - 24 * 60 * 60 * 1000, endMs }
+    }
+  }
+  throw new Error(`Could not resolve NY 5pm close for ${date}`)
+}
+
+/**
  * Aggregates Azure 5-minute bars for a single date into a synthetic daily
  * OHLC candle. Used to fill gaps left by the daily (resolution='D') table,
  * which may lag behind for forex -- the 5-minute table (resolution='5') is
@@ -98,8 +125,9 @@ function candlesToOhlcBars(candles: FinnhubCandleResponse): OhlcBar[] {
 async function fetchIntradayAsDailyBar(
   finnhubSymbol: string, date: string,
 ): Promise<OhlcBar | null> {
-  const dayStart = Math.floor(new Date(date + 'T00:00:00Z').getTime() / 1000)
-  const dayEnd   = Math.floor(new Date(date + 'T23:59:59Z').getTime() / 1000)
+  const { startMs, endMs } = tradingDayWindowUtcMs(date)
+  const dayStart = Math.floor(startMs / 1000)
+  const dayEnd   = Math.floor(endMs / 1000) - 1
 
   const candles = await getCandles(finnhubSymbol, '5', dayStart, dayEnd)
   if (candles.s !== 'ok' || !candles.c?.length) return null
