@@ -174,6 +174,17 @@ async function main() {
   const now          = new Date()
   const nowTs        = Math.floor(now.getTime() / 1000)
 
+  // Set by logUpdateError() whenever any shadow_trade_outcomes write below fails --
+  // checked at the end of main() to exit non-zero, so a write failure makes the
+  // GitHub Actions run show as failed instead of a silent, successful-looking no-op
+  // (the previous behaviour: every .update() below except the MFE/MAE one ignored
+  // its own `error` return entirely).
+  let anyWriteFailed = false
+  function logUpdateError(context: string, shadowTradeId: string, error: { message: string }) {
+    console.error(`  [${context}] update failed for shadow_trade_id=${shadowTradeId}: ${error.message}`)
+    anyWriteFailed = true
+  }
+
   console.log(`\n=== Shadow Trade Monitor ===`)
   console.log(`Run ID: ${monitorRunId}`)
   console.log(`Time:   ${now.toISOString()}`)
@@ -297,13 +308,14 @@ async function main() {
 
         // Check expiry first
         if (now >= expiresAt) {
-          await db.from('shadow_trade_outcomes').update({
+          const { error: updateError } = await db.from('shadow_trade_outcomes').update({
             trade_outcome_status: 'EXPIRY',
             exit_reason: 'EXPIRED_NOT_TRIGGERED',
             closed_at: expiresAt.toISOString(),
             result_r: null,
             monitor_run_id: monitorRunId,
           }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
+          if (updateError) logUpdateError('NOT_TRIGGERED expiry', trade.shadow_trade_id, updateError)
           console.log(`  ${symbol}: EXPIRED (not triggered)`)
           summary.expired++
           continue
@@ -312,7 +324,7 @@ async function main() {
         // ENTER_NOW — trigger immediately if not already done
         if (trade.entry_mode === 'ENTER_NOW') {
           const triggeredPrice = trade.generated_price ?? trade.entry
-          await db.from('shadow_trade_outcomes').update({
+          const { error: updateError } = await db.from('shadow_trade_outcomes').update({
             trade_outcome_status: 'TRIGGERED',
             triggered_at: trade.generated_at,
             triggered_price: triggeredPrice,
@@ -320,6 +332,7 @@ async function main() {
             bars_to_trigger: 0, // triggers instantly at generation, no bars scanned
             monitor_run_id: monitorRunId,
           }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
+          if (updateError) logUpdateError('ENTER_NOW trigger', trade.shadow_trade_id, updateError)
           console.log(`  ${symbol}: TRIGGERED (ENTER_NOW) @ ${triggeredPrice}`)
           summary.triggered++
           continue
@@ -364,7 +377,7 @@ async function main() {
           }
 
           if (triggeredPrice !== null) {
-            await db.from('shadow_trade_outcomes').update({
+            const { error: updateError } = await db.from('shadow_trade_outcomes').update({
               trade_outcome_status: 'TRIGGERED',
               triggered_at: new Date(bar.ts * 1000).toISOString(),
               triggered_price: triggeredPrice,
@@ -374,6 +387,7 @@ async function main() {
               bars_to_trigger: notTriggeredBarIndex,
               monitor_run_id: monitorRunId,
             }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
+            if (updateError) logUpdateError('WAIT_FOR_PREFERRED_ZONE trigger', trade.shadow_trade_id, updateError)
             console.log(`  ${symbol}: TRIGGERED (${triggerSource}) @ ${triggeredPrice}`)
             summary.triggered++
 
@@ -403,7 +417,7 @@ async function main() {
               if (!barCrossed) continue
               const sibOutcome = sibling.shadow_trade_outcomes?.[0]
               if (!sibOutcome) continue
-              await db.from('shadow_trade_outcomes').update({
+              const { error: sibUpdateError } = await db.from('shadow_trade_outcomes').update({
                 trade_outcome_status: 'TRIGGERED',
                 triggered_at: new Date(bar.ts * 1000).toISOString(),
                 triggered_price: sibDir === 'BUY'
@@ -415,6 +429,7 @@ async function main() {
                 bars_to_trigger: notTriggeredBarIndex,
                 monitor_run_id: monitorRunId,
               }).eq('shadow_outcome_id', sibOutcome.shadow_outcome_id)
+              if (sibUpdateError) logUpdateError('co-trigger sibling', sibling.shadow_trade_id, sibUpdateError)
               console.log(`  ${symbol}: CO-TRIGGERED ${sibling.entry_variant} @ ${sibEntry}`)
             }
 
@@ -475,7 +490,7 @@ async function main() {
             const exitPrice = lastBar?.c ?? null
 
             if (exitPrice === null) {
-              await db.from('shadow_trade_outcomes').update({
+              const { error: updateError } = await db.from('shadow_trade_outcomes').update({
                 trade_outcome_status: 'EXPIRY',
                 closed_at: expiresAt.toISOString(),
                 exit_reason: 'EXPIRY_PRICE_UNAVAILABLE',
@@ -487,10 +502,11 @@ async function main() {
                 bars_to_close: barsSinceTrigger,
                 monitor_run_id: monitorRunId,
               }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
+              if (updateError) logUpdateError('TRIGGERED expiry (price unavailable)', trade.shadow_trade_id, updateError)
               console.log(`  ${symbol}: EXPIRY (price unavailable)`)
             } else {
               const resultR = calcResultR(dir, trade.entry, exitPrice, trade.stop)
-              await db.from('shadow_trade_outcomes').update({
+              const { error: updateError } = await db.from('shadow_trade_outcomes').update({
                 trade_outcome_status: resultR >= 0 ? 'CLOSED_PROFIT' : 'CLOSED_LOSS',
                 closed_at: expiresAt.toISOString(),
                 exit_price: exitPrice,
@@ -505,6 +521,7 @@ async function main() {
                 bars_to_close: barsSinceTrigger,
                 monitor_run_id: monitorRunId,
               }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
+              if (updateError) logUpdateError('TRIGGERED expiry (with price)', trade.shadow_trade_id, updateError)
               console.log(`  ${symbol}: EXPIRY @ ${exitPrice}, R=${resultR.toFixed(2)}`)
             }
             summary.expired++
@@ -517,7 +534,7 @@ async function main() {
           const targetHit = dir === 'BUY' ? bar.h >= target : bar.l <= target
 
           if (stopHit && targetHit) {
-            await db.from('shadow_trade_outcomes').update({
+            const { error: updateError } = await db.from('shadow_trade_outcomes').update({
               trade_outcome_status: 'AMBIGUOUS',
               closed_at: new Date(bar.ts * 1000).toISOString(),
               exit_reason: 'AMBIGUOUS_SAME_BAR',
@@ -531,6 +548,7 @@ async function main() {
               bars_to_close: barsSinceTrigger,
               monitor_run_id: monitorRunId,
             }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
+            if (updateError) logUpdateError('AMBIGUOUS', trade.shadow_trade_id, updateError)
             console.log(`  ${symbol}: AMBIGUOUS (stop+target same bar)`)
             summary.ambiguous++
             closed = true
@@ -540,7 +558,7 @@ async function main() {
           // Target hit
           if (targetHit) {
             const resultR = calcResultR(dir, trade.entry, target, trade.stop)
-            await db.from('shadow_trade_outcomes').update({
+            const { error: updateError } = await db.from('shadow_trade_outcomes').update({
               trade_outcome_status: 'TARGET_HIT',
               closed_at: new Date(bar.ts * 1000).toISOString(),
               exit_price: target,
@@ -555,6 +573,7 @@ async function main() {
               bars_to_close: barsSinceTrigger,
               monitor_run_id: monitorRunId,
             }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
+            if (updateError) logUpdateError('TARGET_HIT', trade.shadow_trade_id, updateError)
             console.log(`  ${symbol}: TARGET_HIT, R=${resultR.toFixed(2)}`)
             summary.closed++
             closed = true
@@ -564,7 +583,7 @@ async function main() {
           // Stop hit
           if (stopHit) {
             const resultR = calcResultR(dir, trade.entry, trade.stop, trade.stop)
-            await db.from('shadow_trade_outcomes').update({
+            const { error: updateError } = await db.from('shadow_trade_outcomes').update({
               trade_outcome_status: 'STOP_HIT',
               closed_at: new Date(bar.ts * 1000).toISOString(),
               exit_price: stop,
@@ -579,6 +598,7 @@ async function main() {
               bars_to_close: barsSinceTrigger,
               monitor_run_id: monitorRunId,
             }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
+            if (updateError) logUpdateError('STOP_HIT', trade.shadow_trade_id, updateError)
             console.log(`  ${symbol}: STOP_HIT, R=-1.00`)
             summary.closed++
             closed = true
@@ -601,7 +621,7 @@ async function main() {
             const resultR = exitPrice !== null
               ? calcResultR(dir, trade.entry, exitPrice, trade.stop)
               : null
-            await db.from('shadow_trade_outcomes').update({
+            const { error: updateError } = await db.from('shadow_trade_outcomes').update({
               trade_outcome_status: exitPrice !== null ? (resultR! >= 0 ? 'CLOSED_PROFIT' : 'CLOSED_LOSS') : 'EXPIRY',
               closed_at: expiresAt.toISOString(),
               exit_price: exitPrice,
@@ -614,6 +634,7 @@ async function main() {
               bars_to_close: barsSinceTrigger,
               monitor_run_id: monitorRunId,
             }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
+            if (updateError) logUpdateError('FORCE-EXPIRED', trade.shadow_trade_id, updateError)
             console.log(`  ${symbol}: FORCE-EXPIRED (past expiry, no bar at expiry time), R=${resultR?.toFixed(2) ?? 'null'}`)
             summary.expired++
             closed = true
@@ -638,7 +659,7 @@ async function main() {
               monitor_run_id: monitorRunId,
             }).eq('shadow_outcome_id', outcome.shadow_outcome_id)
             if (mfeUpdateError) {
-              console.error(`  ${symbol}: MFE/MAE update failed:`, mfeUpdateError.message)
+              logUpdateError('MFE/MAE update', trade.shadow_trade_id, mfeUpdateError)
             } else {
               console.log(`  ${symbol}: MFE/MAE updated — mfe=${finiteOrNull(currentMfeR)?.toFixed(3)}R mae=${finiteOrNull(currentMaeR)?.toFixed(3)}R bars=${barsSinceTrigger}`)
             }
@@ -661,6 +682,14 @@ async function main() {
   console.log(`Ambiguous:  ${summary.ambiguous}`)
   console.log(`Skipped:    ${summary.skipped}`)
   console.log(`Errors:     ${summary.errors}`)
+
+  // Fail the run (non-zero exit) if any shadow_trade_outcomes write failed above --
+  // every one of those updates is now checked and logged via logUpdateError(), so a
+  // write failure no longer looks like a silent, successful-looking no-op in CI.
+  if (anyWriteFailed) {
+    console.error('\nOne or more shadow_trade_outcomes updates failed this run -- see [context] lines above.')
+    process.exit(1)
+  }
 }
 
 const thisFilePath = fileURLToPath(import.meta.url)

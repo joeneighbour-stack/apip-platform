@@ -342,11 +342,12 @@ async function main() {
   // aggregate rows this script no longer writes but that were never cleaned up) --
   // .in('analyst_id', analystIds) above skips them entirely, since NULL never matches
   // an IN list, so they accumulate and corrupt team-total queries that don't expect them.
-  // Excludes kpi_visibility='INTERNAL_ONLY' deliberately: that's calculateShadowKpis.ts's
-  // namespace (analyst_id IS NULL is how it marks a shadow-system row, see that script's
-  // own delete+insert), a completely separate batch job this script must not clobber --
-  // an unscoped NULL-analyst delete here would silently wipe the shadow benchmark every
-  // time this script runs, restored only whenever calculateShadowKpis.ts next happens to run.
+  // Excludes kpi_visibility='INTERNAL_ONLY' deliberately: that was calculateShadowKpis.ts's
+  // namespace (analyst_id IS NULL is how it marked a shadow-system row). That script was
+  // removed (dead code -- its output was never read by anything, see
+  // fix/shadow-monitor-diagnosis), but any historical INTERNAL_ONLY rows it already wrote
+  // may still exist in the table; this exclusion just avoids this script reaching into
+  // that now-orphaned namespace and deleting rows it was never responsible for.
   const { error: delNullError } = await db
     .from('executive_kpis')
     .delete()
