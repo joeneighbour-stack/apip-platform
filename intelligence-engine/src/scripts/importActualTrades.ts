@@ -379,6 +379,7 @@ async function main() {
 
     // ── Normalise and upsert ─────────────────────────────────────────────────
     let successRows = 0, duplicateRows = 0, errorRows = 0, outOfScopeRows = 0, skippedBackfill = 0, skippedProtected = 0
+    let linkUpdateErrors = 0
     let unknownAnalysts = new Set<string>()
     let unknownSymbols = new Set<string>()
     const tradeRows: any[] = []
@@ -662,61 +663,82 @@ async function main() {
       console.log('\nLinking new trades to recommendation_versions...')
       let linked = 0
 
-      // All unlinked platform-era trades, not just the ones this batch just inserted --
-      // a trade can be inserted by one run and only become linkable on a later run (e.g.
-      // its matching coaching_recommendations row lands after this trade did), so scoping
-      // to import_batch_id was silently skipping those forever. .limit(500) is a safety
-      // cap, not an expected steady-state size -- trades that link successfully leave this
-      // set and don't reappear on the next run.
-      const { data: newTrades } = await db
-        .from('actual_trades')
-        .select('trade_id, analyst_id, market_id, direction, published_at')
-        .is('opportunity_id', null)
-        .is('recommendation_version_id', null)
-        .eq('historical_backfill', false)
-        .eq('source_system', 'ACUITY_PERFORMANCE_API')
-        .gte('published_at', LIVE_API_START) // platform-era trades only -- same floor as the dedup logic above
-        .limit(500)
+      // Rows this run has already attempted stay out of the next page's result via
+      // link_attempted_at (migration 071), so re-issuing the same query each iteration
+      // naturally advances through the backlog instead of offset-pagination, which breaks
+      // under concurrent updates. order(published_at desc) means a huge backlog of old,
+      // permanently-unmatchable rows no longer starves same-day trades of a .limit(500)
+      // slot -- recent trades are tried first every time. The 24h retry gate keeps a
+      // never-matching row from being re-queried (and re-querying coaching_recommendations
+      // for it) on every 15-minute run forever, while still giving it a daily chance in
+      // case its coaching_recommendations row lands late.
+      const retryCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
 
-      for (const trade of (newTrades ?? [])) {
-        // Find coaching recommendation(s) shown before trade publication. Window widened
-        // from 4 to 14 hours to cover APAC (rec ~05:35 UTC, trade published ~15:00-18:00
-        // UTC -- a 9-13 hour gap) alongside EUROPEAN (~2-4h) and US (~5-9h).
-        const pubTime = new Date(trade.published_at)
-        const windowStart = new Date(pubTime.getTime() - 14 * 60 * 60 * 1000).toISOString()
+      while (true) {
+        const { data: page } = await db
+          .from('actual_trades')
+          .select('trade_id, analyst_id, market_id, direction, published_at')
+          .is('opportunity_id', null)
+          .is('recommendation_version_id', null)
+          .eq('historical_backfill', false)
+          .eq('source_system', 'ACUITY_PERFORMANCE_API')
+          .gte('published_at', LIVE_API_START) // platform-era trades only -- same floor as the dedup logic above
+          .or(`link_attempted_at.is.null,link_attempted_at.lt.${retryCutoff}`)
+          .order('published_at', { ascending: false })
+          .limit(500)
 
-        // Multiple candidates, not just the single most recent one: at a 14-hour window an
-        // analyst covering several markets in a session can easily have a MORE recent
-        // coaching_recommendations row for a DIFFERENT market than the one just traded --
-        // taking only the latest and bailing if its market doesn't match (the old 4-hour-
-        // window behaviour) would silently drop a real match sitting earlier in the window.
-        // opportunity:opportunity_id embeds market_id directly, so this stays one query
-        // instead of a second round-trip per candidate.
-        const { data: candidates } = await db
-          .from('coaching_recommendations')
-          .select('recommendation_id, active_recommendation_version_id, opportunity_id, opportunity:opportunity_id ( market_id )')
-          .eq('analyst_id', trade.analyst_id)
-          .gte('shown_at', windowStart)
-          .lte('shown_at', trade.published_at)
-          .order('shown_at', { ascending: false })
-          .limit(20)
+        if (!page || page.length === 0) break
 
-        // Direction is deliberately not checked -- an analyst trading opposite to the
-        // coaching recommendation should still link, not be silently dropped: that
-        // divergence is exactly what direction_alignment in generatePostTradeReviews.ts
-        // scores afterwards, by comparing this opportunity's direction against the trade's own.
-        const coaching = (candidates ?? []).find((c: any) => c.opportunity?.market_id === trade.market_id)
+        for (const trade of page) {
+          // Find coaching recommendation(s) shown before trade publication. Window widened
+          // from 4 to 14 hours to cover APAC (rec ~05:35 UTC, trade published ~15:00-18:00
+          // UTC -- a 9-13 hour gap) alongside EUROPEAN (~2-4h) and US (~5-9h).
+          const pubTime = new Date(trade.published_at)
+          const windowStart = new Date(pubTime.getTime() - 14 * 60 * 60 * 1000).toISOString()
 
-        if (!coaching) continue
+          // Multiple candidates, not just the single most recent one: at a 14-hour window an
+          // analyst covering several markets in a session can easily have a MORE recent
+          // coaching_recommendations row for a DIFFERENT market than the one just traded --
+          // taking only the latest and bailing if its market doesn't match (the old 4-hour-
+          // window behaviour) would silently drop a real match sitting earlier in the window.
+          // opportunity:opportunity_id embeds market_id directly, so this stays one query
+          // instead of a second round-trip per candidate.
+          const { data: candidates } = await db
+            .from('coaching_recommendations')
+            .select('recommendation_id, active_recommendation_version_id, opportunity_id, opportunity:opportunity_id ( market_id )')
+            .eq('analyst_id', trade.analyst_id)
+            .gte('shown_at', windowStart)
+            .lte('shown_at', trade.published_at)
+            .order('shown_at', { ascending: false })
+            .limit(20)
 
-        await db.from('actual_trades')
-          .update({
-            opportunity_id: coaching.opportunity_id,
-            recommendation_version_id: coaching.active_recommendation_version_id,
-          })
-          .eq('trade_id', trade.trade_id)
+          // Direction is deliberately not checked -- an analyst trading opposite to the
+          // coaching recommendation should still link, not be silently dropped: that
+          // divergence is exactly what direction_alignment in generatePostTradeReviews.ts
+          // scores afterwards, by comparing this opportunity's direction against the trade's own.
+          const coaching = (candidates ?? []).find((c: any) => c.opportunity?.market_id === trade.market_id)
 
-        linked++
+          const now = new Date().toISOString()
+          const { error: linkUpdateError } = await db.from('actual_trades')
+            .update(coaching
+              ? {
+                  opportunity_id: coaching.opportunity_id,
+                  recommendation_version_id: coaching.active_recommendation_version_id,
+                  link_attempted_at: now,
+                }
+              : { link_attempted_at: now })
+            .eq('trade_id', trade.trade_id)
+
+          if (linkUpdateError) {
+            console.error(`  [trade-linking] update failed for trade_id=${trade.trade_id}: ${linkUpdateError.message}`)
+            linkUpdateErrors++
+            continue
+          }
+
+          if (coaching) linked++
+        }
+
+        if (page.length < 500) break
       }
 
       console.log(`  Linked ${linked} trades to recommendation_versions`)
@@ -770,6 +792,11 @@ async function main() {
     }
 
     if (isDryRun) console.log('\nDRY RUN -- nothing written.')
+
+    if (linkUpdateErrors > 0) {
+      console.error(`\n${linkUpdateErrors} actual_trades link update(s) failed this run -- see [trade-linking] lines above.`)
+      process.exit(1)
+    }
   } catch (err) {
     // Catches anything thrown anywhere above -- a query throwing instead of
     // returning { error }, a programming error, etc. Without this, such an

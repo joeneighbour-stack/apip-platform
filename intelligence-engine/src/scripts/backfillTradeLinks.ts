@@ -5,10 +5,12 @@
 // ============================================================================
 // importActualTrades.ts links new trades to recommendation_versions at import time
 // by matching each trade's analyst against a coaching_recommendation shown within a
-// 4-hour window before the trade's published_at, then verifying market/direction
-// against that recommendation's opportunity. That window-based match can miss trades
-// (e.g. shown_at drift, a trade published outside the 4-hour window) and once missed,
-// those trades stay unlinked forever -- nothing re-attempts them.
+// 14-hour window before the trade's published_at (widened from 4 hours to cover APAC's
+// longer rec-to-publish gap), then verifying market (not direction -- deliberately left
+// unchecked there) against that recommendation's opportunity. That window-based match
+// can still miss trades (e.g. shown_at drift, a trade published outside the window), and
+// since migration 071 those get a daily retry via link_attempted_at, but a row whose
+// coaching_recommendations match never materialises stays unlinked indefinitely.
 //
 // This script is a coarser, one-off catch-up pass for those leftovers: same-day
 // matching on analyst + market alone (via the opportunity, then that opportunity's
