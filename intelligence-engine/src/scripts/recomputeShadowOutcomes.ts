@@ -13,7 +13,9 @@
 //   - markets without reliable Azure data (EXCLUDED_MARKETS)
 //   - CANCELLED / CANCELLED_BEFORE_TRIGGER outcomes (deliberate cancellations,
 //     e.g. migrations/064_cancel_premature_triggers.sql)
-//   - trades with no Azure 5-min bars in their window
+//   - trades whose window (scan start to expiry) touches a weekday with
+//     incomplete Azure 5-min data (see incompleteWeekdays())
+//   - trades whose scan window hasn't started yet
 //
 // Run:
 //   npx tsx src/scripts/recomputeShadowOutcomes.ts --dry-run --out=changes.json
@@ -33,6 +35,10 @@ import { getCandles } from '../lib/azurePrices.js'
 const EXCLUDED_MARKETS = new Set(['USDTRY', 'Solana', 'Litecoin'])
 const CANCELLED_STATUSES = new Set(['CANCELLED', 'CANCELLED_BEFORE_TRIGGER'])
 const R_TOLERANCE = 1e-9
+// A weekday with fewer 5-min bars than this share of the symbol's median
+// weekday count is treated as an Azure data gap (e.g. 2026-07-15..08-03 and
+// 2026-08-17..09-03 have no non-crypto 5-min bars at all).
+const MIN_DAY_COVERAGE = 0.8
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -207,6 +213,32 @@ export function changedFields(
   return fields
 }
 
+// ── Azure coverage ──────────────────────────────────────────────────────────
+
+const isoDate = (ms: number) => new Date(ms).toISOString().slice(0, 10)
+
+/**
+ * Weekdays (UTC) in [fromMs, toMs] on which `bars` has less than
+ * MIN_DAY_COVERAGE of the symbol's median weekday bar count -- days the
+ * recompute can't be trusted on. Weekends are never counted as gaps.
+ */
+export function incompleteWeekdays(bars: Bar[], fromMs: number, toMs: number): Set<string> {
+  const perDay = new Map<string, number>()
+  for (const b of bars) {
+    const d = isoDate(b.ts * 1000)
+    perDay.set(d, (perDay.get(d) ?? 0) + 1)
+  }
+  const weekdayCounts = [...perDay].filter(([d]) => ![0, 6].includes(new Date(d).getUTCDay())).map(([, n]) => n).sort((a, b) => a - b)
+  const median = weekdayCounts[Math.floor(weekdayCounts.length / 2)] ?? 0
+  const gaps = new Set<string>()
+  for (let ms = Date.parse(isoDate(fromMs)); ms <= toMs; ms += 24 * 60 * 60 * 1000) {
+    const d = isoDate(ms)
+    if ([0, 6].includes(new Date(d).getUTCDay())) continue
+    if ((perDay.get(d) ?? 0) < median * MIN_DAY_COVERAGE) gaps.add(d)
+  }
+  return gaps
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 async function loadAll<T>(query: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>): Promise<T[]> {
@@ -277,13 +309,26 @@ async function main() {
       ? candles.t.map((ts, i) => ({ ts, o: candles.o[i]!, h: candles.h[i]!, l: candles.l[i]!, c: candles.c[i]! }))
       : []
 
+    // Today is still in progress -- never count it as a gap.
+    const gapDays = incompleteWeekdays(bars, fromTs * 1000, nowMs - 24 * 60 * 60 * 1000)
+
     for (const t of symTrades) {
       const symbol = t.opportunities.markets.symbol as string
       const scanFrom = entryScanFrom(t)
+      if (scanFrom > nowMs) {
+        excluded.push({ shadow_trade_id: t.shadow_trade_id, symbol, reason: 'scan window not started yet' }); continue
+      }
+      // The trade's whole possible life: from its scan start (or the ENTER_NOW
+      // trigger) to expiry. Any incomplete Azure day inside it makes the replay
+      // untrustworthy, so the trade is excluded rather than recomputed.
       const windowEnd = Math.min(nowMs, Date.parse(t.expires_at))
-      const hasBars = t.entry_mode === 'ENTER_NOW' ||
-        bars.some(b => b.ts * 1000 >= scanFrom && b.ts * 1000 < windowEnd)
-      if (!hasBars) { excluded.push({ shadow_trade_id: t.shadow_trade_id, symbol, reason: 'no Azure 5-min bars in window' }); continue }
+      const touchedGaps: string[] = []
+      for (let ms = Date.parse(isoDate(scanFrom)); ms <= windowEnd; ms += 24 * 60 * 60 * 1000) {
+        if (gapDays.has(isoDate(ms))) touchedGaps.push(isoDate(ms))
+      }
+      if (touchedGaps.length > 0) {
+        excluded.push({ shadow_trade_id: t.shadow_trade_id, symbol, reason: `window touches incomplete Azure 5-min day(s): ${touchedGaps.join(',')}` }); continue
+      }
 
       const o = t.shadow_trade_outcomes[0]
       const old = {
@@ -318,7 +363,8 @@ async function main() {
   const other = changes.filter(c => c.reason !== 'triggered_before_generated_at')
   const excludedByReason = new Map<string, number>()
   for (const e of excluded) {
-    const key = EXCLUDED_MARKETS.has(e.symbol) ? `${e.reason} [${e.symbol}]` : e.reason
+    const key = EXCLUDED_MARKETS.has(e.symbol) ? `${e.reason} [${e.symbol}]`
+      : e.reason.startsWith('window touches') ? 'window touches incomplete Azure 5-min day(s)' : e.reason
     excludedByReason.set(key, (excludedByReason.get(key) ?? 0) + 1)
   }
 
