@@ -6,6 +6,11 @@
 // (src/lib/azurePrices.ts). A market with no Azure data is DEGRADED -- it is
 // reported loudly and skipped, never switched to another price source.
 //
+// Not only missing feeds: a market the engine can't use because its daily
+// history is too thin (insufficient bars), is about to become too thin (low
+// row count in the 30-day window), or has a corrupt flat bar (O=H=L=C) is
+// reported the same way, with its own reason and consequence.
+//
 // reportDegraded() logs a DEGRADED line immediately and, under GitHub Actions,
 // emits an ::error annotation and a job-summary line. It also queues the
 // market; sendDegradedAlerts(), called once at the end of a run, POSTs every
@@ -18,7 +23,9 @@
 // ============================================================================
 import { appendFileSync } from 'node:fs'
 
-export interface DegradedMarket { market: string; priceSymbol: string; reason: string }
+export interface DegradedMarket { market: string; priceSymbol: string; reason: string; consequence: string }
+
+export const NO_AZURE_DATA = 'No Azure price data; market skipped, no other source used.'
 
 const pending: DegradedMarket[] = []
 const ALERT_TIMEOUT_MS = 10_000
@@ -32,11 +39,11 @@ function annotate(title: string, message: string): void {
   }
 }
 
-export function reportDegraded(market: string, priceSymbol: string, reason: string): void {
-  const message = `DEGRADED: ${market} (${priceSymbol}) -- ${reason}. No Azure price data; market skipped, no other source used.`
+export function reportDegraded(market: string, priceSymbol: string, reason: string, consequence: string = NO_AZURE_DATA): void {
+  const message = `DEGRADED: ${market} (${priceSymbol}) -- ${reason}. ${consequence}`
   console.error(`  ${message}`)
-  annotate(`DEGRADED price data: ${market}`, message)
-  pending.push({ market, priceSymbol, reason })
+  annotate(`DEGRADED market data: ${market}`, message)
+  pending.push({ market, priceSymbol, reason, consequence })
 }
 
 /**
@@ -58,8 +65,8 @@ export async function sendDegradedAlerts(source: string): Promise<void> {
   const runUrl = process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
     ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
     : null
-  const text = `:warning: DEGRADED price data (${source}) -- no Azure data, market(s) skipped, no other source used:\n` +
-    degraded.map(d => `• ${d.market} (${d.priceSymbol}): ${d.reason}`).join('\n') +
+  const text = `:warning: DEGRADED market data (${source}):\n` +
+    degraded.map(d => `• ${d.market} (${d.priceSymbol}): ${d.reason}. ${d.consequence}`).join('\n') +
     (runUrl ? `\n${runUrl}` : '')
 
   try {

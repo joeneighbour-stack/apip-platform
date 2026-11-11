@@ -19,6 +19,7 @@ import { scoreAnalystForMarket, type AnalystScore, type AnalystProfileRow, type 
 import { selectEntryZone, zoneBounds, type AtrProfile } from '../services/entryOptimizerService.js'
 import { atrProfileMapKey } from '../services/analystAtrProfileService.js'
 import type { SessionType } from '../types/domain.js'
+import { reportDegraded, sendDegradedAlerts } from '../lib/priceHealth.js'
 
 const SYSTEM_ENGINE_ID = 'ab9359b6-0e78-49fc-8a0a-1cf589552280'
 // Governs marketState.atr14 (entryOptimizerService.ts's stop/target distance
@@ -357,7 +358,7 @@ async function main() {
     const stepId1 = isDryRun ? '' : await createStep(db, engineRunId, 'LOAD_MARKET_STATE')
 
     const { data: marketRows } = await db.from('markets')
-      .select('market_id, symbol, asset_class, display_precision').in('symbol', sessionMarkets)
+      .select('market_id, symbol, asset_class, display_precision, price_data_symbol').in('symbol', sessionMarkets)
     const marketBySymbol = new Map((marketRows ?? []).map(m => [m.symbol, m]))
 
     const barWindowStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
@@ -699,7 +700,16 @@ async function main() {
       if (!intraday) { console.log(`  ${symbol}: no intraday snapshot`); continue }
 
       const bars = barsByMarketId.get(market.market_id) ?? []
-      if (bars.length < ATR_PERIOD) { console.log(`  ${symbol}: insufficient bars`); continue }
+      // Not a silent skip: a market under ATR_PERIOD rows in the 30-day window
+      // (market_state_daily stopped updating) gets no recommendation at all, so it
+      // is alerted as DEGRADED. populateMarketStateDaily warns earlier, at < 20 rows.
+      if (bars.length < ATR_PERIOD) {
+        console.log(`  ${symbol}: insufficient bars`)
+        reportDegraded(symbol, market.price_data_symbol ?? '?',
+          `insufficient daily bars: ${bars.length} market_state_daily row(s) since ${barWindowStart}, engine needs ${ATR_PERIOD}`,
+          `No ${session} recommendation generated for this market.`)
+        continue
+      }
 
       // Pine-style band construction using session anchors from intraday snapshot.
       // previous_close: final 5-min OANDA bar before APIP session open (22:00 UTC)
@@ -1531,6 +1541,7 @@ async function main() {
     // failed above -- every one of those is now checked and logged, so a failed write
     // no longer looks identical to "this opportunity's band just wasn't reliable" in CI
     // (both used to just silently produce fewer shadow trades than expected).
+    if (!isDryRun) await sendDegradedAlerts(`runEngineSession --session=${session}`)
     if (!isDryRun && shadowTradeInsertErrors > 0) {
       console.error(`\n${shadowTradeInsertErrors} shadow trade insert(s) failed this run -- see lines above.`)
       process.exit(1)
@@ -1544,6 +1555,7 @@ async function main() {
         status: 'FAILED', finished_at: new Date().toISOString(),
         error_summary: (err as Error).message,
       }).eq('engine_run_id', engineRunId)
+      await sendDegradedAlerts(`runEngineSession --session=${session}`)
     }
     process.exit(1)
   }

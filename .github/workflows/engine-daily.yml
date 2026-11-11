@@ -170,6 +170,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DEGRADED_ALERT_WEBHOOK: ${{ secrets.DEGRADED_ALERT_WEBHOOK }}
 
   snapshot-us:
     name: Intraday Snapshot -- US
@@ -220,6 +221,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DEGRADED_ALERT_WEBHOOK: ${{ secrets.DEGRADED_ALERT_WEBHOOK }}
 
   snapshot-apac:
     name: Intraday Snapshot -- APAC
@@ -288,6 +290,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DEGRADED_ALERT_WEBHOOK: ${{ secrets.DEGRADED_ALERT_WEBHOOK }}
 
   generate-profiles:
     name: Generate Analyst Profiles

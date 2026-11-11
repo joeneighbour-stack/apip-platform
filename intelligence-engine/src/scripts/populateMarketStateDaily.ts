@@ -35,6 +35,8 @@ import { reportDegraded, sendDegradedAlerts } from '../lib/priceHealth.js'
 const ATR_PERIOD_PRIMARY = 20   // canonical -- stored as atr20
 const ATR_PERIOD_LEGACY  = 14   // retained for transition -- stored as atr14
 const ZONE_COUNT = 4
+const ENGINE_MIN_ROWS = 14      // runEngineSession.ts ATR_PERIOD -- its "insufficient bars" gate
+const COVERAGE_WARN_ROWS = 20   // alert below this many rows in the engine's 30-day window
 
 const daysArg = process.argv.find(a => a.startsWith('--days='))?.split('=')[1]
 const DAYS_TO_FETCH = Number(daysArg ?? 60)
@@ -104,6 +106,16 @@ export function candlesToOhlcBars(candles: FinnhubCandleResponse, finnhubSymbol:
   const bars = [...byDate.values()].map(v => v.bar)
   bars.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
   return bars
+}
+
+/**
+ * A daily bar with open = high = low = close is a placeholder print, not a real
+ * session (e.g. USDTRY 2026-10-28: 50.000 on all four fields, which
+ * inflated the true range of that day and the next). Treated as
+ * missing: excluded from the ATR series, never stored, and alerted.
+ */
+export function isFlatBar(bar: OhlcBar): boolean {
+  return bar.open === bar.high && bar.high === bar.low && bar.low === bar.close
 }
 
 /**
@@ -243,7 +255,7 @@ async function main() {
     }
     try {
       const isICMarkets = market.price_data_provider === 'IC_MARKETS'
-      const bars = isICMarkets
+      let bars = isICMarkets
         ? await fetchStockOhlc(market.price_data_symbol, DAYS_TO_FETCH)
         : isHistory
           ? await fetchHistoricalOhlc(market.price_data_symbol, HISTORY_START)
@@ -267,6 +279,32 @@ async function main() {
         }
         if (syntheticDates.size > 0) {
           bars.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+        }
+      }
+
+      // Flat bars are dropped before ATR is computed, so the next bar's true range
+      // is taken from the last real close, exactly as for a missing date. Any row
+      // already stored for a flat date is deleted. Alerted only when something is
+      // new -- a stored row was removed, or the flat bar is today's/yesterday's --
+      // so an old flat bar still inside the fetch window doesn't alert every day.
+      const flatDates = bars.filter(isFlatBar).map(b => b.date)
+      if (flatDates.length > 0) {
+        bars = bars.filter(b => !isFlatBar(b))
+        const { data: storedFlat } = await db.from('market_state_daily')
+          .select('date').eq('market_id', market.market_id).in('date', flatDates)
+        const storedDates = (storedFlat ?? []).map(r => r.date as string)
+        if (!isDryRun && storedDates.length > 0) {
+          const { error } = await db.from('market_state_daily')
+            .delete().eq('market_id', market.market_id).in('date', storedDates)
+          if (error) console.error(`  ${market.symbol}: failed to delete flat-bar rows -- ${error.message}`)
+        }
+        const reason = `flat daily bar (open=high=low=close) on ${flatDates.join(', ')}`
+        if (storedDates.length > 0 || flatDates.some(d => d >= yesterday)) {
+          reportDegraded(market.symbol, market.price_data_symbol, reason,
+            `Treated as missing: excluded from ATR, not stored` +
+            (storedDates.length > 0 ? `; stored row(s) for ${storedDates.join(', ')} ${isDryRun ? 'would be deleted' : 'deleted'}.` : '.'))
+        } else {
+          console.warn(`  WARN: ${market.symbol}: ${reason} -- excluded from ATR (no stored row; alerted when first seen)`)
         }
       }
 
@@ -352,6 +390,36 @@ async function main() {
     for (const { symbol, reason } of skippedDetails) {
       console.warn(`  WARN: ${symbol} -- ${reason}`)
     }
+  }
+
+  // Early warning for runEngineSession's "insufficient bars" gate: the engine
+  // needs ATR_PERIOD (14) market_state_daily rows in its 30-day window and
+  // silently loses a market below that. A market whose rows stopped updating
+  // shrinks by about one row per weekday, so alerting under 20 gives ~6 trading
+  // days' notice. Counts every active market (not just those fetched this run),
+  // after this run's writes.
+  const windowStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  const rowCounts = new Map<string, number>()
+  for (let page = 0; ; page++) {
+    const { data, error } = await db.from('market_state_daily')
+      .select('market_id').gte('date', windowStart)
+      .order('market_id').order('date')
+      .range(page * 1000, page * 1000 + 999)
+    if (error) { console.error(`Coverage check failed: ${error.message}`); break }
+    for (const r of data ?? []) rowCounts.set(r.market_id, (rowCounts.get(r.market_id) ?? 0) + 1)
+    if (!data || data.length < 1000) break
+  }
+  const thinMarkets = (marketRows ?? [])
+    .filter(m => !SYMBOL_FILTER || SYMBOL_FILTER.has(m.symbol))
+    .map(m => ({ m, rows: rowCounts.get(m.market_id) ?? 0 }))
+    .filter(({ rows }) => rows < COVERAGE_WARN_ROWS)
+  console.log(`\nCoverage check: ${thinMarkets.length} active market(s) under ${COVERAGE_WARN_ROWS} rows since ${windowStart}`)
+  for (const { m, rows } of thinMarkets) {
+    reportDegraded(m.symbol, m.price_data_symbol ?? '?',
+      `only ${rows} market_state_daily row(s) since ${windowStart} (warning threshold ${COVERAGE_WARN_ROWS})`,
+      rows < ENGINE_MIN_ROWS
+        ? `Below the engine's ${ENGINE_MIN_ROWS}-row minimum: the market is already being skipped.`
+        : `The engine skips the market below ${ENGINE_MIN_ROWS} rows.`)
   }
 
   console.log('\n=== SUMMARY ===')
