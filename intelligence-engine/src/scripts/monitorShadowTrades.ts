@@ -168,6 +168,23 @@ function entryScanFrom(trade: { generated_at: string; monitor_from: string | nul
   return monitorFrom > generatedAt ? monitorFrom : generatedAt
 }
 
+// ── Expiry settlement ────────────────────────────────────────────────────────
+// Azure writes each 5-min bar ~11 minutes after the bar opens, so on the first
+// run after expires_at the last bars before expiry are usually not there yet.
+// Expiring then would miss a late trigger (NOT_TRIGGERED) or exit on a stale
+// price 10-35 min before expiry (TRIGGERED). Only expire once the final
+// pre-expiry bar (or any later bar) has landed, or -- for markets with no bar
+// near expiry at all (closed/illiquid) -- once EXPIRY_GRACE_MS has passed.
+
+const FIVE_MIN_MS = 5 * 60 * 1000
+const EXPIRY_GRACE_MS = 30 * 60 * 1000
+
+function expiryDataSettled(bars: Bar[], expiresAt: Date, now: Date): boolean {
+  const finalBarStartMs = expiresAt.getTime() - FIVE_MIN_MS
+  return bars.some(b => b.ts * 1000 >= finalBarStartMs) ||
+    now.getTime() >= expiresAt.getTime() + EXPIRY_GRACE_MS
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -319,8 +336,7 @@ async function main() {
       // ── Handle NOT_TRIGGERED ──────────────────────────────────────────────
       if (status === 'NOT_TRIGGERED') {
 
-        // Check expiry first
-        if (now >= expiresAt) {
+        const expireNotTriggered = async () => {
           const { error: updateError } = await db.from('shadow_trade_outcomes').update({
             trade_outcome_status: 'EXPIRY',
             exit_reason: 'EXPIRED_NOT_TRIGGERED',
@@ -331,11 +347,12 @@ async function main() {
           if (updateError) logUpdateError('NOT_TRIGGERED expiry', trade.shadow_trade_id, updateError)
           console.log(`  ${symbol}: EXPIRED (not triggered)`)
           summary.expired++
-          continue
         }
 
-        // ENTER_NOW — trigger immediately if not already done
+        // ENTER_NOW — trigger immediately if not already done (no bars to scan,
+        // so an ENTER_NOW trade first seen after expiry just expires).
         if (trade.entry_mode === 'ENTER_NOW') {
+          if (now >= expiresAt) { await expireNotTriggered(); continue }
           const triggeredPrice = trade.generated_price ?? trade.entry
           const { error: updateError } = await db.from('shadow_trade_outcomes').update({
             trade_outcome_status: 'TRIGGERED',
@@ -453,7 +470,18 @@ async function main() {
             break
           }
         }
-        if (!triggered) console.log(`  ${symbol}: monitoring (not triggered)`)
+        // Expiry is checked only AFTER the scan above, so a trigger bar before
+        // expires_at is never skipped -- and only once the final pre-expiry bars
+        // have landed in Azure (see expiryDataSettled()).
+        if (!triggered) {
+          if (now < expiresAt) {
+            console.log(`  ${symbol}: monitoring (not triggered)`)
+          } else if (!expiryDataSettled(bars, expiresAt, now)) {
+            console.log(`  ${symbol}: past expiry -- awaiting final pre-expiry bars before expiring`)
+          } else {
+            await expireNotTriggered()
+          }
+        }
         continue
       }
 
@@ -629,8 +657,11 @@ async function main() {
           // above only ever checks `barTime >= expiresAt` against bars that
           // actually exist, so a symbol with a data gap spanning expiresAt would
           // otherwise sit TRIGGERED forever, re-scanning the same stale bars
-          // every 5-minute run.
-          if (now >= expiresAt) {
+          // every 5-minute run. Waits for the final pre-expiry bar to land (or
+          // EXPIRY_GRACE_MS) so the exit isn't taken from a stale bar.
+          if (now >= expiresAt && !expiryDataSettled(bars, expiresAt, now)) {
+            console.log(`  ${symbol}: past expiry -- awaiting final pre-expiry bars before closing`)
+          } else if (now >= expiresAt) {
             const barsBeforeExpiry = bars.filter(b => new Date(b.ts * 1000) < expiresAt)
             const lastBar = barsBeforeExpiry[barsBeforeExpiry.length - 1]
             const exitPrice = lastBar?.c ?? null
