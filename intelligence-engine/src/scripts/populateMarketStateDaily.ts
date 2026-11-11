@@ -54,12 +54,53 @@ const fromDate = isHistory
   ? HISTORY_START
   : new Date(Date.now() - DAYS_TO_FETCH * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
-/** Converts a getCandles() response into the sorted OhlcBar[] shape the rest of this script expects. */
-function candlesToOhlcBars(candles: FinnhubCandleResponse): OhlcBar[] {
-  const bars: OhlcBar[] = candles.t.map((ts, i) => ({
-    date: new Date(ts * 1000).toISOString().slice(0, 10),
-    open: candles.o[i]!, high: candles.h[i]!, low: candles.l[i]!, close: candles.c[i]!,
-  }))
+/** True when `ts` is 17:00 America/New_York -- a bar stamped at its session OPEN. */
+function isNySessionOpenStamp(ts: number): boolean {
+  const ny = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).format(ts * 1000)
+  return ny === '17:00'
+}
+
+/**
+ * Converts a getCandles() response into the sorted OhlcBar[] shape the rest of
+ * this script expects, one bar per date, each labelled with the date of the
+ * 17:00 America/New_York session it CLOSES (the convention OANDA daily bars
+ * use: stamped 00:00Z of the close date).
+ *
+ * Some feeds (USDTRY -- the only FXCM market, AssetId 102773) stamp daily bars
+ * at the session OPEN instead (21:00Z under EDT, 22:00Z under EST), which a
+ * plain UTC-date slice labels one day early. Those bars are relabelled to the
+ * next date. If a date then has more than one bar (USDTRY from 2026-09-23 also
+ * has 00:00Z copies of the same session), the close-stamped (00:00Z) bar is
+ * kept -- it is the complete session; an open-stamped bar is either an exact
+ * copy of it or a partial snapshot -- and a warning names the market and dates.
+ */
+export function candlesToOhlcBars(candles: FinnhubCandleResponse, finnhubSymbol: string): OhlcBar[] {
+  const byDate = new Map<string, { bar: OhlcBar; openStamped: boolean }>()
+  const collisions: string[] = []
+  let relabelled = 0
+  for (let i = 0; i < candles.t.length; i++) {
+    const ts = candles.t[i]!
+    const openStamped = isNySessionOpenStamp(ts)
+    if (openStamped) relabelled++
+    const date = new Date((ts + (openStamped ? 24 * 60 * 60 : 0)) * 1000).toISOString().slice(0, 10)
+    const bar: OhlcBar = { date, open: candles.o[i]!, high: candles.h[i]!, low: candles.l[i]!, close: candles.c[i]! }
+    const existing = byDate.get(date)
+    if (existing) {
+      collisions.push(date)
+      if (existing.openStamped && !openStamped) byDate.set(date, { bar, openStamped })
+      continue
+    }
+    byDate.set(date, { bar, openStamped })
+  }
+  if (relabelled > 0) {
+    console.warn(`  WARN: ${finnhubSymbol}: ${relabelled} daily bar(s) stamped at the 17:00 New York session open -- relabelled to the session close date`)
+  }
+  if (collisions.length > 0) {
+    console.warn(`  WARN: ${finnhubSymbol}: ${collisions.length} date(s) with more than one daily bar after relabelling, kept the close-stamped bar: ${collisions.join(', ')}`)
+  }
+  const bars = [...byDate.values()].map(v => v.bar)
   bars.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
   return bars
 }
@@ -89,95 +130,6 @@ async function fetchIntradayAsDailyBar(
   }
 }
 
-/**
- * Unix seconds of 17:00 America/New_York on `date` (21:00Z under EDT, 22:00Z
- * under EST). The Azure daily table labels each bar with the date of the
- * NY-close session it ENDS -- the bar dated D covers [17:00 NY on D-1,
- * 17:00 NY on D), verified against 5-min aggregates for OANDA FX.
- */
-function nyCloseUtcSeconds(date: string): number {
-  for (const hourUtc of [21, 22]) {
-    const ts = Date.parse(`${date}T${hourUtc}:00:00Z`)
-    const nyHour = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'America/New_York', hour: '2-digit', hourCycle: 'h23',
-    }).format(ts)
-    if (nyHour === '17') return ts / 1000
-  }
-  throw new Error(`Could not resolve 17:00 America/New_York for ${date}`)
-}
-
-/**
- * Builds the daily bar for `date` from Azure 5-minute bars over the NY-close
- * session [17:00 NY on date-1, 17:00 NY on date). Returns the bar plus the
- * number of 5-min bars it was built from (null if there were none).
- */
-async function fetchNyCloseSessionBar(
-  finnhubSymbol: string, date: string,
-): Promise<{ bar: OhlcBar; count: number } | null> {
-  const prevDate = new Date(Date.parse(date + 'T00:00:00Z') - 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-  const sessionStart = nyCloseUtcSeconds(prevDate)
-  const sessionEnd   = nyCloseUtcSeconds(date)
-
-  // getCandles' `to` is inclusive -- stop one second short of the next session.
-  const candles = await getCandles(finnhubSymbol, '5', sessionStart, sessionEnd - 1)
-  if (candles.s !== 'ok' || !candles.c?.length) return null
-
-  return {
-    bar: {
-      date,
-      open:  candles.o[0]!,
-      high:  Math.max(...candles.h),
-      low:   Math.min(...candles.l),
-      close: candles.c[candles.c.length - 1]!,
-    },
-    count: candles.c.length,
-  }
-}
-
-/**
- * Some feeds return more than one daily bar for the same UTC date (e.g.
- * USDTRY from 2026-09-23 has both a 00:00Z and a 21:00Z/22:00Z bar). Never
- * pick one of them -- rebuild each such date from 5-min bars over the
- * NY-close session instead, and warn loudly naming the market and dates.
- * A date with no 5-min data to rebuild from is dropped (also warned), rather
- * than guessing which daily bar is right. Returns bars sorted by date, one
- * per date, plus the dates that were rebuilt.
- */
-export async function resolveMultiBarDates(
-  marketSymbol: string, finnhubSymbol: string, bars: OhlcBar[],
-): Promise<{ bars: OhlcBar[]; rebuiltDates: Set<string> }> {
-  const countByDate = new Map<string, number>()
-  for (const b of bars) countByDate.set(b.date, (countByDate.get(b.date) ?? 0) + 1)
-  const multiDates = [...countByDate].filter(([, n]) => n > 1).map(([d]) => d)
-  if (multiDates.length === 0) return { bars, rebuiltDates: new Set() }
-
-  const rebuilt = new Map<string, OhlcBar>()
-  const rebuiltLog: string[] = []
-  const dropped: string[] = []
-  for (const date of multiDates) {
-    const session = await fetchNyCloseSessionBar(finnhubSymbol, date)
-    if (session) {
-      rebuilt.set(date, session.bar)
-      rebuiltLog.push(`${date}(${countByDate.get(date)} D bars -> ${session.count} 5-min bars)`)
-    } else {
-      dropped.push(date)
-    }
-  }
-
-  console.warn(
-    `  WARN: ${marketSymbol}: ${multiDates.length} date(s) with more than one daily bar,` +
-    ` rebuilt from 5-min (NY-close boundary): ${rebuiltLog.join(', ') || 'none'}`
-  )
-  if (dropped.length > 0) {
-    console.warn(`  WARN: ${marketSymbol}: no 5-min data to rebuild ${dropped.join(', ')} -- dates dropped`)
-  }
-
-  const multi = new Set(multiDates)
-  const out = bars.filter(b => !multi.has(b.date)).concat([...rebuilt.values()])
-  out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
-  return { bars: out, rebuiltDates: new Set(rebuilt.keys()) }
-}
-
 function checkCandleStatus(candles: FinnhubCandleResponse, finnhubSymbol: string): void {
   if (candles.s === 'no_mapping') {
     throw new Error(`No Azure asset mapping for "${finnhubSymbol}" (finnhub_to_acuity.csv)`)
@@ -192,7 +144,7 @@ async function fetchRecentOhlc(finnhubSymbol: string, days: number): Promise<Ohl
   const from = to - days * 24 * 60 * 60
   const candles = await getCandles(finnhubSymbol, 'D', from, to)
   checkCandleStatus(candles, finnhubSymbol)
-  return candlesToOhlcBars(candles)
+  return candlesToOhlcBars(candles, finnhubSymbol)
 }
 
 /**
@@ -206,7 +158,7 @@ async function fetchHistoricalOhlc(finnhubSymbol: string, fromDateIso: string): 
   const to   = Math.floor(Date.now() / 1000)
   const candles = await getCandles(finnhubSymbol, 'D', from, to)
   checkCandleStatus(candles, finnhubSymbol)
-  return candlesToOhlcBars(candles)
+  return candlesToOhlcBars(candles, finnhubSymbol)
 }
 
 /**
@@ -220,7 +172,7 @@ async function fetchStockOhlc(finnhubSymbol: string, days: number): Promise<Ohlc
   const from = to - days * 24 * 60 * 60
   const candles = await getCandles(finnhubSymbol, 'D', from, to)
   checkCandleStatus(candles, finnhubSymbol)
-  return candlesToOhlcBars(candles)
+  return candlesToOhlcBars(candles, finnhubSymbol)
 }
 
 async function main() {
@@ -287,14 +239,11 @@ async function main() {
     }
     try {
       const isICMarkets = market.price_data_provider === 'IC_MARKETS'
-      const fetchedBars = isICMarkets
+      const bars = isICMarkets
         ? await fetchStockOhlc(market.price_data_symbol, DAYS_TO_FETCH)
         : isHistory
           ? await fetchHistoricalOhlc(market.price_data_symbol, HISTORY_START)
           : await fetchRecentOhlc(market.price_data_symbol, DAYS_TO_FETCH)
-      const { bars, rebuiltDates } = await resolveMultiBarDates(
-        market.symbol, market.price_data_symbol, fetchedBars,
-      )
 
       // The daily table may lag 1-2 days; fill today/yesterday from 5-minute
       // bars when the daily table hasn't caught up yet. Only fills genuinely
@@ -357,10 +306,7 @@ async function main() {
           imported_at:      new Date().toISOString(),
           raw_payload:      syntheticDates.has(bar.date)
             ? { symbol: market.price_data_symbol, bar, synthetic: true, aggregatedFrom: '5min' }
-            : rebuiltDates.has(bar.date)
-              ? { symbol: market.price_data_symbol, bar, synthetic: true, aggregatedFrom: '5min',
-                  reason: 'multiple_daily_bars', boundary: 'ny_close' }
-              : { symbol: market.price_data_symbol, bar },
+            : { symbol: market.price_data_symbol, bar },
         })
       }
 
