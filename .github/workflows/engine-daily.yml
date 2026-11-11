@@ -168,7 +168,6 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          FINNHUB_CANDLE_API_KEY: ${{ secrets.FINNHUB_CANDLE_API_KEY }}
 
   snapshot-us:
     name: Intraday Snapshot -- US
@@ -191,10 +190,6 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           PRICES_TABLE_CONN: ${{ secrets.PRICES_TABLE_CONN }}
-          # TEMPORARY (2026-10-23): Solana and Litecoin have no Azure asset mapping at all
-          # (finnhub_to_acuity.csv has no entry under any exchange). Remove once they do.
-          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
-          FINNHUB_CANDLE_API_KEY: ${{ secrets.FINNHUB_CANDLE_API_KEY }}
 
   engine-us:
     name: Engine Session -- US
@@ -222,7 +217,6 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          FINNHUB_CANDLE_API_KEY: ${{ secrets.FINNHUB_CANDLE_API_KEY }}
 
   snapshot-apac:
     name: Intraday Snapshot -- APAC
@@ -290,7 +284,6 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          FINNHUB_CANDLE_API_KEY: ${{ secrets.FINNHUB_CANDLE_API_KEY }}
 
   generate-profiles:
     name: Generate Analyst Profiles
@@ -386,7 +379,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          PRICES_TABLE_CONN: ${{ secrets.PRICES_TABLE_CONN }}
 
   generate-post-trade-reviews:
     name: Generate Post-Trade Reviews

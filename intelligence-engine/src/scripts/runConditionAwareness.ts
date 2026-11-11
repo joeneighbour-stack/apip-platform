@@ -15,11 +15,17 @@
 //
 // Run every 15 mins via GitHub Actions during session windows.
 //
-// Required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, FINNHUB_API_KEY
+// Current price is the latest Azure Table Storage 5-min bar close (Azure only --
+// a market with no Azure data is reported DEGRADED and skipped, see
+// src/lib/priceHealth.ts).
+//
+// Required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, PRICES_TABLE_CONN
 // ============================================================================
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { assessCondition } from '../services/recommendationLifecycleService.js'
+import { getLatestBar } from '../lib/azurePrices.js'
+import { reportDegraded } from '../lib/priceHealth.js'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
@@ -34,24 +40,17 @@ const SLA_MINUTES: Record<string, number> = {
   SYSTEM_FAILURE: 15,
 }
 
-async function fetchCurrentPrice(finnhubSymbol: string, apiKey: string): Promise<number | null> {
-  try {
-    const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(finnhubSymbol)}&token=${apiKey}`
-    const response = await fetch(url)
-    if (!response.ok) return null
-    const quote = await response.json() as { c: number }
-    return quote.c && quote.c > 0 ? quote.c : null
-  } catch {
-    return null
-  }
+/** Latest Azure 5-min close, or null if Azure has no mapping/bars for the symbol. */
+async function fetchCurrentPrice(priceSymbol: string): Promise<number | null> {
+  const bar = await getLatestBar(priceSymbol, '5')
+  return bar && bar.Close > 0 ? bar.Close : null
 }
 
 async function main() {
   const SUPABASE_URL = process.env.SUPABASE_URL
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
-  const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY
 
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !FINNHUB_API_KEY) {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !process.env.PRICES_TABLE_CONN) {
     console.error('Missing required env vars')
     process.exit(1)
   }
@@ -119,8 +118,11 @@ async function main() {
 
     const atr14 = atr14ByMarketId.get(market.market_id) ?? null
 
-    const currentPrice = await fetchCurrentPrice(market.price_data_symbol, FINNHUB_API_KEY)
-    if (!currentPrice) { summary.errors++; continue }
+    const currentPrice = await fetchCurrentPrice(market.price_data_symbol)
+    if (!currentPrice) {
+      reportDegraded(market.symbol, market.price_data_symbol, 'no Azure 5-min bar in the last 2 days')
+      summary.errors++; continue
+    }
 
     const { data: intraday } = await db
       .from('market_state_intraday')
@@ -189,7 +191,7 @@ async function main() {
       case 'DO_NOT_USE_RECALCULATE': summary.doNotUse++; break
     }
 
-    // Rate limit Finnhub
+    // Pace Azure table queries
     await new Promise(r => setTimeout(r, 100))
   }
 
