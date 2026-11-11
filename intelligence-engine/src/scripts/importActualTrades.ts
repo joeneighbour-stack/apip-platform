@@ -12,7 +12,9 @@
 //   npx tsx src/scripts/importActualTrades.ts --from=2026-01-01  # from specific date
 //   npx tsx src/scripts/importActualTrades.ts --from=2024-01-01 --to=2026-07-01  # full backfill
 //
-// Required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, N8N_WEBHOOK_URL
+// Required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, N8N_WEBHOOK_USERNAME,
+//   N8N_WEBHOOK_PASSWORD. Optional: N8N_WEBHOOK_URL (defaults to the
+//   signal-performance webhook).
 // ============================================================================
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
@@ -25,8 +27,9 @@ import path from 'node:path'
 import { SYMBOL_OVERRIDES } from '../../../apps/web/lib/symbolNormalization'
 
 const WEBHOOK_URL = process.env.N8N_WEBHOOK_URL ?? 'https://n8n.srv1104653.hstgr.cloud/webhook/signal-performance'
-const WEBHOOK_USERNAME = process.env.N8N_WEBHOOK_USERNAME ?? 'product'
-const WEBHOOK_PASSWORD = process.env.N8N_WEBHOOK_PASSWORD ?? 'barcelona123'
+// Credentials come from the environment only -- main() exits if either is missing.
+const WEBHOOK_USERNAME = process.env.N8N_WEBHOOK_USERNAME
+const WEBHOOK_PASSWORD = process.env.N8N_WEBHOOK_PASSWORD
 
 // Analyst code → display name for lookup
 const ANALYST_CODE_MAP: Record<string, string> = {
@@ -72,6 +75,10 @@ async function main() {
     const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
     if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
       console.error('Missing required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY')
+      process.exit(1)
+    }
+    if (!WEBHOOK_USERNAME || !WEBHOOK_PASSWORD) {
+      console.error('Missing required env vars: N8N_WEBHOOK_USERNAME, N8N_WEBHOOK_PASSWORD')
       process.exit(1)
     }
 
