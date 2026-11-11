@@ -38,6 +38,10 @@ const ZONE_COUNT = 4
 const daysArg = process.argv.find(a => a.startsWith('--days='))?.split('=')[1]
 const DAYS_TO_FETCH = Number(daysArg ?? 60)
 
+// --symbol=USDTRY[,EURUSD] restricts the run to the named markets (markets.symbol).
+const symbolArg = process.argv.find(a => a.startsWith('--symbol='))?.split('=')[1]
+const SYMBOL_FILTER = symbolArg ? new Set(symbolArg.split(',').map(s => s.trim())) : null
+
 const isHistory = process.argv.includes('--history')
 const HISTORY_START = '2019-01-01' // provides warmup bars before 2020 analyst trades
 
@@ -83,6 +87,95 @@ async function fetchIntradayAsDailyBar(
     low:   Math.min(...candles.l),
     close: candles.c[candles.c.length - 1]!,
   }
+}
+
+/**
+ * Unix seconds of 17:00 America/New_York on `date` (21:00Z under EDT, 22:00Z
+ * under EST). The Azure daily table labels each bar with the date of the
+ * NY-close session it ENDS -- the bar dated D covers [17:00 NY on D-1,
+ * 17:00 NY on D), verified against 5-min aggregates for OANDA FX.
+ */
+function nyCloseUtcSeconds(date: string): number {
+  for (const hourUtc of [21, 22]) {
+    const ts = Date.parse(`${date}T${hourUtc}:00:00Z`)
+    const nyHour = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York', hour: '2-digit', hourCycle: 'h23',
+    }).format(ts)
+    if (nyHour === '17') return ts / 1000
+  }
+  throw new Error(`Could not resolve 17:00 America/New_York for ${date}`)
+}
+
+/**
+ * Builds the daily bar for `date` from Azure 5-minute bars over the NY-close
+ * session [17:00 NY on date-1, 17:00 NY on date). Returns the bar plus the
+ * number of 5-min bars it was built from (null if there were none).
+ */
+async function fetchNyCloseSessionBar(
+  finnhubSymbol: string, date: string,
+): Promise<{ bar: OhlcBar; count: number } | null> {
+  const prevDate = new Date(Date.parse(date + 'T00:00:00Z') - 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  const sessionStart = nyCloseUtcSeconds(prevDate)
+  const sessionEnd   = nyCloseUtcSeconds(date)
+
+  // getCandles' `to` is inclusive -- stop one second short of the next session.
+  const candles = await getCandles(finnhubSymbol, '5', sessionStart, sessionEnd - 1)
+  if (candles.s !== 'ok' || !candles.c?.length) return null
+
+  return {
+    bar: {
+      date,
+      open:  candles.o[0]!,
+      high:  Math.max(...candles.h),
+      low:   Math.min(...candles.l),
+      close: candles.c[candles.c.length - 1]!,
+    },
+    count: candles.c.length,
+  }
+}
+
+/**
+ * Some feeds return more than one daily bar for the same UTC date (e.g.
+ * USDTRY from 2026-09-23 has both a 00:00Z and a 21:00Z/22:00Z bar). Never
+ * pick one of them -- rebuild each such date from 5-min bars over the
+ * NY-close session instead, and warn loudly naming the market and dates.
+ * A date with no 5-min data to rebuild from is dropped (also warned), rather
+ * than guessing which daily bar is right. Returns bars sorted by date, one
+ * per date, plus the dates that were rebuilt.
+ */
+export async function resolveMultiBarDates(
+  marketSymbol: string, finnhubSymbol: string, bars: OhlcBar[],
+): Promise<{ bars: OhlcBar[]; rebuiltDates: Set<string> }> {
+  const countByDate = new Map<string, number>()
+  for (const b of bars) countByDate.set(b.date, (countByDate.get(b.date) ?? 0) + 1)
+  const multiDates = [...countByDate].filter(([, n]) => n > 1).map(([d]) => d)
+  if (multiDates.length === 0) return { bars, rebuiltDates: new Set() }
+
+  const rebuilt = new Map<string, OhlcBar>()
+  const rebuiltLog: string[] = []
+  const dropped: string[] = []
+  for (const date of multiDates) {
+    const session = await fetchNyCloseSessionBar(finnhubSymbol, date)
+    if (session) {
+      rebuilt.set(date, session.bar)
+      rebuiltLog.push(`${date}(${countByDate.get(date)} D bars -> ${session.count} 5-min bars)`)
+    } else {
+      dropped.push(date)
+    }
+  }
+
+  console.warn(
+    `  WARN: ${marketSymbol}: ${multiDates.length} date(s) with more than one daily bar,` +
+    ` rebuilt from 5-min (NY-close boundary): ${rebuiltLog.join(', ') || 'none'}`
+  )
+  if (dropped.length > 0) {
+    console.warn(`  WARN: ${marketSymbol}: no 5-min data to rebuild ${dropped.join(', ')} -- dates dropped`)
+  }
+
+  const multi = new Set(multiDates)
+  const out = bars.filter(b => !multi.has(b.date)).concat([...rebuilt.values()])
+  out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+  return { bars: out, rebuiltDates: new Set(rebuilt.keys()) }
 }
 
 function checkCandleStatus(candles: FinnhubCandleResponse, finnhubSymbol: string): void {
@@ -164,10 +257,12 @@ async function main() {
   }
 
   const markets = (marketRows ?? []).filter(m =>
-    m.price_data_provider === 'FINNHUB_OANDA' ||
-    m.price_data_provider === 'FINNHUB_CRYPTO' ||
-    m.price_data_provider === 'IC_MARKETS'
+    (m.price_data_provider === 'FINNHUB_OANDA' ||
+     m.price_data_provider === 'FINNHUB_CRYPTO' ||
+     m.price_data_provider === 'IC_MARKETS') &&
+    (!SYMBOL_FILTER || SYMBOL_FILTER.has(m.symbol))
   )
+  if (SYMBOL_FILTER) console.log(`Symbol filter: ${[...SYMBOL_FILTER].join(', ')}`)
   const skippedProviders = (marketRows ?? []).filter(m =>
     m.price_data_provider !== 'FINNHUB_OANDA' &&
     m.price_data_provider !== 'FINNHUB_CRYPTO' &&
@@ -192,11 +287,14 @@ async function main() {
     }
     try {
       const isICMarkets = market.price_data_provider === 'IC_MARKETS'
-      const bars = isICMarkets
+      const fetchedBars = isICMarkets
         ? await fetchStockOhlc(market.price_data_symbol, DAYS_TO_FETCH)
         : isHistory
           ? await fetchHistoricalOhlc(market.price_data_symbol, HISTORY_START)
           : await fetchRecentOhlc(market.price_data_symbol, DAYS_TO_FETCH)
+      const { bars, rebuiltDates } = await resolveMultiBarDates(
+        market.symbol, market.price_data_symbol, fetchedBars,
+      )
 
       // The daily table may lag 1-2 days; fill today/yesterday from 5-minute
       // bars when the daily table hasn't caught up yet. Only fills genuinely
@@ -259,7 +357,10 @@ async function main() {
           imported_at:      new Date().toISOString(),
           raw_payload:      syntheticDates.has(bar.date)
             ? { symbol: market.price_data_symbol, bar, synthetic: true, aggregatedFrom: '5min' }
-            : { symbol: market.price_data_symbol, bar },
+            : rebuiltDates.has(bar.date)
+              ? { symbol: market.price_data_symbol, bar, synthetic: true, aggregatedFrom: '5min',
+                  reason: 'multiple_daily_bars', boundary: 'ny_close' }
+              : { symbol: market.price_data_symbol, bar },
         })
       }
 
