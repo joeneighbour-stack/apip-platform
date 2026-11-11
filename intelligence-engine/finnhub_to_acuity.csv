@@ -3737,3 +3737,5 @@ OANDA:ES35_USD,oanda,NULL,ES35 Spain IBEX 35 - temp mapped to IC MARKETS AssetId
 BINANCE:BTCUSDT,BINANCE,NULL,Bitcoin - temp mapped to COINBASE AssetId (pending native Binance Azure coverage),NULL,NULL,,crypto,113052
 BINANCE:ETHUSDT,BINANCE,NULL,Ethereum - temp mapped to COINBASE AssetId (pending native Binance Azure coverage),NULL,NULL,,crypto,113061
 BINANCE:XRPUSDT,BINANCE,NULL,Ripple - temp mapped to COINBASE AssetId (pending native Binance Azure coverage),NULL,NULL,,crypto,113063
+BINANCE:SOLUSDT,BINANCE,NULL,Solana - temp mapped to COINBASE AssetId (pending native Binance Azure coverage),NULL,NULL,,crypto,115401
+BINANCE:LTCUSDT,BINANCE,NULL,Litecoin - temp mapped to COINBASE AssetId (pending native Binance Azure coverage),NULL,NULL,,crypto,113062
