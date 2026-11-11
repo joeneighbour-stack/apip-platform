@@ -1,31 +1,13 @@
 // apps/web/app/api/prices/live/route.ts
-// Returns current prices for a list of symbols using Finnhub quote API.
-// Keeps API key server-side. Called by useLivePrices hook every 30 seconds.
+// Returns current prices for a list of market symbols from Azure Table Storage
+// 5-minute bars (latest close) -- the only price source. A market with no
+// Azure data is left out of the response and logged as DEGRADED; no other
+// source is ever used. Called by the useLivePrices hook.
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { getCurrentUser } from '@/lib/auth'
-
-const FINNHUB_KEY = process.env.FINNHUB_CANDLE_API_KEY
-
-async function getQuote(symbol: string, isCrypto: boolean): Promise<number | null> {
-  try {
-    const endpoint = isCrypto
-      ? `https://finnhub.io/api/v1/crypto/candle?symbol=${encodeURIComponent(symbol)}&resolution=1&from=${Math.floor(Date.now()/1000)-120}&to=${Math.floor(Date.now()/1000)}&token=${FINNHUB_KEY}`
-      : `https://finnhub.io/api/v1/forex/candle?symbol=${encodeURIComponent(symbol)}&resolution=1&from=${Math.floor(Date.now()/1000)-120}&to=${Math.floor(Date.now()/1000)}&token=${FINNHUB_KEY}`
-
-    const res = await fetch(endpoint, { next: { revalidate: 0 } })
-    if (!res.ok) return null
-    const data = await res.json()
-    // Return latest close price
-    if (data.s === 'ok' && data.c?.length > 0) {
-      return data.c[data.c.length - 1]
-    }
-    return null
-  } catch {
-    return null
-  }
-}
+import { getLatestAzurePrice } from '@/lib/azurePrices'
 
 export async function POST(req: NextRequest) {
   // Already implicitly gated by RLS (markets_select_all requires auth.uid() is
@@ -33,8 +15,6 @@ export async function POST(req: NextRequest) {
   // other data-serving route. Called before the try/catch below so an
   // unauthenticated redirect isn't swallowed by the generic catch-all.
   await getCurrentUser()
-
-  if (!FINNHUB_KEY) return NextResponse.json({})
 
   try {
     const { symbols } = await req.json() as { symbols: string[] }
@@ -44,7 +24,7 @@ export async function POST(req: NextRequest) {
     const supabase = await createClient()
     const { data: markets } = await supabase
       .from('markets')
-      .select('symbol, asset_class, price_data_symbol')
+      .select('symbol, price_data_symbol')
       .in('symbol', symbols)
 
     if (!markets?.length) return NextResponse.json({})
@@ -53,9 +33,12 @@ export async function POST(req: NextRequest) {
     const results = await Promise.all(
       markets.map(async (m) => {
         if (!m.price_data_symbol) return { symbol: m.symbol, price: null }
-        const isCrypto = m.asset_class === 'CRYPTO'
-        const price = await getQuote(m.price_data_symbol, isCrypto)
-        return { symbol: m.symbol, price }
+        const latest = await getLatestAzurePrice(m.price_data_symbol)
+        if (latest.status === 'degraded') {
+          console.error(`DEGRADED: ${m.symbol} (${m.price_data_symbol}) -- ${latest.reason}. Live price omitted; no other source used.`)
+          return { symbol: m.symbol, price: null }
+        }
+        return { symbol: m.symbol, price: latest.price }
       })
     )
 
