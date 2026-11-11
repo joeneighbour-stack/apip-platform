@@ -1,6 +1,6 @@
 -- ============================================================================
 -- APIP Trading Intelligence & Performance Platform
--- Migration 069 -- shadow_outcome_recomputes audit table
+-- Migration 072 -- shadow_outcome_recomputes audit table
 -- ============================================================================
 -- Audit trail for historical re-monitoring of shadow trades (see
 -- intelligence-engine/src/scripts/recomputeShadowOutcomes.ts). One row per

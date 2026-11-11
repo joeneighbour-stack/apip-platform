@@ -18,8 +18,8 @@
 // Run:
 //   npx tsx src/scripts/recomputeShadowOutcomes.ts --dry-run --out=changes.json
 //   npx tsx src/scripts/recomputeShadowOutcomes.ts --apply
-//     Writes one shadow_outcome_recomputes row (migrations/069) per changed
-//     outcome, then updates shadow_trade_outcomes. Requires migration 069.
+//     Writes one shadow_outcome_recomputes row (migrations/072) per changed
+//     outcome, then updates shadow_trade_outcomes. Requires migration 072.
 //
 // Required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, PRICES_TABLE_CONN
 // ============================================================================
