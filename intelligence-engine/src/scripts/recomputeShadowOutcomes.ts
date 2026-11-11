@@ -10,7 +10,8 @@
 // monitorShadowTrades.ts, as a pure function over the full bar history.
 //
 // Excluded (reported, never changed):
-//   - markets without reliable Azure data (EXCLUDED_MARKETS)
+//   - markets without reliable Azure data (EXCLUDED_MARKETS -- USDTRY, whose
+//     only Azure feed is FXCM with poor 5-min data)
 //   - CANCELLED / CANCELLED_BEFORE_TRIGGER outcomes (deliberate cancellations,
 //     e.g. migrations/064_cancel_premature_triggers.sql)
 //   - trades whose window (scan start to expiry) touches a weekday with
@@ -22,6 +23,18 @@
 //   npx tsx src/scripts/recomputeShadowOutcomes.ts --apply
 //     Writes one shadow_outcome_recomputes row (migrations/072) per changed
 //     outcome, then updates shadow_trade_outcomes. Requires migration 072.
+//     Changes in HELD_CATEGORIES are reported but never applied.
+//
+// Every change is classified (classifyChange()) by why the stored outcome
+// differs from the replay:
+//   pre_generation_trigger      (i) triggered on a bar before generated_at
+//   finnhub_era                 decided on Finnhub bars (before the Azure switch)
+//   no_azure_mapping_at_monitor monitored while Azure had no mapping for the symbol
+//   azure_lag_at_expiry         expiry decided before the final pre-expiry bars
+//                               landed (expiry-first / stale force-expire bugs)
+//   unknown_cotrigger           co-triggered later than the trade's own earlier
+//                               trigger, cause not established -- HELD
+//   unexplained                 none of the above -- HELD
 //
 // Required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, PRICES_TABLE_CONN
 // ============================================================================
@@ -32,7 +45,18 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { getCandles } from '../lib/azurePrices.js'
 
-const EXCLUDED_MARKETS = new Set(['USDTRY', 'Solana', 'Litecoin'])
+const EXCLUDED_MARKETS = new Set(['USDTRY'])
+// monitorShadowTrades.ts switched from Finnhub to Azure bars (commit d87bdfa).
+const AZURE_SWITCH_MS = Date.parse('2026-10-22T09:27:40Z')
+// Until these times the monitor got no Azure bars at all for these markets
+// (mapping commits 08672f8 and 53004ce reaching master).
+const AZURE_MAPPED_AT_MS: Record<string, number> = {
+  Bitcoin: Date.parse('2026-10-23T09:26:48Z'), Ethereum: Date.parse('2026-10-23T09:26:48Z'),
+  Ripple: Date.parse('2026-10-23T09:26:48Z'), NZDCAD: Date.parse('2026-10-23T09:26:48Z'),
+  ESP35: Date.parse('2026-10-23T09:26:48Z'),
+  Solana: Date.parse('2026-11-11T13:25:52Z'), Litecoin: Date.parse('2026-11-11T13:25:52Z'),
+}
+const HELD_CATEGORIES = new Set(['unknown_cotrigger', 'unexplained'])
 const CANCELLED_STATUSES = new Set(['CANCELLED', 'CANCELLED_BEFORE_TRIGGER'])
 const R_TOLERANCE = 1e-9
 // A weekday with fewer 5-min bars than this share of the symbol's median
@@ -66,6 +90,12 @@ export interface ReplayOutcome {
   exit_reason: string | null
   result_r: number | null
   exit_bar_ts: number | null
+  mfe_r: number | null
+  mae_r: number | null
+  mfe_price: number | null
+  mae_price: number | null
+  bars_to_trigger: number | null
+  bars_to_close: number | null
 }
 
 // ── Monitor rules (mirrors monitorShadowTrades.ts) ──────────────────────────
@@ -80,6 +110,16 @@ function calcResultR(direction: 'BUY' | 'SELL', entry: number, exitPrice: number
   const risk = Math.abs(entry - stop)
   if (risk === 0) return 0
   return direction === 'BUY' ? (exitPrice - entry) / risk : (entry - exitPrice) / risk
+}
+
+const FIVE_MIN_MS = 5 * 60 * 1000
+const EXPIRY_GRACE_MS = 30 * 60 * 1000
+
+/** Mirrors expiryDataSettled() in monitorShadowTrades.ts, as of nowMs. */
+function expirySettled(bars: Bar[], expiresMs: number, nowMs: number): boolean {
+  if (nowMs >= expiresMs + EXPIRY_GRACE_MS) return true
+  const i = firstBarAtOrAfter(bars, expiresMs - FIVE_MIN_MS)
+  return i < bars.length && bars[i]!.ts * 1000 <= nowMs
 }
 
 /** Index of the first bar with ts*1000 >= ms (bars sorted ascending). */
@@ -103,11 +143,12 @@ export function replayShadowTrade(trade: ReplayTrade, bars: Bar[], nowMs: number
   const base: ReplayOutcome = {
     status: 'NOT_TRIGGERED', triggered_at: null, triggered_price: null, trigger_source: null,
     closed_at: null, exit_price: null, exit_reason: null, result_r: null, exit_bar_ts: null,
+    mfe_r: null, mae_r: null, mfe_price: null, mae_price: null, bars_to_trigger: null, bars_to_close: null,
   }
 
   // ── Entry ──
   let triggeredMs: number
-  let triggered: Pick<ReplayOutcome, 'triggered_at' | 'triggered_price' | 'trigger_source'>
+  let triggered: Pick<ReplayOutcome, 'triggered_at' | 'triggered_price' | 'trigger_source' | 'bars_to_trigger'>
   if (trade.entry_mode === 'ENTER_NOW') {
     if (nowMs >= expiresMs && Date.parse(trade.generated_at) >= expiresMs) {
       return { ...base, status: 'EXPIRY', exit_reason: 'EXPIRED_NOT_TRIGGERED', closed_at: new Date(expiresMs).toISOString() }
@@ -117,13 +158,16 @@ export function replayShadowTrade(trade: ReplayTrade, bars: Bar[], nowMs: number
       triggered_at: new Date(triggeredMs).toISOString(),
       triggered_price: trade.generated_price ?? entry,
       trigger_source: 'ENTER_NOW_AT_GENERATION',
+      bars_to_trigger: 0,
     }
   } else {
     let hit: typeof triggered | null = null
     triggeredMs = NaN
+    let scanned = 0
     for (let i = firstBarAtOrAfter(bars, entryScanFrom(trade)); i < bars.length; i++) {
       const bar = bars[i]!
       if (bar.ts * 1000 >= expiresMs || bar.ts * 1000 > nowMs) break
+      scanned++
       let price: number | null = null, source: string | null = null
       if (dir === 'BUY') {
         if (bar.o < entry) { price = bar.o; source = 'GAP_FILL_BAR_OPEN' }
@@ -134,12 +178,12 @@ export function replayShadowTrade(trade: ReplayTrade, bars: Bar[], nowMs: number
       }
       if (price !== null) {
         triggeredMs = bar.ts * 1000
-        hit = { triggered_at: new Date(triggeredMs).toISOString(), triggered_price: price, trigger_source: source }
+        hit = { triggered_at: new Date(triggeredMs).toISOString(), triggered_price: price, trigger_source: source, bars_to_trigger: scanned }
         break
       }
     }
     if (!hit) {
-      return nowMs >= expiresMs
+      return nowMs >= expiresMs && expirySettled(bars, expiresMs, nowMs)
         ? { ...base, status: 'EXPIRY', exit_reason: 'EXPIRED_NOT_TRIGGERED', closed_at: new Date(expiresMs).toISOString() }
         : base
     }
@@ -147,6 +191,23 @@ export function replayShadowTrade(trade: ReplayTrade, bars: Bar[], nowMs: number
   }
 
   // ── Post-trigger ──
+  // MFE/MAE in R off the planned entry/stop, over post-trigger bars before
+  // expiry (same basis as monitorShadowTrades.ts calculateR()).
+  const rOf = (price: number) => calcResultR(dir, entry, price, stop)
+  let mfeR = -Infinity, maeR = Infinity
+  let mfePrice: number | null = null, maePrice: number | null = null
+  let barsSinceTrigger = 0
+  const track = (bar: Bar) => {
+    barsSinceTrigger++
+    const best = dir === 'BUY' ? bar.h : bar.l
+    const worst = dir === 'BUY' ? bar.l : bar.h
+    if (rOf(best) > mfeR) { mfeR = rOf(best); mfePrice = best }
+    if (rOf(worst) < maeR) { maeR = rOf(worst); maePrice = worst }
+  }
+  const excursion = () => ({
+    mfe_r: Number.isFinite(mfeR) ? mfeR : null, mae_r: Number.isFinite(maeR) ? maeR : null,
+    mfe_price: mfePrice, mae_price: maePrice, bars_to_close: barsSinceTrigger,
+  })
   const lastBarBeforeExpiry = (): Bar | undefined => {
     const idx = firstBarAtOrAfter(bars, expiresMs) - 1
     return idx >= 0 ? bars[idx] : undefined
@@ -154,10 +215,10 @@ export function replayShadowTrade(trade: ReplayTrade, bars: Bar[], nowMs: number
   const expire = (): ReplayOutcome => {
     const lastBar = lastBarBeforeExpiry()
     const closed_at = new Date(expiresMs).toISOString()
-    if (!lastBar) return { ...base, ...triggered, status: 'EXPIRY', closed_at, exit_reason: 'EXPIRY_PRICE_UNAVAILABLE' }
+    if (!lastBar) return { ...base, ...triggered, ...excursion(), status: 'EXPIRY', closed_at, exit_reason: 'EXPIRY_PRICE_UNAVAILABLE' }
     const r = calcResultR(dir, entry, lastBar.c, stop)
     return {
-      ...base, ...triggered, status: r >= 0 ? 'CLOSED_PROFIT' : 'CLOSED_LOSS', closed_at,
+      ...base, ...triggered, ...excursion(), status: r >= 0 ? 'CLOSED_PROFIT' : 'CLOSED_LOSS', closed_at,
       exit_price: lastBar.c, exit_reason: 'EXPIRY_WITH_PRICE', result_r: r, exit_bar_ts: lastBar.ts,
     }
   }
@@ -167,25 +228,27 @@ export function replayShadowTrade(trade: ReplayTrade, bars: Bar[], nowMs: number
     const barMs = bar.ts * 1000
     if (barMs > nowMs) break
     if (barMs >= expiresMs) return expire()
+    track(bar)
 
     const stopHit   = dir === 'BUY' ? bar.l <= stop   : bar.h >= stop
     const targetHit = dir === 'BUY' ? bar.h >= target : bar.l <= target
     const closed_at = new Date(barMs).toISOString()
     if (stopHit && targetHit) {
-      return { ...base, ...triggered, status: 'AMBIGUOUS', closed_at, exit_reason: 'AMBIGUOUS_SAME_BAR', exit_bar_ts: bar.ts }
+      return { ...base, ...triggered, ...excursion(), status: 'AMBIGUOUS', closed_at, exit_reason: 'AMBIGUOUS_SAME_BAR', exit_bar_ts: bar.ts }
     }
     if (targetHit) {
-      return { ...base, ...triggered, status: 'TARGET_HIT', closed_at, exit_price: target,
+      return { ...base, ...triggered, ...excursion(), status: 'TARGET_HIT', closed_at, exit_price: target,
         exit_reason: 'TARGET_CROSSED', result_r: calcResultR(dir, entry, target, stop), exit_bar_ts: bar.ts }
     }
     if (stopHit) {
-      return { ...base, ...triggered, status: 'STOP_HIT', closed_at, exit_price: stop,
+      return { ...base, ...triggered, ...excursion(), status: 'STOP_HIT', closed_at, exit_price: stop,
         exit_reason: 'STOP_CROSSED', result_r: -1.0, exit_bar_ts: bar.ts }
     }
   }
-  // No bar at/after expiry -- the monitor force-expires once now >= expires_at.
-  if (nowMs >= expiresMs) return expire()
-  return { ...base, ...triggered, status: 'TRIGGERED' }
+  // No bar at/after expiry -- the monitor force-expires once past expires_at
+  // and the final pre-expiry bars have landed (or the grace period passed).
+  if (nowMs >= expiresMs && expirySettled(bars, expiresMs, nowMs)) return expire()
+  return { ...base, ...triggered, ...excursion(), status: 'TRIGGERED' }
 }
 
 // ── Comparison ──────────────────────────────────────────────────────────────
@@ -237,6 +300,33 @@ export function incompleteWeekdays(bars: Bar[], fromMs: number, toMs: number): S
     if ((perDay.get(d) ?? 0) < median * MIN_DAY_COVERAGE) gaps.add(d)
   }
   return gaps
+}
+
+// ── Change classification ───────────────────────────────────────────────────
+
+/**
+ * Why a stored outcome differs from the replay. The decision being compared
+ * is the trigger when the trigger moved, otherwise the close/expiry.
+ */
+export function classifyChange(
+  symbol: string, generatedAt: string, expiresAt: string,
+  old: { status: string; triggered_at: string | null; closed_at: string | null; trigger_source: string | null },
+  next: ReplayOutcome,
+): string {
+  const ms = (x: string | null) => (x ? Date.parse(x) : NaN)
+  if (old.triggered_at && ms(old.triggered_at) < ms(generatedAt)) return 'pre_generation_trigger'
+  const triggerMoved = !sameTime(old.triggered_at, next.triggered_at)
+  const decisionMs = triggerMoved && old.triggered_at ? ms(old.triggered_at)
+    : ms(old.closed_at) || ms(expiresAt)
+  if (decisionMs < AZURE_SWITCH_MS) return 'finnhub_era'
+  const mappedAt = AZURE_MAPPED_AT_MS[symbol]
+  if (mappedAt !== undefined && decisionMs < mappedAt) return 'no_azure_mapping_at_monitor'
+  if (old.trigger_source === 'CO_TRIGGERED_WITH_SIBLING' && next.triggered_at && old.triggered_at &&
+      ms(next.triggered_at) < ms(old.triggered_at)) return 'unknown_cotrigger'
+  // Expiry decisions taken before the final pre-expiry bars landed: a stale
+  // exit price, or a NOT_TRIGGERED expiry that missed a late trigger.
+  if (ms(old.closed_at) === ms(expiresAt)) return 'azure_lag_at_expiry'
+  return 'unexplained'
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
@@ -341,7 +431,7 @@ async function main() {
       const fields = changedFields(old, next)
       if (fields.length === 0) { unchanged++; continue }
 
-      const preGeneration = old.triggered_at !== null && Date.parse(old.triggered_at) < Date.parse(t.generated_at)
+      const category = classifyChange(symbol, t.generated_at, t.expires_at, { ...old, trigger_source: o.trigger_source }, next)
       changes.push({
         shadow_trade_id: t.shadow_trade_id,
         shadow_outcome_id: o.shadow_outcome_id,
@@ -349,7 +439,8 @@ async function main() {
         shadow_system: t.shadow_system ?? 'ANALYST_MIRROR', entry_variant: t.entry_variant,
         entry_mode: t.entry_mode, generated_at: t.generated_at, monitor_from: t.monitor_from, expires_at: t.expires_at,
         fields,
-        reason: preGeneration ? 'triggered_before_generated_at' : 'recompute_other',
+        reason: category,
+        held: HELD_CATEGORIES.has(category),
         old: { ...old, triggered_price: o.triggered_price, trigger_source: o.trigger_source, exit_price: o.exit_price,
           exit_reason: o.exit_reason, exit_bar_timestamp: o.exit_bar_timestamp, raw_price_evidence: o.raw_price_evidence },
         new: next,
@@ -359,8 +450,9 @@ async function main() {
   }
 
   // ── Report ──
-  const pre = changes.filter(c => c.reason === 'triggered_before_generated_at')
-  const other = changes.filter(c => c.reason !== 'triggered_before_generated_at')
+  const pre = changes.filter(c => c.reason === 'pre_generation_trigger')
+  const other = changes.filter(c => c.reason !== 'pre_generation_trigger')
+  const toApply = changes.filter(c => !c.held)
   const excludedByReason = new Map<string, number>()
   for (const e of excluded) {
     const key = EXCLUDED_MARKETS.has(e.symbol) ? `${e.reason} [${e.symbol}]`
@@ -375,6 +467,18 @@ async function main() {
   console.log(`Excluded:   ${excluded.length}`)
   for (const [reason, n] of excludedByReason) console.log(`  ${reason}: ${n}`)
 
+  console.log('\nChanges by cause:')
+  const byCause = new Map<string, { n: number; dR: number; held: boolean }>()
+  for (const c of changes) {
+    const e = byCause.get(c.reason) ?? { n: 0, dR: 0, held: c.held }
+    e.n++; e.dR += (c.new.result_r ?? 0) - (c.old.result_r ?? 0)
+    byCause.set(c.reason, e)
+  }
+  for (const [cause, e] of byCause) {
+    console.log(`  ${cause.padEnd(30)} n=${String(e.n).padStart(5)}  dR=${(e.dR >= 0 ? '+' : '') + e.dR.toFixed(2)}${e.held ? '  HELD (not applied)' : ''}`)
+  }
+  console.log(`To apply: ${toApply.length}  held: ${changes.length - toApply.length}`)
+
   if (outPath) {
     await writeFile(outPath, JSON.stringify({ batchId, nowMs, changes, excluded }, null, 1))
     console.log(`\nChanges written to ${outPath}`)
@@ -382,7 +486,7 @@ async function main() {
 
   if (!isApply) { console.log('\nDRY RUN -- nothing written.'); return }
 
-  for (const c of changes) {
+  for (const c of toApply) {
     const { error: auditErr } = await db.from('shadow_outcome_recomputes').insert({
       recompute_batch_id: batchId,
       shadow_trade_id: c.shadow_trade_id,
@@ -403,14 +507,15 @@ async function main() {
       exit_reason: c.new.exit_reason,
       exit_bar_timestamp: c.new.exit_bar_ts !== null ? new Date(c.new.exit_bar_ts * 1000).toISOString() : null,
       result_r: c.new.result_r,
-      // MFE/MAE and bar counts are no longer valid for the new path -- cleared
-      // rather than left describing the old one.
-      mfe_r: null, mae_r: null, mfe_price: null, mae_price: null,
-      bars_to_trigger: null, bars_to_close: null, raw_price_evidence: null,
+      mfe_r: c.new.mfe_r, mae_r: c.new.mae_r, mfe_price: c.new.mfe_price, mae_price: c.new.mae_price,
+      bars_to_trigger: c.new.bars_to_trigger, bars_to_close: c.new.bars_to_close,
+      // The old evidence describes the old path; the monitor re-derives running
+      // MFE/MAE for still-open trades from triggered_at on its next run.
+      raw_price_evidence: null,
     }).eq('shadow_outcome_id', c.shadow_outcome_id)
     if (updErr) throw new Error(`outcome update failed for ${c.shadow_trade_id}: ${updErr.message}`)
   }
-  console.log(`\nApplied ${changes.length} changes (batch ${batchId}).`)
+  console.log(`\nApplied ${toApply.length} changes (batch ${batchId}); held ${changes.length - toApply.length}.`)
 }
 
 const thisFilePath = fileURLToPath(import.meta.url)
