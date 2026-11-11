@@ -30,6 +30,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { buildMarketState, type OhlcBar } from '../services/marketStateService.js'
 import { getCandles, type FinnhubCandleResponse } from '../lib/azurePrices.js'
+import { reportDegraded, sendDegradedAlerts } from '../lib/priceHealth.js'
 
 const ATR_PERIOD_PRIMARY = 20   // canonical -- stored as atr20
 const ATR_PERIOD_LEGACY  = 14   // retained for transition -- stored as atr14
@@ -130,12 +131,15 @@ async function fetchIntradayAsDailyBar(
   }
 }
 
+/** Thrown when Azure has no mapping or no daily bars for a symbol -- the market is DEGRADED. */
+class NoAzureDataError extends Error {}
+
 function checkCandleStatus(candles: FinnhubCandleResponse, finnhubSymbol: string): void {
   if (candles.s === 'no_mapping') {
-    throw new Error(`No Azure asset mapping for "${finnhubSymbol}" (finnhub_to_acuity.csv)`)
+    throw new NoAzureDataError(`No Azure asset mapping for "${finnhubSymbol}" (finnhub_to_acuity.csv)`)
   }
   if (candles.s !== 'ok' || !candles.c?.length) {
-    throw new Error(`No price data for ${finnhubSymbol}`)
+    throw new NoAzureDataError(`No Azure daily bars for ${finnhubSymbol}`)
   }
 }
 
@@ -336,7 +340,8 @@ async function main() {
       summary.upserted += rows.length
     } catch (err) {
       const reason = (err as Error).message
-      console.error(`  ${market.symbol}: ${reason}`)
+      if (err instanceof NoAzureDataError) reportDegraded(market.symbol, market.price_data_symbol, reason)
+      else console.error(`  ${market.symbol}: ${reason}`)
       skippedDetails.push({ symbol: market.symbol, reason }); summary.errors++
     }
     await new Promise(r => setTimeout(r, isHistory ? 200 : 150))
@@ -353,7 +358,8 @@ async function main() {
   console.log(`Rows upserted: ${summary.upserted}`)
   console.log(`Markets skipped: ${summary.skipped}`)
   console.log(`Errors: ${summary.errors}`)
-  if (isDryRun) console.log('\nDRY RUN -- nothing written.')
+  if (!isDryRun) await sendDegradedAlerts('populateMarketStateDaily')
+  if (isDryRun) console.log('\nDRY RUN -- nothing written (DEGRADED alerts not sent).')
   if (!isDryRun && summary.errors > 0 && summary.upserted === 0) {
     console.error('All markets failed -- exiting with code 1')
     process.exit(1)

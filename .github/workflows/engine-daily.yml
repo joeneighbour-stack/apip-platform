@@ -92,6 +92,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           PRICES_TABLE_CONN: ${{ secrets.PRICES_TABLE_CONN }}
+          DEGRADED_ALERT_WEBHOOK: ${{ secrets.DEGRADED_ALERT_WEBHOOK }}
 
   derive-regime:
     name: Derive Market Regime
@@ -138,6 +139,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           PRICES_TABLE_CONN: ${{ secrets.PRICES_TABLE_CONN }}
+          DEGRADED_ALERT_WEBHOOK: ${{ secrets.DEGRADED_ALERT_WEBHOOK }}
 
   engine-european:
     name: Engine Session -- European
@@ -190,6 +192,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           PRICES_TABLE_CONN: ${{ secrets.PRICES_TABLE_CONN }}
+          DEGRADED_ALERT_WEBHOOK: ${{ secrets.DEGRADED_ALERT_WEBHOOK }}
 
   engine-us:
     name: Engine Session -- US
@@ -239,6 +242,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           PRICES_TABLE_CONN: ${{ secrets.PRICES_TABLE_CONN }}
+          DEGRADED_ALERT_WEBHOOK: ${{ secrets.DEGRADED_ALERT_WEBHOOK }}
 
   engine-apac:
     name: Engine Session -- APAC
@@ -380,6 +384,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           PRICES_TABLE_CONN: ${{ secrets.PRICES_TABLE_CONN }}
+          DEGRADED_ALERT_WEBHOOK: ${{ secrets.DEGRADED_ALERT_WEBHOOK }}
 
   generate-post-trade-reviews:
     name: Generate Post-Trade Reviews

@@ -44,7 +44,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { buildMarketState } from '../services/marketStateService.js'
 import { getCandles } from '../lib/azurePrices.js'
-import { reportDegraded } from '../lib/priceHealth.js'
+import { reportDegraded, sendDegradedAlerts } from '../lib/priceHealth.js'
 
 const ZONE_COUNT = 4
 
@@ -335,7 +335,8 @@ async function main() {
   console.log(`Captured: ${summary.captured}`)
   console.log(`Skipped:  ${summary.skipped}`)
   console.log(`Errors:   ${summary.errors}`)
-  if (isDryRun) console.log('\nDRY RUN -- nothing written.')
+  if (!isDryRun) await sendDegradedAlerts(`captureIntradaySnapshot --session=${session}`)
+  if (isDryRun) console.log('\nDRY RUN -- nothing written (DEGRADED alerts not sent).')
   if (!isDryRun && summary.errors > 0 && summary.captured === 0) {
     console.error('All markets failed -- exiting with code 1')
     process.exit(1)

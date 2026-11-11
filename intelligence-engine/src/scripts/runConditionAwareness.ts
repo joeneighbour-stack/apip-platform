@@ -25,7 +25,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { assessCondition } from '../services/recommendationLifecycleService.js'
 import { getLatestBar } from '../lib/azurePrices.js'
-import { reportDegraded } from '../lib/priceHealth.js'
+import { reportDegraded, sendDegradedAlerts } from '../lib/priceHealth.js'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
@@ -202,7 +202,8 @@ async function main() {
   console.log(`Zone changed:   ${summary.zoneChanged}`)
   console.log(`Do not use:     ${summary.doNotUse}`)
   console.log(`Errors:         ${summary.errors}`)
-  if (isDryRun) console.log('\nDRY RUN -- nothing written.')
+  if (!isDryRun) await sendDegradedAlerts('runConditionAwareness')
+  if (isDryRun) console.log('\nDRY RUN -- nothing written (DEGRADED alerts not sent).')
 }
 
 const thisFilePath = fileURLToPath(import.meta.url)
