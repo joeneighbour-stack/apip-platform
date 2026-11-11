@@ -155,6 +155,19 @@ function finiteOrNull(value: number): number | null {
   return Number.isFinite(value) ? value : null
 }
 
+// ── Entry-scan window ────────────────────────────────────────────────────────
+// A trade may only trigger on bars at/after max(generated_at, monitor_from).
+// The bar cache below is shared per symbol and starts at the EARLIEST window
+// of any active trade on that symbol, so without this gate a trade could
+// trigger on price action from before it was even generated.
+
+function entryScanFrom(trade: { generated_at: string; monitor_from: string | null }): Date {
+  const generatedAt = new Date(trade.generated_at)
+  if (!trade.monitor_from) return generatedAt
+  const monitorFrom = new Date(trade.monitor_from)
+  return monitorFrom > generatedAt ? monitorFrom : generatedAt
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -339,17 +352,18 @@ async function main() {
         }
 
         // WAIT_FOR_PREFERRED_ZONE — scan bars for entry touch
-        const monitorFrom = trade.monitor_from ? new Date(trade.monitor_from) : null
+        const scanFrom = entryScanFrom(trade)
         let triggered = false
         let notTriggeredBarIndex = 0
         for (const bar of bars) {
-          notTriggeredBarIndex++
           const barTime = new Date(bar.ts * 1000)
           if (barTime >= expiresAt) break
 
-          // Skip bars before monitor_from gate -- pre-publication price movement
-          // is not a valid trigger (see migrations/053_shadow_trades_monitor_from.sql).
-          if (monitorFrom && barTime < monitorFrom) continue
+          // Skip bars before max(generated_at, monitor_from) -- pre-generation /
+          // pre-publication price movement is not a valid trigger (see
+          // entryScanFrom() and migrations/053_shadow_trades_monitor_from.sql).
+          if (barTime < scanFrom) continue
+          notTriggeredBarIndex++
 
           const dir = trade.direction as 'BUY' | 'SELL'
           const entry = Number(trade.entry)
@@ -409,6 +423,8 @@ async function main() {
               t.shadow_trade_outcomes?.[0]?.trade_outcome_status === 'NOT_TRIGGERED'
             )
             for (const sibling of siblings) {
+              // Same gate as the primary scan, against the sibling's OWN window.
+              if (new Date(bar.ts * 1000) < entryScanFrom(sibling)) continue
               const sibEntry = Number(sibling.entry)
               const sibDir = sibling.direction as 'BUY' | 'SELL'
               const barCrossed = sibDir === 'BUY'
